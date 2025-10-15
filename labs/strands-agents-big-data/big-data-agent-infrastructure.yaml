@@ -1,0 +1,365 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Big Data Agent Infrastructure - Creates S3 bucket and IAM role"
+
+Parameters:
+  Suffix:
+    Type: String
+    Description: "Suffix for resource naming"
+    MinLength: 1
+    MaxLength: 20
+    AllowedPattern: "^[a-zA-Z0-9-]+$"
+    ConstraintDescription: "Suffix must contain only alphanumeric characters and hyphens"
+
+Resources:
+  # S3 Logging Bucket
+  BigDataAgentLoggingBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::AccountId}-${AWS::Region}-big-data-agent-logs-${Suffix}"
+      AccessControl: Private
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            ExpirationInDays: 90
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Purpose
+          Value: BigDataAgentLogging
+        - Key: Environment
+          Value: !Ref Suffix
+
+  # S3 Bucket
+  BigDataAgentBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::AccountId}-${AWS::Region}-big-data-agent-${Suffix}"
+      AccessControl: Private
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention:
+            Mode: GOVERNANCE
+            Days: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LoggingConfiguration:
+        DestinationBucketName: !Ref BigDataAgentLoggingBucket
+        LogFilePrefix: "access-logs/"
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteIncompleteMultipartUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      Tags:
+        - Key: Purpose
+          Value: BigDataAgent
+        - Key: Environment
+          Value: !Ref Suffix
+
+  # IAM Role
+  BigDataAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+                - lambda.amazonaws.com
+                - glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: BigDataAgentS3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetObjectLegalHold
+                  - s3:PutObjectLegalHold
+                  - s3:GetObjectRetention
+                  - s3:PutObjectRetention
+                  - s3:BypassGovernanceRetention
+                Resource:
+                  - !Sub "${BigDataAgentBucket.Arn}/*"
+                  - !GetAtt BigDataAgentBucket.Arn
+              - Effect: Allow
+                Action:
+                  - s3:ListAllMyBuckets
+                Resource: "arn:aws:s3:::*"
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                Resource:
+                  - !GetAtt BigDataAgentBucket.Arn
+        - PolicyName: BigDataAgentBedrockAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+              - Effect: Allow
+                Action:
+                  - bedrock:ListFoundationModels
+                  - bedrock:GetFoundationModel
+                Resource: !Sub "arn:aws:bedrock:${AWS::Region}::foundation-model/*"
+        - PolicyName: BigDataAgentGlueAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetDatabases
+                  - glue:GetTable
+                  - glue:GetTables
+                  - glue:GetPartition
+                  - glue:GetPartitions
+                  - glue:CreateDatabase
+                  - glue:CreateTable
+                  - glue:UpdateTable
+                  - glue:DeleteTable
+                  - glue:BatchCreatePartition
+                  - glue:BatchDeletePartition
+                  - glue:BatchUpdatePartition
+                Resource:
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/*"
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/*"
+              - Effect: Allow
+                Action:
+                  - glue:StartCrawler
+                  - glue:StopCrawler
+                  - glue:GetCrawler
+                  - glue:GetCrawlers
+                  - glue:CreateCrawler
+                  - glue:UpdateCrawler
+                  - glue:DeleteCrawler
+                Resource:
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:crawler/*"
+              - Effect: Allow
+                Action:
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                  - glue:GetJobRuns
+                  - glue:GetJob
+                  - glue:GetJobs
+                Resource:
+                  - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:job/*"
+        - PolicyName: BigDataAgentAthenaAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:StopQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                  - athena:ListQueryExecutions
+                Resource:
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/primary"
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+              - Effect: Allow
+                Action:
+                  - athena:GetWorkGroup
+                  - athena:ListWorkGroups
+                Resource:
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/*"
+              - Effect: Allow
+                Action:
+                  - athena:GetDataCatalog
+                  - athena:ListDataCatalogs
+                Resource:
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/AwsDataCatalog"
+              - Effect: Allow
+                Action:
+                  - athena:GetDatabase
+                  - athena:ListDatabases
+                  - athena:GetTableMetadata
+                  - athena:ListTableMetadata
+                Resource:
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/AwsDataCatalog/database/*"
+                  - !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/AwsDataCatalog/table/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                Resource:
+                  - !Sub "${BigDataAgentBucket.Arn}/*"
+                  - !GetAtt BigDataAgentBucket.Arn
+        - PolicyName: BigDataAgentCloudWatchLogs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/glue/jobs/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/glue/crawlers/*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/big-data-agent-*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:big-data-agent-*"
+              - Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*"
+      Tags:
+        - Key: Purpose
+          Value: BigDataAgent
+        - Key: Environment
+          Value: !Ref Suffix
+
+  # S3 Bucket Policy - Restrict to authenticated users only
+  BigDataAgentBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BigDataAgentBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: "*"
+            Condition:
+              Bool:
+                "aws:SecureTransport": false
+          - Sid: DenyPublicReadWrite
+            Effect: Deny
+            Principal: "*"
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+              - "s3:DeleteObject"
+              - "s3:GetObjectAcl"
+              - "s3:PutObjectAcl"
+              - "s3:ListBucket"
+            Resource:
+              - !Sub "${BigDataAgentBucket.Arn}"
+              - !Sub "${BigDataAgentBucket.Arn}/*"
+            Condition:
+              StringNotEquals:
+                "aws:PrincipalServiceName":
+                  - "glue.amazonaws.com"
+                  - "athena.amazonaws.com"
+              StringNotLike:
+                "aws:PrincipalArn":
+                  - !Sub "${BigDataAgentRole.Arn}"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:root"
+          - Sid: AllowAuthorizedAccess
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub "${BigDataAgentRole.Arn}"
+                - !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+              - "s3:DeleteObject"
+              - "s3:ListBucket"
+              - "s3:GetBucketLocation"
+              - "s3:GetObjectLegalHold"
+              - "s3:PutObjectLegalHold"
+              - "s3:GetObjectRetention"
+              - "s3:PutObjectRetention"
+              - "s3:BypassGovernanceRetention"
+            Resource:
+              - !Sub "${BigDataAgentBucket.Arn}"
+              - !Sub "${BigDataAgentBucket.Arn}/*"
+          - Sid: AllowAWSServices
+            Effect: Allow
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+                - "athena.amazonaws.com"
+            Action:
+              - "s3:GetObject"
+              - "s3:PutObject"
+              - "s3:ListBucket"
+              - "s3:GetBucketLocation"
+            Resource:
+              - !Sub "${BigDataAgentBucket.Arn}"
+              - !Sub "${BigDataAgentBucket.Arn}/*"
+
+  # Instance Profile for EC2 instances
+  BigDataAgentInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "big-data-agent-instance-profile-${Suffix}"
+      Roles:
+        - !Ref BigDataAgentRole
+
+Outputs:
+  BucketName:
+    Description: "Name of the created S3 bucket"
+    Value: !Ref BigDataAgentBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketName"
+
+  BucketArn:
+    Description: "ARN of the created S3 bucket"
+    Value: !GetAtt BigDataAgentBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketArn"
+
+  RoleName:
+    Description: "Name of the created IAM role"
+    Value: !Ref BigDataAgentRole
+    Export:
+      Name: !Sub "${AWS::StackName}-RoleName"
+
+  RoleArn:
+    Description: "ARN of the created IAM role"
+    Value: !GetAtt BigDataAgentRole.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-RoleArn"
+
+  InstanceProfileArn:
+    Description: "ARN of the instance profile"
+    Value: !GetAtt BigDataAgentInstanceProfile.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceProfileArn"

@@ -1,0 +1,179 @@
+{
+  "database": {
+    "name": "awslabbigdataagentstack_tripdata_db",
+    "purpose": "Stores New York City taxi trip data for analysis and reporting"
+  },
+  "tables": [
+    {
+      "name": "nyc_taxi_trip",
+      "purpose": "Contains detailed information about taxi trips in New York City, including pickup and dropoff times, locations, fare details, and payment information",
+      "storage_location": "s3://670934798598-us-west-2-big-data-agent-workshop/nyc_taxi_trip/",
+      "record_count": 9019594,
+      "partitioning": [
+        {
+          "name": "taxi_class",
+          "type": "string",
+          "purpose": "Distinguishes between different types of taxis (yellow and green)"
+        },
+        {
+          "name": "year",
+          "type": "string",
+          "purpose": "Year when the trip occurred"
+        },
+        {
+          "name": "month",
+          "type": "string",
+          "purpose": "Month when the trip occurred"
+        }
+      ],
+      "columns": [
+        {
+          "name": "vendorid",
+          "type": "int",
+          "purpose": "Identifier for the vendor providing the trip data"
+        },
+        {
+          "name": "lpep_pickup_datetime",
+          "type": "timestamp",
+          "purpose": "Date and time when the passenger was picked up (used for green taxis)"
+        },
+        {
+          "name": "lpep_dropoff_datetime",
+          "type": "timestamp",
+          "purpose": "Date and time when the passenger was dropped off (used for green taxis)"
+        },
+        {
+          "name": "store_and_fwd_flag",
+          "type": "string",
+          "purpose": "Flag indicating whether the trip record was stored in vehicle memory before sending to the vendor ('Y' for yes, 'N' for no)"
+        },
+        {
+          "name": "ratecodeid",
+          "type": "bigint",
+          "purpose": "The rate code in effect at the end of the trip (1=Standard rate, 2=JFK, 3=Newark, 4=Nassau or Westchester, 5=Negotiated fare, 6=Group ride)"
+        },
+        {
+          "name": "pulocationid",
+          "type": "int",
+          "purpose": "TLC Taxi Zone where the passenger was picked up"
+        },
+        {
+          "name": "dolocationid",
+          "type": "int",
+          "purpose": "TLC Taxi Zone where the passenger was dropped off"
+        },
+        {
+          "name": "passenger_count",
+          "type": "bigint",
+          "purpose": "Number of passengers in the vehicle"
+        },
+        {
+          "name": "trip_distance",
+          "type": "double",
+          "purpose": "Distance of the trip in miles"
+        },
+        {
+          "name": "fare_amount",
+          "type": "double",
+          "purpose": "Base fare amount in dollars"
+        },
+        {
+          "name": "extra",
+          "type": "double",
+          "purpose": "Extra charges (night surcharge, etc.) in dollars"
+        },
+        {
+          "name": "mta_tax",
+          "type": "double",
+          "purpose": "Metropolitan Transportation Authority tax amount"
+        },
+        {
+          "name": "tip_amount",
+          "type": "double",
+          "purpose": "Tip amount paid by the passenger"
+        },
+        {
+          "name": "tolls_amount",
+          "type": "double",
+          "purpose": "Total amount of tolls paid during the trip"
+        },
+        {
+          "name": "ehail_fee",
+          "type": "double",
+          "purpose": "E-hail fee for electronically hailed trips"
+        },
+        {
+          "name": "improvement_surcharge",
+          "type": "double",
+          "purpose": "Improvement surcharge assessed on trips"
+        },
+        {
+          "name": "total_amount",
+          "type": "double",
+          "purpose": "Total amount charged to the passenger (excluding cash tips)"
+        },
+        {
+          "name": "payment_type",
+          "type": "bigint",
+          "purpose": "Method of payment (1=Credit card, 2=Cash, 3=No charge, 4=Dispute, 5=Unknown)"
+        },
+        {
+          "name": "trip_type",
+          "type": "bigint",
+          "purpose": "Trip type indicator (1=Street hail, 2=Dispatch)"
+        },
+        {
+          "name": "congestion_surcharge",
+          "type": "double",
+          "purpose": "Congestion surcharge for trips in congested areas"
+        },
+        {
+          "name": "cbd_congestion_fee",
+          "type": "double",
+          "purpose": "Central Business District congestion fee"
+        },
+        {
+          "name": "tpep_pickup_datetime",
+          "type": "timestamp",
+          "purpose": "Date and time when the passenger was picked up (used for yellow taxis)"
+        },
+        {
+          "name": "tpep_dropoff_datetime",
+          "type": "timestamp",
+          "purpose": "Date and time when the passenger was dropped off (used for yellow taxis)"
+        },
+        {
+          "name": "airport_fee",
+          "type": "double",
+          "purpose": "Fee charged for airport pickups or dropoffs"
+        }
+      ],
+      "data_distribution": [
+        {
+          "taxi_class": "yellow",
+          "year": "2025",
+          "month": "05",
+          "record_count": 4591845
+        },
+        {
+          "taxi_class": "yellow",
+          "year": "2025",
+          "month": "06",
+          "record_count": 4322960
+        },
+        {
+          "taxi_class": "green",
+          "year": "2025",
+          "month": "05",
+          "record_count": 55399
+        },
+        {
+          "taxi_class": "green",
+          "year": "2025",
+          "month": "06",
+          "record_count": 49390
+        }
+      ]
+    }
+  ]
+}
