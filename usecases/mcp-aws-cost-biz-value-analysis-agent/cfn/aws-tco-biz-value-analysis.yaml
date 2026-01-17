@@ -1,0 +1,299 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS TCO and Business Value Analysis - Bedrock Knowledge Base with OpenSearch Serverless
+
+Parameters:
+  EmbeddingModelArn:
+    Type: String
+    Default: arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0
+    Description: ARN of the embedding model
+
+  EmbeddingDimension:
+    Type: Number
+    Default: 1024
+    Description: Dimension of embedding vectors (1024 for Titan v2)
+
+Resources:
+  # S3 Bucket for Pricing Documents
+  PricingDocsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${AWS::Region}-aws-pricing-docs'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # IAM Role for Knowledge Base
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'BedrockKB-${AWS::StackName}-${AWS::Region}-Role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: KnowledgeBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt PricingDocsBucket.Arn
+                  - !Sub '${PricingDocsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  - !Ref EmbeddingModelArn
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                Resource:
+                  - !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+
+  # Lambda Role for Index Wait Function (created first for data access policy)
+  IndexWaitLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AOSSAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
+
+  # OpenSearch Serverless Encryption Policy
+  OpenSearchEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: pricing-kb-encryption
+      Type: encryption
+      Policy: |
+        {
+          "Rules": [{"ResourceType": "collection", "Resource": ["collection/pricing-kb-collection"]}],
+          "AWSOwnedKey": true
+        }
+
+  # OpenSearch Serverless Network Policy
+  OpenSearchNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: pricing-kb-network
+      Type: network
+      Policy: |
+        [{"Rules": [{"ResourceType": "collection", "Resource": ["collection/pricing-kb-collection"]}, {"ResourceType": "dashboard", "Resource": ["collection/pricing-kb-collection"]}], "AllowFromPublic": true}]
+
+  # OpenSearch Serverless Data Access Policy - includes Lambda role
+  OpenSearchDataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: pricing-kb-data-access
+      Type: data
+      Policy: !Sub |
+        [{"Rules": [{"ResourceType": "collection", "Resource": ["collection/pricing-kb-collection"], "Permission": ["aoss:CreateCollectionItems", "aoss:DeleteCollectionItems", "aoss:UpdateCollectionItems", "aoss:DescribeCollectionItems"]}, {"ResourceType": "index", "Resource": ["index/pricing-kb-collection/*"], "Permission": ["aoss:CreateIndex", "aoss:DeleteIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"]}], "Principal": ["arn:aws:iam::${AWS::AccountId}:root", "${KnowledgeBaseRole.Arn}", "${IndexWaitLambdaRole.Arn}"]}]
+
+  # OpenSearch Serverless Collection
+  OpenSearchCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - OpenSearchEncryptionPolicy
+      - OpenSearchNetworkPolicy
+      - OpenSearchDataAccessPolicy
+    Properties:
+      Name: pricing-kb-collection
+      Type: VECTORSEARCH
+      Description: Vector store for AWS pricing knowledge base
+
+  # OpenSearch Serverless Index
+  OpenSearchIndex:
+    Type: AWS::OpenSearchServerless::Index
+    Properties:
+      CollectionEndpoint: !GetAtt OpenSearchCollection.CollectionEndpoint
+      IndexName: pricing-docs-index
+      Settings:
+        Index:
+          Knn: true
+      Mappings:
+        Properties:
+          embedding:
+            Type: knn_vector
+            Dimension: !Ref EmbeddingDimension
+            Method:
+              Engine: faiss
+              Name: hnsw
+              SpaceType: l2
+              Parameters:
+                EfConstruction: 512
+                M: 16
+          text:
+            Type: text
+            Index: true
+          metadata:
+            Type: text
+            Index: false
+
+  # Lambda Function to Wait for Index
+  IndexWaitFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: OpenSearchDataAccessPolicy
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      Role: !GetAtt IndexWaitLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import time
+          import urllib.request
+          import boto3
+          from botocore.auth import SigV4Auth
+          from botocore.awsrequest import AWSRequest
+
+          def send_response(event, context, status, data=None, reason=None):
+              body = json.dumps({
+                  'Status': status,
+                  'Reason': reason or f'See CloudWatch Log Stream: {context.log_stream_name}',
+                  'PhysicalResourceId': event.get('PhysicalResourceId', context.log_stream_name),
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': data or {}
+              }).encode('utf-8')
+              req = urllib.request.Request(event['ResponseURL'], data=body, method='PUT')
+              req.add_header('Content-Type', '')
+              req.add_header('Content-Length', len(body))
+              urllib.request.urlopen(req)
+
+          def handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              if event['RequestType'] == 'Delete':
+                  send_response(event, context, 'SUCCESS')
+                  return
+              
+              props = event['ResourceProperties']
+              endpoint = props['CollectionEndpoint']
+              index_name = props['IndexName']
+              region = props['Region']
+              
+              host = endpoint.replace('https://', '')
+              url = f"https://{host}/{index_name}"
+              
+              session = boto3.Session()
+              credentials = session.get_credentials()
+              
+              # Wait for index - up to 5 minutes
+              max_attempts = 30
+              for attempt in range(max_attempts):
+                  try:
+                      request = AWSRequest(method='GET', url=url)
+                      SigV4Auth(credentials, 'aoss', region).add_auth(request)
+                      
+                      req = urllib.request.Request(url, method='GET')
+                      for key, value in request.headers.items():
+                          req.add_header(key, value)
+                      
+                      response = urllib.request.urlopen(req, timeout=30)
+                      result = json.loads(response.read().decode('utf-8'))
+                      print(f"Index {index_name} is ready: {result}")
+                      send_response(event, context, 'SUCCESS', {'IndexReady': 'true'})
+                      return
+                  except urllib.error.HTTPError as e:
+                      print(f"Attempt {attempt + 1}: HTTP {e.code} - {e.reason}")
+                      if e.code == 404:
+                          print("Index not found yet, waiting...")
+                      elif e.code == 403:
+                          print("Access denied - waiting for permissions to propagate...")
+                      time.sleep(10)
+                  except Exception as e:
+                      print(f"Attempt {attempt + 1}: Error - {str(e)}")
+                      time.sleep(10)
+              
+              send_response(event, context, 'FAILED', reason=f'Index {index_name} not ready after {max_attempts} attempts')
+
+  # Custom Resource to Wait for Index
+  WaitForIndex:
+    Type: Custom::WaitForIndex
+    DependsOn: OpenSearchIndex
+    Properties:
+      ServiceToken: !GetAtt IndexWaitFunction.Arn
+      CollectionEndpoint: !GetAtt OpenSearchCollection.CollectionEndpoint
+      IndexName: pricing-docs-index
+      Region: !Ref AWS::Region
+
+  # Bedrock Knowledge Base
+  PricingKnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: WaitForIndex
+    Properties:
+      Name: aws-pricing-knowledge-base
+      Description: Knowledge Base for AWS pricing and TCO analysis
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Ref EmbeddingModelArn
+      StorageConfiguration:
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt OpenSearchCollection.Arn
+          VectorIndexName: pricing-docs-index
+          FieldMapping:
+            VectorField: embedding
+            TextField: text
+            MetadataField: metadata
+
+  # Knowledge Base Data Source
+  PricingDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref PricingKnowledgeBase
+      Name: aws-pricing-docs-source
+      Description: S3 data source for AWS pricing documents
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt PricingDocsBucket.Arn
+      VectorIngestionConfiguration:
+        ChunkingConfiguration:
+          ChunkingStrategy: NONE
+
+Outputs:
+  PricingDocsBucketName:
+    Value: !Ref PricingDocsBucket
+
+  KnowledgeBaseId:
+    Value: !Ref PricingKnowledgeBase
+
+  DataSourceId:
+    Value: !GetAtt PricingDataSource.DataSourceId
+
+  OpenSearchCollectionEndpoint:
+    Value: !GetAtt OpenSearchCollection.CollectionEndpoint
