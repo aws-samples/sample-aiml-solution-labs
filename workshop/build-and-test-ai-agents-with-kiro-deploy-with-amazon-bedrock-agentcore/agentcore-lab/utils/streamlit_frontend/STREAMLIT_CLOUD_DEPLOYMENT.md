@@ -12,6 +12,8 @@ Streamlit Cloud doesn't have access to your local AWS credentials. You need to:
 
 ### Option 1: Quick Fix - Use Streamlit Secrets (Recommended)
 
+This is the simplest approach - store all values directly in Streamlit secrets without needing AWS API access.
+
 #### 1. Add Secrets to Streamlit Cloud
 
 Go to your Streamlit Cloud app:
@@ -47,6 +49,38 @@ If you see `from chat_utils import ...` instead, update it to use `chat_utils_cl
 #### 3. Redeploy
 
 Commit and push your changes. Streamlit Cloud will automatically redeploy.
+
+### Option 1.5: Hybrid Mode - Use Streamlit Secrets with SSM API (Advanced)
+
+This approach stores AWS credentials in secrets and allows the app to fetch parameters from SSM Parameter Store dynamically.
+
+#### When to use this:
+- You have many SSM parameters and don't want to copy them all to secrets
+- You want parameters to stay in sync with SSM Parameter Store
+- You're comfortable managing AWS credentials in Streamlit secrets
+
+#### Setup:
+
+Add only AWS credentials to Streamlit secrets:
+
+```toml
+# AWS Credentials only
+AWS_ACCESS_KEY_ID = "your_access_key_id"
+AWS_SECRET_ACCESS_KEY = "your_secret_access_key"
+AWS_DEFAULT_REGION = "us-west-2"
+```
+
+The app will automatically use these credentials to fetch SSM parameters via boto3. No need to add `RUNTIME_ARN` or other SSM values to secrets.
+
+#### Benefits:
+- ✅ Parameters stay in sync with AWS SSM
+- ✅ Fewer secrets to manage in Streamlit
+- ✅ Works with dynamic parameter updates
+
+#### Tradeoffs:
+- ⚠️ Requires AWS credentials in Streamlit secrets
+- ⚠️ Slightly slower (API calls vs. local secrets)
+- ⚠️ Requires IAM permissions for SSM access
 
 ### Option 2: Environment Variables (Alternative)
 
@@ -130,9 +164,17 @@ RUNTIME_ARN = "your_agent_runtime_arn"
 - Generate new credentials and update secrets
 
 ### Error: "Parameter not found"
-- The SSM parameter doesn't exist in your AWS account
-- Verify the parameter name is correct
-- Check you're using the correct AWS region
+- **Cause**: The SSM parameter doesn't exist in your AWS account, or credentials are insufficient
+- **Solutions**:
+  - **Option 1 (Recommended for Cloud)**: Add the parameter value directly to Streamlit secrets
+    - The app will show you the exact secret key name (e.g., `RUNTIME_ARN`)
+    - Add it in TOML format: `RUNTIME_ARN = "your_value_here"`
+  - **Option 2 (Hybrid)**: Provide AWS credentials in secrets to enable SSM API calls
+    - Add `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` to secrets
+    - The app will use these to fetch from SSM Parameter Store
+  - **Option 3 (Local)**: Verify the parameter exists and your local credentials have access
+    - Run: `aws ssm get-parameter --name /your/parameter/name`
+- Check you're using the correct AWS region in your secrets or environment
 
 ## Alternative: Deploy to AWS Instead
 
@@ -146,27 +188,36 @@ These eliminate the need to manage credentials manually.
 
 ## Code Changes Summary
 
-The `chat_utils_cloud.py` file provides a drop-in replacement that:
-1. Tries Streamlit secrets first (for cloud deployment)
-2. Falls back to boto3 (for local development)
-3. Provides helpful error messages
+The `chat_utils_cloud.py` file provides a drop-in replacement with intelligent credential management:
+1. **Robust error handling**: Gracefully handles missing secrets files with try-except blocks
+2. **Multi-tier credential strategy**: 
+   - Tries Streamlit secrets first (for cloud deployment)
+   - Falls back to boto3 with secrets-based credentials (hybrid mode)
+   - Falls back to default boto3 credential chain (for local development)
+3. **Enhanced error messages**: Provides actionable guidance with exact secret key names and TOML examples
+4. **Seamless compatibility**: Works in local development, Streamlit Cloud, and hybrid environments
 
-This allows the same code to work both locally and on Streamlit Cloud.
+This allows the same code to work across multiple deployment scenarios without modification.
 
 ### Key Functions in chat_utils_cloud.py
 
 #### `get_aws_region()`
-Returns the AWS region from:
-- Streamlit secrets (`AWS_DEFAULT_REGION`) if available
-- Environment variable (`AWS_DEFAULT_REGION`) as fallback
-- Defaults to `us-west-2` if neither is set
+Returns the AWS region with robust error handling:
+- **Primary**: Streamlit secrets (`AWS_DEFAULT_REGION`) if available
+- **Fallback**: Environment variable (`AWS_DEFAULT_REGION`)
+- **Default**: `us-west-2` if neither is set
+- Gracefully handles `AttributeError` and `FileNotFoundError` when secrets are unavailable
 
 #### `get_ssm_parameter(name, with_decryption=True)`
-Retrieves SSM parameters with dual-mode support:
-- **Cloud mode**: Reads from Streamlit secrets using the last segment of the parameter name
+Retrieves SSM parameters with intelligent multi-mode support:
+- **Cloud mode (Priority 1)**: Reads from Streamlit secrets using the last segment of the parameter name
   - Example: `/app/returnsrefunds/agentcore/runtime_arn` → looks for `RUNTIME_ARN` in secrets
-- **Local mode**: Falls back to boto3 SSM client for local development
-- Provides clear error messages if parameter is not found
+  - Gracefully handles missing secrets file
+- **Hybrid mode (Priority 2)**: Uses boto3 with credentials from Streamlit secrets if available
+  - Allows SSM API calls even in cloud environments when credentials are provided
+  - Falls back to default boto3 credential chain if secrets are unavailable
+- **Local mode (Priority 3)**: Uses boto3 with default credential chain (IAM roles, ~/.aws/credentials)
+- **Enhanced error messages**: Provides helpful guidance with exact secret key names and TOML format examples when parameters are not found
 
 #### `make_urls_clickable(text)`
 Converts URLs in text to clickable HTML links (same as original)
