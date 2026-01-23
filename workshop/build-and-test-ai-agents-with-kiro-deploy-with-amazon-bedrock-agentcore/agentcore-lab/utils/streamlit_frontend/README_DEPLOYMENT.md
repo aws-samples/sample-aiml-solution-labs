@@ -29,7 +29,8 @@ The app will automatically redeploy. If you see errors:
 
 ### Core Files (Already Updated)
 - **`chat_utils_cloud.py`** - Cloud-compatible utilities that read from Streamlit secrets
-- **`chat.py`** - Already updated to import from `chat_utils_cloud`
+- **`main.py`** - Already updated to import from `chat_utils_cloud`
+- **`chat.py`** - Chat manager for handling agent interactions
 
 ### Helper Files (New)
 - **`secrets.toml.template`** - Template for your secrets configuration
@@ -253,7 +254,7 @@ Before asking for help, verify:
 - [ ] Secret names are exactly: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION`, `RUNTIME_ARN`
 - [ ] AWS credentials work locally: `aws sts get-caller-identity`
 - [ ] IAM permissions include `bedrock-agentcore:InvokeRuntime` and `ssm:GetParameter`
-- [ ] `chat.py` imports from `chat_utils_cloud` (not `chat_utils`)
+- [ ] `main.py` imports from `chat_utils_cloud` (not `chat_utils`)
 - [ ] You've checked Streamlit Cloud logs for specific error messages
 - [ ] You've run `test_secrets.py` and all checks pass
 

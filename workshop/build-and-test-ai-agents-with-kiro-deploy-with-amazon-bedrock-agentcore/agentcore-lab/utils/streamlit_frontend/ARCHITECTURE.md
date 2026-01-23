@@ -11,7 +11,7 @@ User runs: streamlit run main.py
                     ↓
             main.py loads
                     ↓
-        chat.py imports chat_utils_cloud
+        main.py imports chat_utils_cloud
                     ↓
     chat_utils_cloud.get_aws_region()
                     ↓
@@ -39,7 +39,7 @@ User visits: https://your-app.streamlit.app
                     ↓
             main.py loads
                     ↓
-        chat.py imports chat_utils_cloud
+        main.py imports chat_utils_cloud
                     ↓
     chat_utils_cloud.get_aws_region()
                     ↓
@@ -75,7 +75,7 @@ User visits: https://your-app.streamlit.app
                     ↓
             main.py loads
                     ↓
-        chat.py imports chat_utils  ← OLD import
+        main.py imports chat_utils  ← OLD import
                     ↓
     chat_utils.py runs at import time:
     REGION = boto3.session.Session().region_name

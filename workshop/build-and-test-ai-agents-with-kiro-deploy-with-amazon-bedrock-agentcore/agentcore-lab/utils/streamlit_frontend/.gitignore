@@ -1,0 +1,56 @@
+# Streamlit Secrets - NEVER commit these!
+.streamlit/
+.streamlit/secrets.toml
+secrets.toml
+
+# Local secrets files
+*.secrets.toml
+*secrets.toml
+local_secrets.toml
+
+# AWS Credentials - NEVER commit these!
+.aws/
+credentials
+config
+*.pem
+*.key
+
+# Environment files with secrets
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/

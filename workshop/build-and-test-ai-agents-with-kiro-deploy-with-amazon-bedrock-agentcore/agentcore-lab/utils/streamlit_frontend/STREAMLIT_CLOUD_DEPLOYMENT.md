@@ -37,11 +37,11 @@ To get the RUNTIME_ARN value:
 aws ssm get-parameter --name /app/returnsrefunds/agentcore/runtime_arn --query Parameter.Value --output text
 ```
 
-#### 2. Verify chat.py is using cloud-compatible utils
+#### 2. Verify main.py is using cloud-compatible utils
 
-The `chat.py` file should already be configured to use cloud-compatible utilities:
+The `main.py` file should already be configured to use cloud-compatible utilities:
 ```python
-from chat_utils_cloud import make_urls_clickable, create_safe_markdown_text, get_aws_region, get_ssm_parameter
+from chat_utils_cloud import make_urls_clickable
 ```
 
 If you see `from chat_utils import ...` instead, update it to use `chat_utils_cloud`.

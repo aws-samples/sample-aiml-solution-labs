@@ -1,20 +1,37 @@
 import re
+import os
 
-# Get AWS region with fallback
-import boto3
+# DEPRECATED: Use chat_utils_cloud.py instead
+# This file is kept for backwards compatibility but should not be used
 
-REGION = boto3.session.Session().region_name or "us-west-2"
-
+# Get AWS region with fallback - lazy initialization to avoid credential errors
+_REGION = None
 
 def get_aws_region() -> str:
     """Get the current AWS region."""
-    return REGION
+    global _REGION
+    if _REGION is None:
+        try:
+            import boto3
+            _REGION = boto3.session.Session().region_name or "us-west-2"
+        except Exception:
+            _REGION = os.environ.get('AWS_DEFAULT_REGION', 'us-west-2')
+    return _REGION
 
 
 def get_ssm_parameter(name: str, with_decryption: bool = True) -> str:
-    ssm = boto3.client("ssm", region_name=REGION)
-    response = ssm.get_parameter(Name=name, WithDecryption=with_decryption)
-    return response["Parameter"]["Value"]
+    """DEPRECATED: Use chat_utils_cloud.get_ssm_parameter instead"""
+    try:
+        import boto3
+        region = get_aws_region()
+        ssm = boto3.client("ssm", region_name=region)
+        response = ssm.get_parameter(Name=name, WithDecryption=with_decryption)
+        return response["Parameter"]["Value"]
+    except Exception as e:
+        raise RuntimeError(
+            f"chat_utils.py is deprecated. Please use chat_utils_cloud.py instead. "
+            f"Original error: {e}"
+        )
 
 
 def make_urls_clickable(text):

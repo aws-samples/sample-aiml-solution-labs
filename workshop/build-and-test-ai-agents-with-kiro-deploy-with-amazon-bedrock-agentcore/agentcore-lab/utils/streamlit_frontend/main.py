@@ -5,7 +5,7 @@ import uuid
 from streamlit_cognito_auth import CognitoAuthenticator
 import json
 import time
-from chat_utils import make_urls_clickable
+from chat_utils_cloud import make_urls_clickable
 import os
 import sys
 import requests
