@@ -5,7 +5,7 @@ import urllib.parse
 from typing import Any, Optional
 import requests
 import streamlit as st
-from chat_utils import make_urls_clickable, create_safe_markdown_text, get_aws_region, get_ssm_parameter
+from chat_utils_cloud import make_urls_clickable, create_safe_markdown_text, get_aws_region, get_ssm_parameter
 
 
 def invoke_endpoint_streaming(

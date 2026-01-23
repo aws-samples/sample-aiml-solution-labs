@@ -1,0 +1,6 @@
+{
+  "id": "refundagentgateway-ctrefpxvyd",
+  "name": "RefundAgentGateway",
+  "gateway_url": "https://refundagentgateway-ctrefpxvyd.gateway.bedrock-agentcore.us-west-2.amazonaws.com/mcp",
+  "gateway_arn": "arn:aws:bedrock-agentcore:us-west-2:625579972148:gateway/refundagentgateway-ctrefpxvyd"
+}

@@ -13,6 +13,18 @@ This repository provides AWS users with practical examples and use cases for AI/
 - **Code Artifacts**: Production-ready implementations
 - **Use Cases**: Real-world AI/ML scenarios
 
+## Featured Use Cases
+
+### Amazon Returns & Refunds Assistant
+A Strands AI agent demonstrating country-specific policy retrieval using Amazon Bedrock Knowledge Base with metadata filtering. Perfect for learning how to build policy-based Q&A systems.
+
+[View Use Case →](usecases/amazon-returns-refunds-agent/)
+
+### AWS Cost Analysis Agent
+MCP-based agent for calculating and analyzing AWS service costs including Bedrock, AgentCore, and EMR.
+
+[View Use Case →](usecases/mcp-aws-cost-analysis-agent/)
+
 ## Services Covered
 
 - Amazon Bedrock

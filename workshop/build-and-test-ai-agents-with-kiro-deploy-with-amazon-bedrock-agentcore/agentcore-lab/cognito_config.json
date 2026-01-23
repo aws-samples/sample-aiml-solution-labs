@@ -1,0 +1,7 @@
+{
+  "pool_id": "us-west-2_QuW2OOBnZ",
+  "client_id": "6dacsfqdd4b9imggc4dnlsiebv",
+  "client_secret": "1p3ief1umuhq6d73mp8569uvp5o2qcnb7rf0mdf8oorv54vco4uk",
+  "discovery_url": "https://cognito-idp.us-west-2.amazonaws.com/us-west-2_QuW2OOBnZ/.well-known/openid-configuration",
+  "execution_role": "arn:aws:iam::625579972148:role/ReturnsRefundsAssistantBedrockAgentCoreRole-us-west-2"
+}

@@ -1,0 +1,3 @@
+strands
+strands-tools
+boto3

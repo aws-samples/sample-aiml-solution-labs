@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Sync Docs on Code Change",
+  "description": "Monitors Python source files, notebooks, and configuration files. When changes are saved, prompts the agent to review and update relevant documentation in README files or docs folders to keep them in sync with code changes.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "*.py",
+      "*.ipynb",
+      "*.yaml",
+      "*.yml",
+      "*.toml",
+      "requirements.txt",
+      "pyproject.toml"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Review the changes made to the file and determine if any documentation needs to be updated. Check the relevant README.md files (either in the same directory, parent directories, or project root) and any /docs folders. Update the documentation to reflect the code changes, including any new features, modified functionality, configuration changes, or usage examples. Keep the documentation clear, accurate, and consistent with the current implementation."
+  }
+}

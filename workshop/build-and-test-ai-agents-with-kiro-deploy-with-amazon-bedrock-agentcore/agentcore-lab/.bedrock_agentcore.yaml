@@ -1,0 +1,66 @@
+default_agent: returns_refunds_agent
+agents:
+  returns_refunds_agent:
+    name: returns_refunds_agent
+    language: python
+    node_version: null
+    entrypoint: C:/dev/sample-aiml-solution-labs/workshop/build-and-test-ai-agents-with-kiro-deploy-with-amazon-bedrock-agentcore/agentcore-lab/agent_runtime.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: none
+    source_path: null
+    aws:
+      execution_role: arn:aws:iam::625579972148:role/ReturnsRefundsAssistantBedrockAgentCoreRole-us-west-2
+      execution_role_auto_create: false
+      account: '625579972148'
+      region: us-west-2
+      ecr_repository: 625579972148.dkr.ecr.us-west-2.amazonaws.com/bedrock-agentcore-returns_refunds_agent
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: returns_refunds_agent-HSGBtQFj7x
+      agent_arn: arn:aws:bedrock-agentcore:us-west-2:625579972148:runtime/returns_refunds_agent-HSGBtQFj7x
+      agent_session_id: b9bc3f8f-f418-44e6-a7d2-b39cdf401c94
+    codebuild:
+      project_name: bedrock-agentcore-returns_refunds_agent-builder
+      execution_role: arn:aws:iam::625579972148:role/AmazonBedrockAgentCoreSDKCodeBuild-us-west-2-8eda8502c8
+      source_bucket: bedrock-agentcore-codebuild-sources-625579972148-us-west-2
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration:
+      customJWTAuthorizer:
+        allowedClients:
+        - 6dacsfqdd4b9imggc4dnlsiebv
+        discoveryUrl: https://cognito-idp.us-west-2.amazonaws.com/us-west-2_QuW2OOBnZ/.well-known/openid-configuration
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
