@@ -1,6 +1,7 @@
 from strands import tool
 from typing import Optional, List, Dict, Any
 import logging
+import copy
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -14,47 +15,73 @@ def use_agentcore_calculator(params: dict) -> dict:
     """
     Calculates monthly AWS AgentCore costs based on usage patterns, and returns each component's costs, total costs. It also returns step-by-step explanation of how each component cost was calculated.
     
-    Input: dict with global parameters and component keys ('runtime', 'browser', 'code_interpreter', 'gateway', 'memory')
+    Input: dict with global parameters and optional component keys ('runtime', 'browser', 'code_interpreter', 'gateway', 'memory')
+    
+    NOTE: Components follow architectural patterns based on use case:
+
+    AGENTIC WORKFLOWS (when user mentions: agentic, tools, function calling, multi-step reasoning):
+    Include these components:
+    - runtime: Agent execution environment (ALWAYS include)
+    - gateway: Tool discovery, selection, and invocation (ALWAYS include)
+    - memory: Conversation context and state management (ALWAYS include)
+    - browser: Web scraping/browsing (ONLY if explicitly mentioned)
+    - code_interpreter: Code execution (ONLY if explicitly mentioned)
+
+    SIMPLE WORKFLOWS (direct Q&A, no tools):
+    Include these components:
+    - runtime: Application execution environment (ALWAYS include)
+    - memory: Conversation history (ALWAYS include)
+
+    All components use sensible defaults. Pricing data is fetched automatically via get_agentcore_pricing.
     
     Global parameters:
     - questions_per_day: Daily question volume (default: 333,333)
     - days_per_month: Days in billing month (default: 30)
     
-    Runtime parameters:
-    - cost_per_vcpu_hour: Hourly cost per virtual CPU
-    - cost_per_gb_hour: Hourly cost per GB memory
+    Runtime parameters (optional component):
+    - cost_per_vcpu_hour: Hourly cost per virtual CPU (required if using runtime)
+    - cost_per_gb_hour: Hourly cost per GB memory (required if using runtime)
     - percent_wait_time: Percentage of time waiting for model response (default: 90%)
-    - num_cpus: Number of virtual CPUs (default: 1)
-    - gb_memory: Memory allocation in GB (default: 2)
-    - seconds_per_question: Agent processing time per question (default: 120)
+    - num_cpus: Number of virtual CPUs (default: 2)
+    - gb_memory: Memory allocation in GB (default: 4)
+    - seconds_per_question: Agent processing time per question (default: 60)
+    - percent_questions_using_runtime: Percentage using runtime (default: 100)
     
-    Browser parameters: Same as runtime plus
+    Browser parameters (optional component):
+    - cost_per_vcpu_hour: Hourly cost per virtual CPU (required if using browser)
+    - cost_per_gb_hour: Hourly cost per GB memory (required if using browser)
     - percent_wait_time: Percentage of time waiting for model response (default: 90%)
+    - num_cpus: Number of virtual CPUs (default: 4)
+    - gb_memory: Memory allocation in GB (default: 16)
     - seconds_per_question: Agent processing time per question (default: 600)
     - percent_questions_using_browser: Percentage using browser tool (default: 0)
     
-    Code_interpreter parameters: Same as runtime plus
+    Code_interpreter parameters (optional component):
+    - cost_per_vcpu_hour: Hourly cost per virtual CPU (required if using code_interpreter)
+    - cost_per_gb_hour: Hourly cost per GB memory (required if using code_interpreter)
     - percent_wait_time: Percentage of time waiting for model response (default: 20%)
+    - num_cpus: Number of virtual CPUs (default: 4)
+    - gb_memory: Memory allocation in GB (default: 16)
     - seconds_per_question: Agent processing time per question (default: 60)
     - percent_questions_using_code_interpreter: Percentage using code interpreter (default: 0)
     
-    Gateway parameters:
-    - cost_per_invoke_tool_api: Cost per InvokeTool API call
-    - cost_per_search_api_invocation: Cost per search API call
-    - cost_per_tool_indexed_per_month: Monthly cost per indexed tool
-    - tools_to_invoke_per_question: Tools invoked per question (default: 1)
-    - search_api_calls_per_question: Search calls per question (default: 1)
-    - total_tools_indexed: Total tools requiring indexing (default: 0)
-    - percent_questions_using_tools: Percentage using any tools (default: 100)
+    Gateway parameters (optional component):
+    - cost_per_invoke_tool_api: Cost per InvokeTool API call (required if using gateway)
+    - cost_per_search_api_invocation: Cost per search API call (required if using gateway)
+    - cost_per_tool_indexed_per_month: Monthly cost per indexed tool (required if using gateway)
+    - tool_invocations_per_question: Average number of tools invoked per question (default: 3)
+    - search_api_calls_per_question: Semantic search calls per question to determine the number of relevant tools and pass the tools to the agent (default: 1)
+    - total_tools_indexed: Total tools requiring indexing (default: 50)
+    - percent_questions_using_tools: Percentage using any tools (default: 80)
     
-    Memory parameters:
-    - cost_per_raw_event: Cost per short-term memory event in short-term memory
-    - cost_per_memory_record_per_month: Monthly cost per stored record in long-term memory
-    - cost_per_memory_retrieval: Cost per memory retrieval call from long-term memory
+    Memory parameters (optional component):
+    - cost_per_raw_event: Cost per short-term memory event in short-term memory (required if using memory)
+    - cost_per_memory_record_per_month: Monthly cost per stored record in long-term memory (required if using memory)
+    - cost_per_memory_retrieval: Cost per memory retrieval call from long-term memory (required if using memory)
     - events_per_question: Events created per question in short-term memory (default: 2)
     - percent_questions_storing_events: Percentage creating memory events to be stored in short-term memory (default: 100)
-    - percent_events_stored_as_records: Percentage stored as records in long-term memory (default: 20)
-    - months_to_store: Duration to retain records in long-term memory (default: 3)
+    - percent_events_stored_as_records: Percentage stored as records in long-term memory (default: 100)
+    - months_to_store: Duration to retain records in long-term memory (default: 6)
     - records_retrieved_per_question: Records retrieved per question from long-term memory (default: 1)
     - percent_questions_retrieving_records: Percentage retrieving records from long-term memory (default: 100)
     
@@ -91,12 +118,14 @@ def use_agentcore_calculator(params: dict) -> dict:
             
             percent_wait_time = runtime_params.get('percent_wait_time', 90) / 100
             percent_cpu_time = 1 - percent_wait_time  # CPU time is inverse of wait time
-            num_cpus = runtime_params.get('num_cpus', 1)
-            gb_memory = runtime_params.get('gb_memory', 2)
-            seconds_per_question = runtime_params.get('seconds_per_question', 120)
+            num_cpus = runtime_params.get('num_cpus', 2)
+            gb_memory = runtime_params.get('gb_memory', 4)
+            seconds_per_question = runtime_params.get('seconds_per_question', 60)
+            percent_questions_using_runtime = runtime_params.get('percent_questions_using_runtime', 100) / 100
         
-            # Calculate total usage
-            total_questions_per_month = questions_per_day * days_per_month
+            # Calculate total usage (only for questions that use runtime)
+            runtime_questions_per_day = questions_per_day * percent_questions_using_runtime
+            total_questions_per_month = runtime_questions_per_day * days_per_month
             total_seconds_per_month = total_questions_per_month * seconds_per_question
             total_hours_per_month = total_seconds_per_month / 3600
             
@@ -111,13 +140,14 @@ def use_agentcore_calculator(params: dict) -> dict:
             
             # Create calculation explanations
             explanations = [
-                f"1/ total_questions_per_month ({total_questions_per_month:,.0f}) = questions_per_day ({questions_per_day:,.0f}) * days_per_month ({days_per_month})",
-                f"2/ total_hours_per_month ({total_hours_per_month:,.2f}) = total_questions_per_month ({total_questions_per_month:,.0f}) * seconds_per_question ({seconds_per_question}) / 3600",
-                f"3/ vcpu_hours ({vcpu_hours:,.2f}) = total_hours_per_month ({total_hours_per_month:,.2f}) * num_cpus ({num_cpus}) * percent_cpu_time ({percent_cpu_time:.1%})",
-                f"4/ gb_hours ({gb_hours:,.2f}) = total_hours_per_month ({total_hours_per_month:,.2f}) * gb_memory ({gb_memory})",
-                f"5/ cpu_cost (${cpu_cost:,.2f}) = vcpu_hours ({vcpu_hours:,.2f}) * cost_per_vcpu_hour (${cost_per_vcpu_hour})",
-                f"6/ memory_cost (${memory_cost:,.2f}) = gb_hours ({gb_hours:,.2f}) * cost_per_gb_hour (${cost_per_gb_hour})",
-                f"7/ total_runtime_cost (${total_runtime_cost:,.2f}) = cpu_cost (${cpu_cost:,.2f}) + memory_cost (${memory_cost:,.2f})"
+                f"1/ runtime_questions_per_day ({runtime_questions_per_day:,.0f}) = questions_per_day ({questions_per_day:,.0f}) * percent_questions_using_runtime ({percent_questions_using_runtime:.1%})",
+                f"2/ total_questions_per_month ({total_questions_per_month:,.0f}) = runtime_questions_per_day ({runtime_questions_per_day:,.0f}) * days_per_month ({days_per_month})",
+                f"3/ total_hours_per_month ({total_hours_per_month:,.2f}) = total_questions_per_month ({total_questions_per_month:,.0f}) * seconds_per_question ({seconds_per_question}) / 3600",
+                f"4/ vcpu_hours ({vcpu_hours:,.2f}) = total_hours_per_month ({total_hours_per_month:,.2f}) * num_cpus ({num_cpus}) * percent_cpu_time ({percent_cpu_time:.1%})",
+                f"5/ gb_hours ({gb_hours:,.2f}) = total_hours_per_month ({total_hours_per_month:,.2f}) * gb_memory ({gb_memory})",
+                f"6/ cpu_cost (${cpu_cost:,.2f}) = vcpu_hours ({vcpu_hours:,.2f}) * cost_per_vcpu_hour (${cost_per_vcpu_hour})",
+                f"7/ memory_cost (${memory_cost:,.2f}) = gb_hours ({gb_hours:,.2f}) * cost_per_gb_hour (${cost_per_gb_hour})",
+                f"8/ total_runtime_cost (${total_runtime_cost:,.2f}) = cpu_cost (${cpu_cost:,.2f}) + memory_cost (${memory_cost:,.2f})"
             ]
             
             results['runtime'] = {
@@ -127,6 +157,7 @@ def use_agentcore_calculator(params: dict) -> dict:
                 'vcpu_hours': vcpu_hours,
                 'gb_hours': gb_hours,
                 'total_questions_per_month': total_questions_per_month,
+                'percent_questions_using_runtime': percent_questions_using_runtime * 100,
                 'calculation_explanations': explanations
             }
         except Exception as e:
@@ -154,8 +185,8 @@ def use_agentcore_calculator(params: dict) -> dict:
             
             percent_wait_time = browser_params.get('percent_wait_time', 90) / 100
             percent_cpu_time = 1 - percent_wait_time  # CPU time is inverse of wait time
-            num_cpus = browser_params.get('num_cpus', 1)
-            gb_memory = browser_params.get('gb_memory', 2)
+            num_cpus = browser_params.get('num_cpus', 4)
+            gb_memory = browser_params.get('gb_memory', 16)
             seconds_per_question = browser_params.get('seconds_per_question', 600)
             percent_questions_using_browser = browser_params.get('percent_questions_using_browser', 0) / 100
         
@@ -221,8 +252,8 @@ def use_agentcore_calculator(params: dict) -> dict:
             
             percent_wait_time = code_params.get('percent_wait_time', 20) / 100
             percent_cpu_time = 1 - percent_wait_time  # CPU time is inverse of wait time
-            num_cpus = code_params.get('num_cpus', 1)
-            gb_memory = code_params.get('gb_memory', 2)
+            num_cpus = code_params.get('num_cpus', 4)
+            gb_memory = code_params.get('gb_memory', 16)
             seconds_per_question = code_params.get('seconds_per_question', 60)
             percent_questions_using_code_interpreter = code_params.get('percent_questions_using_code_interpreter', 0) / 100
         
@@ -291,17 +322,17 @@ def use_agentcore_calculator(params: dict) -> dict:
                 logger.error(error_msg)
                 return {'error': error_msg}
             
-            tools_to_invoke_per_question = gateway_params.get('tools_to_invoke_per_question', 1)
+            tool_invocations_per_question = gateway_params.get('tool_invocations_per_question', 3)
             search_api_calls_per_question = gateway_params.get('search_api_calls_per_question', 1)
-            total_tools_indexed = gateway_params.get('total_tools_indexed', 0)
-            percent_questions_using_tools = gateway_params.get('percent_questions_using_tools', 100) / 100
+            total_tools_indexed = gateway_params.get('total_tools_indexed', 50)
+            percent_questions_using_tools = gateway_params.get('percent_questions_using_tools', 80) / 100
         
             # Calculate monthly usage
             total_questions_per_month = questions_per_day * days_per_month
             questions_using_tools_per_month = total_questions_per_month * percent_questions_using_tools
             
             # Calculate API costs
-            total_invoke_tool_calls = questions_using_tools_per_month * tools_to_invoke_per_question
+            total_invoke_tool_calls = questions_using_tools_per_month * tool_invocations_per_question
             total_search_api_calls = questions_using_tools_per_month * search_api_calls_per_question
             
             invoke_tool_cost = total_invoke_tool_calls * cost_per_invoke_tool_api
@@ -314,7 +345,7 @@ def use_agentcore_calculator(params: dict) -> dict:
             explanations = [
                 f"1/ total_questions_per_month ({total_questions_per_month:,.0f}) = questions_per_day ({questions_per_day:,.0f}) * days_per_month ({days_per_month})",
                 f"2/ questions_using_tools_per_month ({questions_using_tools_per_month:,.0f}) = total_questions_per_month ({total_questions_per_month:,.0f}) * percent_questions_using_tools ({percent_questions_using_tools:.1%})",
-                f"3/ total_invoke_tool_calls ({total_invoke_tool_calls:,.0f}) = questions_using_tools_per_month ({questions_using_tools_per_month:,.0f}) * tools_to_invoke_per_question ({tools_to_invoke_per_question})",
+                f"3/ total_invoke_tool_calls ({total_invoke_tool_calls:,.0f}) = questions_using_tools_per_month ({questions_using_tools_per_month:,.0f}) * tool_invocations_per_question ({tool_invocations_per_question})",
                 f"4/ total_search_api_calls ({total_search_api_calls:,.0f}) = questions_using_tools_per_month ({questions_using_tools_per_month:,.0f}) * search_api_calls_per_question ({search_api_calls_per_question})",
                 f"5/ invoke_tool_cost (${invoke_tool_cost:,.2f}) = total_invoke_tool_calls ({total_invoke_tool_calls:,.0f}) * cost_per_invoke_tool_api (${cost_per_invoke_tool_api})",
                 f"6/ search_api_cost (${search_api_cost:,.2f}) = total_search_api_calls ({total_search_api_calls:,.0f}) * cost_per_search_api_invocation (${cost_per_search_api_invocation})",
@@ -363,8 +394,8 @@ def use_agentcore_calculator(params: dict) -> dict:
             
             events_per_question = memory_params.get('events_per_question', 2)
             percent_questions_storing_events = memory_params.get('percent_questions_storing_events', 100) / 100
-            percent_events_stored_as_records = memory_params.get('percent_events_stored_as_records', 20) / 100
-            months_to_store = memory_params.get('months_to_store', 3)
+            percent_events_stored_as_records = memory_params.get('percent_events_stored_as_records', 100) / 100
+            months_to_store = memory_params.get('months_to_store', 6)
             records_retrieved_per_question = memory_params.get('records_retrieved_per_question', 1)
             percent_questions_retrieving_records = memory_params.get('percent_questions_retrieving_records', 100) / 100
         
@@ -449,8 +480,8 @@ def agentcore_what_if_analysis(
     
     Args:
         base_params: Base configuration dict (same format as use_agentcore_calculator)
-        primary_variable: Parameter name to vary (e.g., "questions_per_day", "runtime.cost_per_vcpu_hour", "gateway.tools_to_invoke_per_question")
-        primary_range: List of values for primary variable (e.g., [10000, 50000, 100000] or [0.1, 0.2, 0.3])
+        primary_variable: Parameter name to vary (e.g., "questions_per_day", "gateway.tool_invocations_per_question")
+        primary_range: List of values for primary variable (e.g., [10000, 50000, 100000] or [1, 3, 10])
         secondary_variable: Optional second parameter to vary for 2D analysis
         secondary_range: List of values for secondary variable (any type)
         
@@ -501,7 +532,7 @@ def agentcore_what_if_analysis(
             for secondary_val in secondary_range:
                 for primary_val in primary_range:
                     # Create deep copy of base configuration for this scenario
-                    scenario_params = base_params.copy()
+                    scenario_params = copy.deepcopy(base_params)
                     
                     # Apply parameter variations
                     set_nested_param(scenario_params, primary_variable, primary_val)
@@ -534,7 +565,7 @@ def agentcore_what_if_analysis(
             # 1D Analysis: Vary only the primary parameter
             for primary_val in primary_range:
                 # Create deep copy of base configuration for this scenario
-                scenario_params = base_params.copy()
+                scenario_params = copy.deepcopy(base_params)
                 
                 # Apply parameter variation
                 set_nested_param(scenario_params, primary_variable, primary_val)

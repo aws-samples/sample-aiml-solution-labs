@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
-Deploy Head Analyst Agent to Amazon Bedrock AgentCore.
+Deploy AWS TCO & BVA Analyst Agent to Amazon Bedrock AgentCore.
 
-This script configures and launches the Head Analyst Agent to AgentCore Runtime.
+This script configures and launches the agent to AgentCore Runtime.
 It uses the AgentCore CLI to handle deployment.
 
 Usage:
-    python deploy_to_agentcore.py                    # Configure and deploy
-    python deploy_to_agentcore.py --configure-only  # Configure only
-    python deploy_to_agentcore.py --launch-only     # Launch only (assumes configured)
-    python deploy_to_agentcore.py --status          # Check deployment status
-    python deploy_to_agentcore.py --destroy         # Destroy deployment
+    python deployment_helper.py                    # Configure and deploy
+    python deployment_helper.py --configure-only  # Configure only
+    python deployment_helper.py --launch-only     # Launch only (assumes configured)
+    python deployment_helper.py --status          # Check deployment status
+    python deployment_helper.py --destroy         # Destroy deployment
+
+Environment Variables:
+    AWS_REGION: AWS region (default: us-east-1)
+    KB_ID: Bedrock Knowledge Base ID (required for pricing search)
+    MODEL_ID: Bedrock model ID (optional, uses default if not set)
+    AGENTCORE_EXECUTION_ROLE_ARN: IAM role ARN for AgentCore execution
 """
 
 import argparse
@@ -23,11 +29,15 @@ import json
 # CONFIGURATION
 # =============================================================================
 AGENT_NAME = "aws_tco_biz_value_analyst"
-ENTRYPOINT = "head_analyst_agentcore.py"
+ENTRYPOINT = "aws_tco_bva_analyst_agentcore.py"
 REQUIREMENTS_FILE = "requirements.txt"
 DEFAULT_REGION = os.environ.get("AWS_REGION", "us-east-1")
 RUNTIME = "PYTHON_3_12"
 PROTOCOL = "MCP"
+
+# Environment variables to pass to the agent
+KB_ID = os.environ.get("KB_ID", "")
+MODEL_ID = os.environ.get("MODEL_ID", "")
 
 # IAM Role ARN - Update this with your actual role ARN
 EXECUTION_ROLE_ARN = os.environ.get(
@@ -79,7 +89,21 @@ def launch_agent(region: str, local: bool = False):
     if local:
         cmd.append("--local")
     
+    # Always pass AWS_REGION
     cmd.extend(["--env", f"AWS_REGION={region}"])
+    
+    # Pass KB_ID if set
+    if KB_ID:
+        cmd.extend(["--env", f"STRANDS_KNOWLEDGE_BASE_ID={KB_ID}"])
+        print(f"  KB_ID: {KB_ID}")
+    else:
+        print("  ERROR: KB_ID not set - pricing search may not work")
+        exit()
+    
+    # Pass MODEL_ID if set
+    if MODEL_ID:
+        cmd.extend(["--env", f"MODEL_ID={MODEL_ID}"])
+        print(f"  MODEL_ID: {MODEL_ID}")
     
     run_command(cmd)
     print("\n✓ Agent launched successfully")
@@ -116,7 +140,7 @@ def destroy_agent():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Deploy Head Analyst Agent to Amazon Bedrock AgentCore"
+        description="Deploy AWS TCO & BVA Analyst Agent to Amazon Bedrock AgentCore"
     )
     parser.add_argument(
         "--configure-only",
@@ -178,12 +202,16 @@ def main():
             print("=" * 60)
             print(f"\nAgent Name: {AGENT_NAME}")
             print(f"Region: {region}")
+            if KB_ID:
+                print(f"Knowledge Base ID: {KB_ID}")
+            if MODEL_ID:
+                print(f"Model ID: {MODEL_ID}")
             print("\nTo check status:")
-            print("  python deploy_to_agentcore.py --status")
+            print("  python deployment_helper.py --status")
             print("\nTo invoke:")
-            print("  python deploy_to_agentcore.py --invoke 'Calculate Bedrock costs'")
+            print("  python deployment_helper.py --invoke 'Calculate Bedrock costs'")
             print("\nTo destroy:")
-            print("  python deploy_to_agentcore.py --destroy")
+            print("  python deployment_helper.py --destroy")
             
     except subprocess.CalledProcessError as e:
         print(f"\n✗ Command failed with exit code {e.returncode}")

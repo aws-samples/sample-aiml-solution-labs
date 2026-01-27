@@ -13,7 +13,7 @@ from strands import tool
 # =============================================================================
 # CONFIGURATION CONSTANTS
 # =============================================================================
-KB_ID = os.environ.get("STRANDS_KNOWLEDGE_BASE_ID", "ZZCU8JNKSY")
+KB_ID = os.environ.get("STRANDS_KNOWLEDGE_BASE_ID", "<PLACE_YOUR_KB_ID>")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 # Retrieval parameters

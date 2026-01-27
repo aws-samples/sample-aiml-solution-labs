@@ -1,6 +1,7 @@
 from strands import tool
 from typing import Optional, List, Dict, Any
 import logging
+import copy
 
 # Configure logger for this module
 logger = logging.getLogger(__name__)
@@ -20,43 +21,53 @@ def use_bedrock_calculator(params: dict) -> dict:
     
     Global parameters:
     - questions_per_month: Number of questions/requests per month (required)
-    - system_prompt_tokens: Tokens used for system prompt per question (default: 500)
+    - system_prompt_tokens: Tokens used for system prompt per question (default: 1000)
     - history_qa_pairs: Number of question-answer pairs stored in history context (default: 3)
     
-    Vector database parameters (optional, global):
-    - component_type: 'vector_database'
+    Vector database parameters (optional, per-model):
+    Configure within each model that uses vector database:
     - chunks_per_call: Number of chunks retrieved per call (default: 10)
     - tokens_per_chunk: Tokens per chunk (default: 300)
+    - percent_questions_using_vector_db: Percentage of THIS MODEL's questions that use vector database (default: 100)
     
     LLM model parameters:
     - model_name: Name of the LLM model (required)
     - cost_per_million_input_tokens: Cost per million input tokens (required)
     - cost_per_million_output_tokens: Cost per million output tokens (required)
-    - input_tokens_per_question: Input tokens per question (default: 10000)
+    - input_tokens_per_question: Input tokens per question (default: 100)
     - output_tokens_per_question: Output tokens per question (default: 500)
     - percent_questions_for_model: Percentage of total questions handled by this model (default: equally distributed)
+    - vector_database (optional): Vector database configuration for this model
     - tools (optional): Tool configuration for this model
     
     Tools parameters (per model, optional):
     Tools should be considered if the use case is Agentic in nature.
-    - number_of_tools: Total number of tools available to agent (required if tools specified)
-    - tools_used_by_agent: Number of tools actually used by agent (required if tools specified)
-    - tool_invocations_per_question: Average tool invocations per question (default: 1.5)
+    - number_of_tools: Total number of tools indexed in Gateway (default: 50)
+    - tools_passed_to_model: Number of tools selected by Gateway and passed to model (default: 10, max: number_of_tools)
+    - tool_invocations_per_question: Average number of tools invoked per question (default: 3)
     - percent_questions_that_invoke_tools: Percentage of questions that invoke tools (default: 80%)
-    - input_tokens_per_tool: Input tokens per tool description (default: 50)
-    - output_tokens_per_tool: Output tokens per tool invocation (default: 75)
+    - input_tokens_per_tool: Input tokens per tool description (default: 300)
+    - output_tokens_for_tool_invocation: Output tokens for tool invocation (function name, signature, arguments) from model to agent (default: 100)
+    - tokens_per_tool_result: Tokens per tool execution result returned to model as input (default: 500)
     
     Output: dict with calculated costs for each component, including:
-    - For LLMs: input_cost, output_cost, total_cost (includes vector database, tool, system prompt, and history tokens)
-    - calculation_explanations: List of strings showing step-by-step calculations
-    - total_all_components: Sum of all component costs
+    - questions_per_month_all_models: Total questions per month across all models
+    - assumptions: Global default values (system_prompt_tokens, history_qa_pairs)
+    - warnings: List of warning messages if model percentages don't sum to 100% (if applicable)
+    - For each LLM model:
+      - model_name: Name of the model
+      - costs: {input_token_cost, output_token_cost, total_token_cost}
+      - assumptions: Model-specific parameters and defaults (includes vector_database and tool parameters if configured)
+      - token_breakdown: Detailed token composition from all sources
+      - calculation_explanations: Step-by-step calculation breakdown
+    - total_cost_for_all_models: Sum of all model costs
     """
     results = {}
-    vector_tokens_per_month = 0
+    total_cost_for_all_models = 0  # Accumulate total cost as we process models
     
     # Extract and validate global parameters
     questions_per_month = params.get('questions_per_month')
-    system_prompt_tokens = params.get('system_prompt_tokens', 500)
+    system_prompt_tokens = params.get('system_prompt_tokens', 1000)
     history_qa_pairs = params.get('history_qa_pairs', 3)
     
     if questions_per_month is None:
@@ -64,47 +75,20 @@ def use_bedrock_calculator(params: dict) -> dict:
         logger.error(error_msg)
         return {'error': error_msg}
     
-    # Count LLM models for equal distribution default (exclude global params and vector_database)
+    # Count LLM models for equal distribution default (exclude global params)
     model_count = 0
     for key in params.keys():
-        if key not in ['vector_database', 'questions_per_month', 'system_prompt_tokens', 'history_qa_pairs']:
+        if key not in ['questions_per_month', 'system_prompt_tokens', 'history_qa_pairs']:
             model_count += 1
     
     # Calculate default percentage per model (avoid division by zero)
     default_percent_per_model = 100 / model_count if model_count > 0 else 100
     
     try:
-        # FIRST PASS: Calculate vector database tokens (global impact on all models)
-        if 'vector_database' in params:
-            vector_params = params['vector_database']
-            
-            # Extract vector database parameters with defaults
-            chunks_per_call = vector_params.get('chunks_per_call', 10)
-            tokens_per_chunk = vector_params.get('tokens_per_chunk', 300)
-            
-            # Calculate total vector tokens per month (applies to all models)
-            vector_tokens_per_month = chunks_per_call * tokens_per_chunk * questions_per_month
-            
-            # Vector database explanation (no direct cost, tokens added to LLMs)
-            explanations = [
-                f"1/ tokens_per_call ({chunks_per_call * tokens_per_chunk:,}) = chunks_per_call ({chunks_per_call}) * tokens_per_chunk ({tokens_per_chunk})",
-                f"2/ vector_tokens_per_month ({vector_tokens_per_month:,}) = tokens_per_call ({chunks_per_call * tokens_per_chunk:,}) * questions_per_month ({questions_per_month:,})",
-                f"3/ These tokens are added to LLM input tokens for cost calculation"
-            ]
-            
-            results['vector_database'] = {
-                'component_type': 'vector_database',
-                'vector_tokens_per_month': vector_tokens_per_month,
-                'chunks_per_call': chunks_per_call,
-                'tokens_per_chunk': tokens_per_chunk,
-                'questions_per_month': questions_per_month,
-                'calculation_explanations': explanations
-            }
-        
-        # SECOND PASS: Process each LLM model
+        # Process each LLM model
         for component_key, component_params in params.items():
-            # Skip global parameters and vector_database
-            if component_key in ['vector_database', 'questions_per_month', 'system_prompt_tokens', 'history_qa_pairs']:
+            # Skip global parameters
+            if component_key in ['questions_per_month', 'system_prompt_tokens', 'history_qa_pairs']:
                 continue
                 
             try:
@@ -112,7 +96,7 @@ def use_bedrock_calculator(params: dict) -> dict:
                 model_name = component_params.get('model_name')
                 cost_per_million_input_tokens = component_params.get('cost_per_million_input_tokens')
                 cost_per_million_output_tokens = component_params.get('cost_per_million_output_tokens')
-                input_tokens_per_question = component_params.get('input_tokens_per_question', 10000)
+                input_tokens_per_question = component_params.get('input_tokens_per_question', 100)
                 output_tokens_per_question = component_params.get('output_tokens_per_question', 500)
                 percent_questions_for_model = component_params.get('percent_questions_for_model', default_percent_per_model) / 100
                 
@@ -134,8 +118,35 @@ def use_bedrock_calculator(params: dict) -> dict:
                 questions_for_this_model = questions_per_month * percent_questions_for_model
                 
                 # Calculate base token usage for this model
-                base_input_tokens_per_month = input_tokens_per_question * questions_for_this_model
-                base_output_tokens_per_month = output_tokens_per_question * questions_for_this_model
+                query_input_tokens_per_month = input_tokens_per_question * questions_for_this_model
+                query_output_tokens_per_month = output_tokens_per_question * questions_for_this_model
+                
+                # Initialize vector database token counter
+                vector_tokens_per_month = 0
+                vector_explanations = []
+                
+                # Calculate vector database tokens if configured for this model
+                if 'vector_database' in component_params:
+                    vector_params = component_params['vector_database']
+                    
+                    # Extract vector database parameters with defaults
+                    chunks_per_call = vector_params.get('chunks_per_call', 10)
+                    tokens_per_chunk = vector_params.get('tokens_per_chunk', 300)
+                    percent_questions_using_vector_db = vector_params.get('percent_questions_using_vector_db', 100) / 100
+                    
+                    # Calculate questions that use vector database for THIS model
+                    questions_using_vector_db = questions_for_this_model * percent_questions_using_vector_db
+                    
+                    # Calculate vector tokens for THIS model only
+                    tokens_per_call = chunks_per_call * tokens_per_chunk
+                    vector_tokens_per_month = tokens_per_call * questions_using_vector_db
+                    
+                    # Vector database explanation
+                    vector_explanations = [
+                        f"Questions using vector DB ({questions_using_vector_db:,.0f}) = questions_for_this_model ({questions_for_this_model:,.0f}) * percent_questions_using_vector_db ({percent_questions_using_vector_db:.1%})",
+                        f"Tokens per vector call ({tokens_per_call:,}) = chunks_per_call ({chunks_per_call}) * tokens_per_chunk ({tokens_per_chunk})",
+                        f"Vector tokens for this model ({vector_tokens_per_month:,.0f}) = tokens_per_call ({tokens_per_call:,}) * questions_using_vector_db ({questions_using_vector_db:,.0f})"
+                    ]
                 
                 # Initialize tool token counters
                 tool_input_tokens = 0
@@ -146,40 +157,44 @@ def use_bedrock_calculator(params: dict) -> dict:
                 if 'tools' in component_params:
                     tools_params = component_params['tools']
                     
-                    # Extract required tool parameters
-                    number_of_tools = tools_params.get('number_of_tools')
-                    tools_used_by_agent = tools_params.get('tools_used_by_agent')
+                    # Extract tool parameters with defaults
+                    number_of_tools = tools_params.get('number_of_tools', 50)
+                    tools_passed_to_model = tools_params.get('tools_passed_to_model', 10)
                     
-                    # Validate required tool parameters
-                    if number_of_tools is None:
-                        error_msg = f'Model {component_key} tools missing required parameter: number_of_tools'
-                        logger.error(error_msg)
-                        return {'error': error_msg}
-                    if tools_used_by_agent is None:
-                        error_msg = f'Model {component_key} tools missing required parameter: tools_used_by_agent'
-                        logger.error(error_msg)
-                        return {'error': error_msg}
+                    # Validate: tools_passed_to_model cannot exceed number_of_tools
+                    if tools_passed_to_model > number_of_tools:
+                        tools_passed_to_model = number_of_tools
+                        logger.warning(f'Model {component_key}: tools_passed_to_model ({tools_params.get("tools_passed_to_model")}) exceeds number_of_tools ({number_of_tools}). Capping at {number_of_tools}.')
                     
-                    # Extract optional tool parameters with defaults
-                    tool_invocations_per_question = tools_params.get('tool_invocations_per_question', 1.5)
+                    tool_invocations_per_question = tools_params.get('tool_invocations_per_question', 3)
                     percent_questions_that_invoke_tools = tools_params.get('percent_questions_that_invoke_tools', 80) / 100
-                    input_tokens_per_tool = tools_params.get('input_tokens_per_tool', 50)
-                    output_tokens_per_tool = tools_params.get('output_tokens_per_tool', 75)
+                    input_tokens_per_tool = tools_params.get('input_tokens_per_tool', 300)
+                    output_tokens_for_tool_invocation = tools_params.get('output_tokens_for_tool_invocation', 100)
+                    tokens_per_tool_result = tools_params.get('tokens_per_tool_result', 500)
                     
                     # Calculate questions that actually use tools
                     questions_invoking_tools = questions_for_this_model * percent_questions_that_invoke_tools
                     
-                    # Tool input tokens: all tool descriptions sent with each tool-using question
-                    tool_input_tokens = number_of_tools * input_tokens_per_tool * questions_invoking_tools
+                    # Tool input tokens: tool descriptions + tool results
+                    # Tool descriptions: sent once per question with tools selected by Gateway
+                    tool_description_tokens = tools_passed_to_model * input_tokens_per_tool * questions_invoking_tools
                     
-                    # Tool output tokens: only used tools generate output, multiplied by invocations
-                    tool_output_tokens = tools_used_by_agent * output_tokens_per_tool * tool_invocations_per_question * questions_invoking_tools
+                    # Tool results: returned from tool executions, fed back to model
+                    tool_result_tokens = tool_invocations_per_question * tokens_per_tool_result * questions_invoking_tools
+                    
+                    # Total tool input tokens
+                    tool_input_tokens = tool_description_tokens + tool_result_tokens
+                    
+                    # Tool output tokens: tool invocation requests (function calls with arguments)
+                    tool_output_tokens = tool_invocations_per_question * output_tokens_for_tool_invocation * questions_invoking_tools
                     
                     # Create tool calculation explanations
                     tool_explanations = [
                         f"Questions invoking tools ({questions_invoking_tools:,.0f}) = questions_for_this_model ({questions_for_this_model:,.0f}) * percent_questions_that_invoke_tools ({percent_questions_that_invoke_tools:.1%})",
-                        f"Tool input tokens ({tool_input_tokens:,.0f}) = number_of_tools ({number_of_tools}) * input_tokens_per_tool ({input_tokens_per_tool}) * questions_invoking_tools ({questions_invoking_tools:,.0f})",
-                        f"Tool output tokens ({tool_output_tokens:,.0f}) = tools_used_by_agent ({tools_used_by_agent}) * output_tokens_per_tool ({output_tokens_per_tool}) * tool_invocations_per_question ({tool_invocations_per_question}) * questions_invoking_tools ({questions_invoking_tools:,.0f})"
+                        f"Tool description tokens ({tool_description_tokens:,.0f}) = tools_passed_to_model ({tools_passed_to_model}) * input_tokens_per_tool ({input_tokens_per_tool}) * questions_invoking_tools ({questions_invoking_tools:,.0f})",
+                        f"Tool result tokens ({tool_result_tokens:,.0f}) = tool_invocations_per_question ({tool_invocations_per_question}) * tokens_per_tool_result ({tokens_per_tool_result}) * questions_invoking_tools ({questions_invoking_tools:,.0f})",
+                        f"Tool input tokens ({tool_input_tokens:,.0f}) = tool_description_tokens ({tool_description_tokens:,.0f}) + tool_result_tokens ({tool_result_tokens:,.0f})",
+                        f"Tool output tokens ({tool_output_tokens:,.0f}) = tool_invocations_per_question ({tool_invocations_per_question}) * output_tokens_for_tool_invocation ({output_tokens_for_tool_invocation}) * questions_invoking_tools ({questions_invoking_tools:,.0f})"
                     ]
                 
                 # Calculate system prompt tokens (sent with every question for this model)
@@ -192,9 +207,9 @@ def use_bedrock_calculator(params: dict) -> dict:
                 history_tokens_total = history_tokens_per_question * questions_for_this_model
                 
                 # Sum all input and output tokens
-                total_input_tokens = (base_input_tokens_per_month + vector_tokens_per_month + 
+                total_input_tokens = (query_input_tokens_per_month + vector_tokens_per_month + 
                                     tool_input_tokens + system_prompt_tokens_total + history_tokens_total)
-                total_output_tokens = base_output_tokens_per_month + tool_output_tokens
+                total_output_tokens = query_output_tokens_per_month + tool_output_tokens
                 
                 # Calculate final costs
                 input_cost = (total_input_tokens / 1_000_000) * cost_per_million_input_tokens
@@ -204,9 +219,13 @@ def use_bedrock_calculator(params: dict) -> dict:
                 # Build comprehensive calculation explanations
                 explanations = [
                     f"Questions for this model ({questions_for_this_model:,.0f}) = questions_per_month ({questions_per_month:,}) * percent_questions_for_model ({percent_questions_for_model:.1%})",
-                    f"Base input tokens per month ({base_input_tokens_per_month:,.0f}) = input_tokens_per_question ({input_tokens_per_question:,}) * questions_for_this_model ({questions_for_this_model:,.0f})",
-                    f"Base output tokens per month ({base_output_tokens_per_month:,.0f}) = output_tokens_per_question ({output_tokens_per_question:,}) * questions_for_this_model ({questions_for_this_model:,.0f})"
+                    f"Query input tokens per month ({query_input_tokens_per_month:,.0f}) = input_tokens_per_question ({input_tokens_per_question:,}) * questions_for_this_model ({questions_for_this_model:,.0f})",
+                    f"Query output tokens per month ({query_output_tokens_per_month:,.0f}) = output_tokens_per_question ({output_tokens_per_question:,}) * questions_for_this_model ({questions_for_this_model:,.0f})"
                 ]
+                
+                # Add vector database explanations if configured
+                if vector_explanations:
+                    explanations.extend(vector_explanations)
                 
                 # Add tool explanations if tools are configured
                 if tool_explanations:
@@ -218,8 +237,8 @@ def use_bedrock_calculator(params: dict) -> dict:
                     f"History tokens per Q&A pair ({tokens_per_qa_pair:,}) = input_tokens_per_question ({input_tokens_per_question:,}) + output_tokens_per_question ({output_tokens_per_question:,})",
                     f"History tokens per question ({history_tokens_per_question:,}) = history_qa_pairs ({history_qa_pairs}) * tokens_per_qa_pair ({tokens_per_qa_pair:,})",
                     f"History tokens total ({history_tokens_total:,.0f}) = history_tokens_per_question ({history_tokens_per_question:,}) * questions_for_this_model ({questions_for_this_model:,.0f})",
-                    f"Total input tokens ({total_input_tokens:,.0f}) = base_input_tokens ({base_input_tokens_per_month:,.0f}) + vector_tokens ({vector_tokens_per_month:,}) + tool_input_tokens ({tool_input_tokens:,.0f}) + system_prompt_tokens ({system_prompt_tokens_total:,.0f}) + history_tokens ({history_tokens_total:,.0f})",
-                    f"Total output tokens ({total_output_tokens:,.0f}) = base_output_tokens ({base_output_tokens_per_month:,.0f}) + tool_output_tokens ({tool_output_tokens:,.0f})",
+                    f"Total input tokens ({total_input_tokens:,.0f}) = query_input_tokens ({query_input_tokens_per_month:,.0f}) + vector_tokens ({vector_tokens_per_month:,}) + tool_input_tokens ({tool_input_tokens:,.0f}) + system_prompt_tokens ({system_prompt_tokens_total:,.0f}) + history_tokens ({history_tokens_total:,.0f})",
+                    f"Total output tokens ({total_output_tokens:,.0f}) = query_output_tokens ({query_output_tokens_per_month:,.0f}) + tool_output_tokens ({tool_output_tokens:,.0f})",
                     f"Input millions ({total_input_tokens / 1_000_000:,.2f}) = total_input_tokens ({total_input_tokens:,.0f}) / 1,000,000",
                     f"Output millions ({total_output_tokens / 1_000_000:,.2f}) = total_output_tokens ({total_output_tokens:,.0f}) / 1,000,000",
                     f"Input cost (${input_cost:,.2f}) = input_millions ({total_input_tokens / 1_000_000:,.2f}) * cost_per_million_input_tokens (${cost_per_million_input_tokens})",
@@ -227,43 +246,117 @@ def use_bedrock_calculator(params: dict) -> dict:
                     f"Total model cost (${total_model_cost:,.2f}) = input_cost (${input_cost:,.2f}) + output_cost (${output_cost:,.2f})"
                 ])
                 
-                # Store model results
-                results[component_key] = {
-                    'component_type': 'llm',
-                    'model_name': model_name,
-                    'input_cost': input_cost,
-                    'output_cost': output_cost,
-                    'total_cost': total_model_cost,
+                # Build model-specific assumptions
+                model_assumptions = {
                     'input_tokens_per_question': input_tokens_per_question,
                     'output_tokens_per_question': output_tokens_per_question,
                     'percent_questions_for_model': percent_questions_for_model * 100,
-                    'questions_for_this_model': questions_for_this_model,
-                    'base_input_tokens_per_month': base_input_tokens_per_month,
-                    'base_output_tokens_per_month': base_output_tokens_per_month,
-                    'vector_tokens_added': vector_tokens_per_month,
-                    'tool_input_tokens_added': tool_input_tokens,
-                    'tool_output_tokens_added': tool_output_tokens,
-                    'system_prompt_tokens_added': system_prompt_tokens_total,
-                    'history_tokens_added': history_tokens_total,
-                    'total_input_tokens': total_input_tokens,
-                    'total_output_tokens': total_output_tokens,
-                    'questions_per_month': questions_per_month,
-                    'history_qa_pairs': history_qa_pairs,
+                    'calculated_questions_for_this_model': questions_for_this_model,
+                }
+                
+                # Add vector database assumptions if configured for this model
+                if 'vector_database' in component_params:
+                    vector_params = component_params['vector_database']
+                    model_assumptions['vector_database'] = {
+                        'chunks_per_call': vector_params.get('chunks_per_call', 10),
+                        'tokens_per_chunk': vector_params.get('tokens_per_chunk', 300),
+                        'percent_questions_using_vector_db': vector_params.get('percent_questions_using_vector_db', 100)
+                    }
+                
+                # Add tool assumptions if tools are configured for this model
+                if 'tools' in component_params:
+                    model_assumptions['number_of_tools'] = number_of_tools
+                    model_assumptions['tools_passed_to_model'] = tools_passed_to_model
+                    model_assumptions['tool_invocations_per_question'] = tool_invocations_per_question
+                    model_assumptions['percent_questions_that_invoke_tools'] = percent_questions_that_invoke_tools * 100
+                    model_assumptions['input_tokens_per_tool'] = input_tokens_per_tool
+                    model_assumptions['output_tokens_for_tool_invocation'] = output_tokens_for_tool_invocation
+                    model_assumptions['tokens_per_tool_result'] = tokens_per_tool_result
+                
+                # Store model results
+                results[component_key] = {
+                    'model_name': model_name,
+                    # Monthly costs broken down by token type
+                    'costs': {
+                        'input_token_cost': input_cost,
+                        'output_token_cost': output_cost,
+                        'total_token_cost': total_model_cost,
+                    },
+                    # Model-specific assumptions (parameters and defaults)
+                    'assumptions': model_assumptions,
+                    # Detailed token composition showing all sources
+                    'token_breakdown': {
+                        'query_input_tokens_per_month': query_input_tokens_per_month,
+                        'query_output_tokens_per_month': query_output_tokens_per_month,
+                        'vector_tokens_added': vector_tokens_per_month,
+                        'tool_input_tokens_added': tool_input_tokens,
+                        'tool_output_tokens_added': tool_output_tokens,
+                        'system_prompt_tokens_added': system_prompt_tokens_total,
+                        'history_tokens_added': history_tokens_total,
+                        'total_input_tokens': total_input_tokens,
+                        'total_output_tokens': total_output_tokens,
+                    },
+                    # Step-by-step calculation breakdown
                     'calculation_explanations': explanations
                 }
+                
+                # Accumulate total cost for all models
+                total_cost_for_all_models += total_model_cost
                 
             except Exception as e:
                 error_msg = f'Error calculating costs for component {component_key}: {str(e)}'
                 logger.exception(error_msg)
                 return {'error': error_msg}
         
-        # Calculate grand total across all LLM models (exclude vector_database)
-        total_cost = 0
-        for component_key, component_data in results.items():
-            if component_key != 'vector_database':
-                total_cost += component_data.get('total_cost', 0)
+        # Validate model percentage allocation
+        total_percent_allocated = 0
+        model_percentages = {}
+        for component_key, component_params in params.items():
+            if component_key in ['questions_per_month', 'system_prompt_tokens', 'history_qa_pairs']:
+                continue
+            percent = component_params.get('percent_questions_for_model', default_percent_per_model)
+            model_percentages[component_key] = percent
+            total_percent_allocated += percent
         
-        results['total_all_components'] = total_cost
+        # Add warnings if percentages don't add up to 100%
+        warnings = []
+        if total_percent_allocated > 100:
+            warning_msg = (
+                f"⚠️ WARNING: Model percentages exceed 100% (total: {total_percent_allocated:.1f}%). "
+                f"This means you've allocated more questions than available. "
+                f"Model allocations: {', '.join([f'{k}={v}%' for k, v in model_percentages.items()])}. "
+                f"Please review your percent_questions_for_model values to ensure they sum to 100% or less."
+            )
+            warnings.append(warning_msg)
+            logger.warning(warning_msg)
+        elif total_percent_allocated < 100 and model_count > 0:
+            unallocated_percent = 100 - total_percent_allocated
+            warning_msg = (
+                f"ℹ️ INFO: Model percentages sum to {total_percent_allocated:.1f}% (less than 100%). "
+                f"This means {unallocated_percent:.1f}% of questions ({questions_per_month * unallocated_percent / 100:,.0f} questions) "
+                f"are not allocated to any model in this calculation. "
+                f"Model allocations: {', '.join([f'{k}={v}%' for k, v in model_percentages.items()])}. "
+                f"This is acceptable if those questions are handled by other systems or models not included in this analysis."
+            )
+            warnings.append(warning_msg)
+            logger.info(warning_msg)
+        
+        results['questions_per_month_all_models'] = questions_per_month
+        
+        # Build global assumptions section
+        assumptions = {
+            'global': {
+                'system_prompt_tokens': system_prompt_tokens,
+                'history_qa_pairs': history_qa_pairs,
+            }
+        }
+        
+        results['assumptions'] = assumptions
+        results['total_cost_for_all_models'] = total_cost_for_all_models
+        
+        # Add warnings to results if any exist
+        if warnings:
+            results['warnings'] = warnings
         
     except Exception as e:
         error_msg = f'Error processing components: {str(e)}'
@@ -338,7 +431,7 @@ def bedrock_what_if_analysis(
             for secondary_val in secondary_range:
                 for primary_val in primary_range:
                     # Create deep copy of base configuration for this scenario
-                    scenario_params = base_params.copy()
+                    scenario_params = copy.deepcopy(base_params)
                     
                     # Apply parameter variations
                     set_nested_param(scenario_params, primary_variable, primary_val)
@@ -354,7 +447,7 @@ def bedrock_what_if_analysis(
                         return {'error': error_msg}
                     
                     # Extract total cost and store results
-                    total_cost = result.get('total_all_components', 0)
+                    total_cost = result.get('total_cost_for_all_models', 0)
                     costs_flat.append(total_cost)
                     
                     scenario_desc = f"{primary_variable}={primary_val}, {secondary_variable}={secondary_val}"
@@ -371,7 +464,7 @@ def bedrock_what_if_analysis(
             # 1D Analysis: Vary only the primary parameter
             for primary_val in primary_range:
                 # Create deep copy of base configuration for this scenario
-                scenario_params = base_params.copy()
+                scenario_params = copy.deepcopy(base_params)
                 
                 # Apply parameter variation
                 set_nested_param(scenario_params, primary_variable, primary_val)
@@ -386,7 +479,7 @@ def bedrock_what_if_analysis(
                     return {'error': error_msg}
                 
                 # Extract total cost and store results
-                total_cost = result.get('total_all_components', 0)
+                total_cost = result.get('total_cost_for_all_models', 0)
                 costs_flat.append(total_cost)
                 
                 scenario_desc = f"{primary_variable}={primary_val}"

@@ -1,7 +1,7 @@
 """
-Head Analyst Agent MCP Endpoint for AgentCore Deployment.
+AWS TCO & BVA Analyst MCP Endpoint for AgentCore Deployment.
 
-This script defines an MCP endpoint that wraps the HeadAnalystAgent
+This script defines an MCP endpoint that wraps the AwsTcoBvaAnalyst
 for deployment to Amazon Bedrock AgentCore.
 """
 
@@ -10,7 +10,7 @@ import time
 from mcp.server.fastmcp import FastMCP
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
-from head_analyst import HeadAnalystAgent
+from aws_tco_bva_analyst import AwsTcoBvaAnalyst
 
 # =============================================================================
 # CONFIGURATION
@@ -22,8 +22,8 @@ app = BedrockAgentCoreApp()
 # Create FastMCP application
 mcp = FastMCP(host="0.0.0.0", stateless_http=True)
 
-# Initialize the Head Analyst Agent
-head_analyst = HeadAnalystAgent()
+# Initialize the AWS TCO & BVA Analyst Agent
+tco_bva_analyst = AwsTcoBvaAnalyst()
 
 
 def invoke_with_retry(agent, query: str, max_retries: int = 3, base_delay: int = 1):
@@ -64,7 +64,7 @@ def read_only_analyze_aws_costs(query: str) -> str:
     Analyze AWS costs and perform TCO calculations.
     
     This tool retrieves AWS pricing from a Knowledge Base and performs
-    cost calculations using Code Interpreter for accurate TCO analysis.
+    cost calculations using calculator tools for accurate TCO analysis.
     
     Args:
         query: User query describing the AWS cost analysis needed.
@@ -76,7 +76,7 @@ def read_only_analyze_aws_costs(query: str) -> str:
     Returns:
         Detailed cost analysis with pricing breakdown and calculations.
     """
-    response = invoke_with_retry(head_analyst, query)
+    response = invoke_with_retry(tco_bva_analyst, query)
     
     # Extract text content from response
     if hasattr(response, 'message') and 'content' in response.message:
