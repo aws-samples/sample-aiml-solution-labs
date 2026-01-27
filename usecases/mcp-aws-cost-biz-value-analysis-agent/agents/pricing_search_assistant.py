@@ -13,12 +13,12 @@ from strands import tool
 # =============================================================================
 # CONFIGURATION CONSTANTS
 # =============================================================================
-KB_ID = os.environ.get("STRANDS_KNOWLEDGE_BASE_ID", "<PLACE_YOUR_KB_ID>")
+STRANDS_KNOWLEDGE_BASE_ID = os.environ.get("STRANDS_KNOWLEDGE_BASE_ID", "<PLACE_YOUR_KB_ID>")
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 
 # Retrieval parameters
-RETRIEVE_NUM_RESULTS = 10
-RETRIEVE_MIN_SCORE = 0.5
+RETRIEVE_NUM_RESULTS = 15
+RETRIEVE_MIN_SCORE = 0.2
 
 # =============================================================================
 # BEDROCK CLIENT
@@ -42,7 +42,7 @@ def filtered_retrieve(query: str, target_region: str = "us-east-1") -> List[Dict
     """
     try:
         response = bedrock_agent_runtime.retrieve(
-            knowledgeBaseId=KB_ID,
+            knowledgeBaseId=STRANDS_KNOWLEDGE_BASE_ID,
             retrievalQuery={
                 'text': query
             },
@@ -127,7 +127,7 @@ def main():
     """Run the Pricing Search in interactive mode."""
     print("Pricing Search Tool")
     print("=" * 50)
-    print(f"Knowledge Base: {KB_ID}")
+    print(f"Knowledge Base: {STRANDS_KNOWLEDGE_BASE_ID}")
     print(f"Region: {REGION}")
     print(f"Results per query: {RETRIEVE_NUM_RESULTS}")
     print(f"Min score threshold: {RETRIEVE_MIN_SCORE}")

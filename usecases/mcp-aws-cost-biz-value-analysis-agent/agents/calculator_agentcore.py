@@ -80,10 +80,10 @@ def use_agentcore_calculator(params: dict) -> dict:
     - cost_per_memory_retrieval: Cost per memory retrieval call from long-term memory (required if using memory)
     - events_per_question: Events created per question in short-term memory (default: 2)
     - percent_questions_storing_events: Percentage creating memory events to be stored in short-term memory (default: 100)
-    - percent_events_stored_as_records: Percentage stored as records in long-term memory (default: 100)
+    - percent_events_stored_as_records: Percentage stored as records in long-term memory (default: 50)
     - months_to_store: Duration to retain records in long-term memory (default: 6)
     - records_retrieved_per_question: Records retrieved per question from long-term memory (default: 1)
-    - percent_questions_retrieving_records: Percentage retrieving records from long-term memory (default: 100)
+    - percent_questions_retrieving_records: Percentage retrieving records from long-term memory (default: 10)
     
     Output: dict with calculated costs for each component and total costs. It also returns step by step instructions of how the costs were calculates for each component.
     """

@@ -14,7 +14,7 @@ Usage:
 
 Environment Variables:
     AWS_REGION: AWS region (default: us-east-1)
-    KB_ID: Bedrock Knowledge Base ID (required for pricing search)
+    STRANDS_KNOWLEDGE_BASE_ID: Bedrock Knowledge Base ID (required for pricing search)
     MODEL_ID: Bedrock model ID (optional, uses default if not set)
     AGENTCORE_EXECUTION_ROLE_ARN: IAM role ARN for AgentCore execution
 """
@@ -36,7 +36,7 @@ RUNTIME = "PYTHON_3_12"
 PROTOCOL = "MCP"
 
 # Environment variables to pass to the agent
-KB_ID = os.environ.get("KB_ID", "")
+STRANDS_KNOWLEDGE_BASE_ID = os.environ.get("STRANDS_KNOWLEDGE_BASE_ID", "")
 MODEL_ID = os.environ.get("MODEL_ID", "")
 
 # IAM Role ARN - Update this with your actual role ARN
@@ -92,12 +92,12 @@ def launch_agent(region: str, local: bool = False):
     # Always pass AWS_REGION
     cmd.extend(["--env", f"AWS_REGION={region}"])
     
-    # Pass KB_ID if set
-    if KB_ID:
-        cmd.extend(["--env", f"STRANDS_KNOWLEDGE_BASE_ID={KB_ID}"])
-        print(f"  KB_ID: {KB_ID}")
+    # Pass STRANDS_KNOWLEDGE_BASE_ID if set
+    if STRANDS_KNOWLEDGE_BASE_ID:
+        cmd.extend(["--env", f"STRANDS_KNOWLEDGE_BASE_ID={STRANDS_KNOWLEDGE_BASE_ID}"])
+        print(f"  STRANDS_KNOWLEDGE_BASE_ID: {STRANDS_KNOWLEDGE_BASE_ID}")
     else:
-        print("  ERROR: KB_ID not set - pricing search may not work")
+        print("  ERROR: STRANDS_KNOWLEDGE_BASE_ID not set - pricing search may not work")
         exit()
     
     # Pass MODEL_ID if set
@@ -202,8 +202,8 @@ def main():
             print("=" * 60)
             print(f"\nAgent Name: {AGENT_NAME}")
             print(f"Region: {region}")
-            if KB_ID:
-                print(f"Knowledge Base ID: {KB_ID}")
+            if STRANDS_KNOWLEDGE_BASE_ID:
+                print(f"Knowledge Base ID: {STRANDS_KNOWLEDGE_BASE_ID}")
             if MODEL_ID:
                 print(f"Model ID: {MODEL_ID}")
             print("\nTo check status:")
