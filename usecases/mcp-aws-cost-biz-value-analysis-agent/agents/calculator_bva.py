@@ -47,21 +47,21 @@ def bva_calculator(params: dict) -> dict:
     - percent_questions_that_save_time: Percentage of questions where AI actually saves time (float, default: 60)
     - ai_agent_cost_per_month: Total monthly cost of AI Agent (float, includes Bedrock, AgentCore, etc.)
     
-    Cost_savings parameters:
+    cost_savings parameters:
     - labor_cost_per_hour: Hourly labor cost rate (float, default: 100)    
 
-    Revenue_growth parameters:
+    revenue_growth parameters:
     - percent_time_to_new_projects: Percentage of saved time allocated to new revenue-generating projects (float, default: 60)
     - revenue_per_employee_per_hour: Revenue generated per employee per hour (float, default: 150)
     
-    Customer_churn_reduction parameters:
+    customer_churn_reduction parameters:
     - total_customer_count: Total number of customers (int, default: 10000)
     - customer_churn_before_ai: Monthly customer churn rate before AI (float, default: 1.0%)
     - customer_churn_after_ai: Monthly customer churn rate after AI (float, default: 0.5%)
     - average_monthly_revenue_per_customer: Average monthly revenue per customer (float, default: 100)
     - cost_of_acquiring_new_customer: Cost to acquire new customer (calculated as 20% of annual revenue per customer)
     
-    Implementation_costs parameters:
+    implementation_costs parameters:
     - one_time_implementation_cost: One-time implementation and setup cost (float, default: 100000)
     - one_time_training_cost: One-time training and change management cost (float, default: 20000)
     
@@ -150,7 +150,7 @@ def bva_calculator(params: dict) -> dict:
     # STEP 2: Cost Savings Calculation
     # Calculates labor cost reductions from AI-driven time savings
     # ========================================
-    if 'cost_savings' in params:
+    if type(params.get('cost_savings')) == dict:
         try:
             cost_params = params['cost_savings']
             
@@ -233,7 +233,7 @@ def bva_calculator(params: dict) -> dict:
     # STEP 3: Revenue Growth Calculation
     # Calculates additional revenue from time allocated to new projects
     # ========================================
-    if 'revenue_growth' in params:
+    if type(params.get('revenue_growth')) == dict:
         try:
             revenue_params = params['revenue_growth']
             
@@ -293,7 +293,7 @@ def bva_calculator(params: dict) -> dict:
     # STEP 4: Customer Churn Reduction Calculation
     # Calculates value from improved customer retention due to better service
     # ========================================
-    if 'customer_churn_reduction' in params:
+    if type(params.get('customer_churn_reduction')) == dict:
         try:
             churn_params = params['customer_churn_reduction']
             
@@ -426,7 +426,7 @@ def bva_calculator(params: dict) -> dict:
     # STEP 5: Implementation Costs Calculation
     # Calculates one-time costs for implementing the AI Agent solution
     # ========================================
-    if 'implementation_costs' in params:
+    if type(params.get('implementation_costs')) == dict:
         try:
             impl_params = params['implementation_costs']
             
@@ -478,15 +478,15 @@ def bva_calculator(params: dict) -> dict:
         churn_reduction_benefit = 0
         
         # Time savings benefit (use ONLY ONE: cost_savings OR revenue_growth)
-        if 'cost_savings' in results:
+        if type(results.get('cost_savings')) == dict:
             time_savings_benefit = results['cost_savings'].get('total_gross_labor_savings_period', 0)
             total_gross_benefits += time_savings_benefit
-        elif 'revenue_growth' in results:
+        elif type(results.get('revenue_growth')) == dict:
             time_savings_benefit = results['revenue_growth'].get('total_gross_revenue_growth_period', 0)
             total_gross_benefits += time_savings_benefit
         
         # Customer churn reduction benefit (independent of time savings)
-        if 'customer_churn_reduction' in results:
+        if type(results.get('customer_churn_reduction')) == dict:
             churn_reduction_benefit = results['customer_churn_reduction'].get('total_churn_reduction_value_period', 0)
             total_gross_benefits += churn_reduction_benefit
         
@@ -510,11 +510,11 @@ def bva_calculator(params: dict) -> dict:
         # ===== MONTHLY ONGOING (after payback) =====
         # Calculate monthly gross benefit
         monthly_gross_benefit = 0
-        if 'cost_savings' in results:
+        if type(results.get('cost_savings')) == dict:
             monthly_gross_benefit += results['cost_savings'].get('monthly_gross_labor_savings', 0)
-        elif 'revenue_growth' in results:
+        elif type(results.get('revenue_growth')) == dict:
             monthly_gross_benefit += results['revenue_growth'].get('monthly_gross_additional_revenue', 0)
-        if 'customer_churn_reduction' in results:
+        if type(results.get('customer_churn_reduction')) == dict:
             monthly_gross_benefit += results['customer_churn_reduction'].get('monthly_total_churn_value', 0)
         
         # Monthly net benefit (after AI costs)

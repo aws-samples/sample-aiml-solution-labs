@@ -22,7 +22,7 @@ from system_prompt import TCO_ANALYST_PROMPT
 # CONFIGURATION
 # =============================================================================
 REGION = os.environ.get("AWS_REGION", "us-east-1")
-MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+MODEL_ID = os.environ.get("MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0")
 
 # AWS Knowledge MCP Server
 AWS_KNOWLEDGE_MCP_URL = "https://knowledge-mcp.global.api.aws"
