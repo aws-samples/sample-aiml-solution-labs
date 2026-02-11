@@ -227,4 +227,5 @@ RULES:
 - Use proper JSON syntax with double quotes
 - Numbers must be numeric types, not strings
 - Start your response with {{ and end with }}
+- CRITICAL: After calling calculator tools, you MUST include the COMPLETE calculator results in your final response text. Do NOT just say "Analysis complete" or "Data provided above". Your final message MUST contain the full JSON output with all calculated values. The user only sees your final text response, NOT the tool call results.
 """
