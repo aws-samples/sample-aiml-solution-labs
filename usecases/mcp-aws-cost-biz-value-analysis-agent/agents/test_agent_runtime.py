@@ -15,10 +15,39 @@ import re
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-# Configuration
-RUNTIME_ARN = "arn:aws:bedrock-agentcore:us-west-2:955644293412:runtime/aws_tco_biz_value_analyst-FX0gMR4Zo1"
-REGION = "us-west-2"
-AGENT_ID = RUNTIME_ARN.split("/")[-1]  # e.g. aws_tco_biz_value_analyst-4004d59U40
+# Configuration — derived from AWS credentials and agentcore config
+AGENT_NAME = "aws_tco_biz_value_analyst"
+
+
+def _get_runtime_config():
+    """Derive region, account, and runtime ARN from AWS credentials and agentcore config."""
+    import yaml
+
+    # Try to read from .bedrock_agentcore.yaml first
+    config_path = os.path.join(os.path.dirname(__file__), ".bedrock_agentcore.yaml")
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+        agent_cfg = config.get("agents", {}).get(AGENT_NAME, {})
+        bc = agent_cfg.get("bedrock_agentcore", {})
+        aws_cfg = agent_cfg.get("aws", {})
+        arn = bc.get("agent_arn", "")
+        region = aws_cfg.get("region", os.environ.get("AWS_REGION", "us-west-2"))
+        if arn:
+            return region, arn
+
+    # Fallback: derive from STS + environment
+    region = os.environ.get("AWS_REGION", "us-west-2")
+    sts = boto3.client("sts", region_name=region)
+    account_id = sts.get_caller_identity()["Account"]
+    # Agent ID must be looked up or set via env var
+    agent_id = os.environ.get("AGENTCORE_AGENT_ID", f"{AGENT_NAME}-UNKNOWN")
+    arn = f"arn:aws:bedrock-agentcore:{region}:{account_id}:runtime/{agent_id}"
+    return region, arn
+
+
+REGION, RUNTIME_ARN = _get_runtime_config()
+AGENT_ID = RUNTIME_ARN.split("/")[-1]
 LOG_GROUP = f"/aws/bedrock-agentcore/runtimes/{AGENT_ID}-DEFAULT"
 
 # Colors for terminal output

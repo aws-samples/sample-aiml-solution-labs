@@ -2,10 +2,10 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS TCO and Business Value Analysis - Bedrock Knowledge Base with OpenSearch Serverless
 
 Parameters:
-  EmbeddingModelArn:
+  EmbeddingModelId:
     Type: String
-    Default: arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0
-    Description: ARN of the embedding model
+    Default: amazon.titan-embed-text-v2:0
+    Description: Foundation model ID for embeddings
 
   EmbeddingDimension:
     Type: Number
@@ -59,7 +59,7 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                 Resource:
-                  - !Ref EmbeddingModelArn
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
               - Effect: Allow
                 Action:
                   - aoss:APIAccessAll
@@ -259,7 +259,7 @@ Resources:
       KnowledgeBaseConfiguration:
         Type: VECTOR
         VectorKnowledgeBaseConfiguration:
-          EmbeddingModelArn: !Ref EmbeddingModelArn
+          EmbeddingModelArn: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
       StorageConfiguration:
         Type: OPENSEARCH_SERVERLESS
         OpensearchServerlessConfiguration:

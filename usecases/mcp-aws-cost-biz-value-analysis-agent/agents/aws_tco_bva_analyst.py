@@ -102,9 +102,10 @@ class AwsTcoBvaAnalyst:
     def _logging_callback(self, **kwargs):
         """Callback handler that logs tool calls and model events to stdout/CloudWatch."""
         if 'current_tool_use' in kwargs and kwargs.get('current_tool_use'):
-            tool = kwargs['current_tool_use']
-            tool_name = tool.get('name', 'unknown')
-            logger.info(f"🔧 TOOL_CALL: {tool_name}")
+            if kwargs.get('type') == 'tool_use_stream' and kwargs.get('delta', {}).get('toolUse',{}).get('input') == '' or kwargs.get('type') != 'tool_use_stream':
+                tool = kwargs['current_tool_use']
+                tool_name = tool.get('name', 'unknown')
+                logger.info(f"🔧 TOOL_CALL: {tool_name}")
         if 'data' in kwargs and kwargs.get('complete'):
             logger.info("📝 Model response complete")
     
