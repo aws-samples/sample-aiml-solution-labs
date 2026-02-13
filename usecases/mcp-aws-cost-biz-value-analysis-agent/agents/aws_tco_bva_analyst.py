@@ -14,6 +14,8 @@ from strands.models import BedrockModel
 from strands.tools.mcp import MCPClient
 from mcp.client.streamable_http import streamablehttp_client
 from pricing_search_assistant import call_pricing_search_agent
+from pricing_mismatch_logger import log_pricing_mismatch
+from region_resolver import resolve_region
 from calculator_bva import bva_calculator, bva_what_if_analysis
 from calculator_agentcore import use_agentcore_calculator, agentcore_what_if_analysis
 from calculator_bedrock import use_bedrock_calculator, bedrock_what_if_analysis
@@ -26,7 +28,9 @@ logger = logging.getLogger("aws_tco_bva_analyst")
 # CONFIGURATION
 # =============================================================================
 REGION = os.environ.get("AWS_REGION", "us-east-1")
-MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
+# Default model for the agent. Override via MODEL_ID env var to switch models
+# without code changes (e.g., MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0)
+MODEL_ID = os.environ.get("MODEL_ID", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
 
 # AWS Knowledge MCP Server
 AWS_KNOWLEDGE_MCP_URL = "https://knowledge-mcp.global.api.aws"
@@ -84,6 +88,13 @@ class AwsTcoBvaAnalyst:
             self._tools = [
                 # Pricing search
                 call_pricing_search_agent,
+                # Pricing verification — logs mismatches to console/CloudWatch
+                # when the agent detects a retrieved chunk doesn't match the
+                # requested model or region (called only on mismatch, ~10% of queries)
+                log_pricing_mismatch,
+                # Region name to code resolver — ensures the agent uses the
+                # official mapping instead of relying on its own memory
+                resolve_region,
                 # BVA calculators
                 bva_calculator,
                 bva_what_if_analysis,

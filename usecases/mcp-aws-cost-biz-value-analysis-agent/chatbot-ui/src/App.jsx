@@ -30,7 +30,8 @@ export default function App() {
         window.history.replaceState({}, document.title, "/");
       }).catch((err) => {
         console.error("Auth callback failed:", err);
-        setError("Authentication failed. Please try again.");
+        console.error("Error details:", err.response?.data || err.message);
+        setError(`Authentication failed: ${err.response?.data?.error || err.message}`);
         setLoading(false);
       });
     } else {
@@ -103,11 +104,16 @@ function AuthenticatedApp({ user, getCredentials }) {
   const [activeMessages, setActiveMessages] = useState([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   const fetchSessions = useCallback(async () => {
     try {
       const creds = await getCredentials();
-      const items = await awsService.listSessions(creds, userId);
+      const [items, admin] = await Promise.all([
+        awsService.listSessions(creds, userId),
+        awsService.isAdmin(creds, userId),
+      ]);
+      setIsAdmin(admin);
       const sorted = items.sort((a, b) =>
         (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || "")
       );
@@ -224,6 +230,7 @@ function AuthenticatedApp({ user, getCredentials }) {
               messages={activeMessages}
               onFirstMessage={handleFirstMessage}
               getCredentials={getCredentials}
+              isAdmin={isAdmin}
             />
           )}
         </div>

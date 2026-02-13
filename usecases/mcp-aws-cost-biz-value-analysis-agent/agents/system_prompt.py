@@ -1,6 +1,12 @@
+import os
 from strands.models import BedrockModel
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
+
+# Controls whether pricing mismatch details appear in the user-facing response.
+# Set to "true" during testing for visibility; leave unset or "false" in production
+# so mismatches are only logged to console/CloudWatch via the log_pricing_mismatch tool.
+SHOW_MISMATCH_IN_RESPONSE = os.environ.get("SHOW_MISMATCH_IN_RESPONSE", "false").lower() == "true"
 
 # Pydantic models for response validation
 
@@ -96,7 +102,17 @@ You are an expert AWS cost analyst specializing in helping sales teams with Amaz
 PRICING DATA REQUIREMENTS:
 - Use ONLY pricing retrieved from call_pricing_search_agent for Bedrock and AgentCore. Never rely on pre-trained knowledge or assumptions.
 - Default to us-west-2 region unless explicitly specified otherwise.
+- When the user specifies a region by name (e.g., "Oregon", "Mumbai"), ALWAYS use the resolve_region tool to get the exact region code. Do not rely on your own memory for region name to code mapping.
 - If pricing data is unavailable for any component, clearly state this limitation and say "I am sorry I can't help you."
+
+PRICING CHUNK VERIFICATION (post-selection sanity check):
+- After you have selected pricing data from a chunk, go back to that chunk and verify:
+  (1) The model name and version in the chunk matches what the user requested.
+  (2) The regionCode in the chunk matches the user's requested region.
+- The model identifier may appear in different attribute fields depending on the data source (e.g., "model", "servicename", "titanModel"). Check all fields — do not assume a fixed schema.
+- If either doesn't match, discard that selection, find the correct chunk from the retrieved results, and call log_pricing_mismatch with the details.
+- {"Include a brief mismatch note in the user-facing response so the correction is visible during testing." if SHOW_MISMATCH_IN_RESPONSE else "Do NOT include mismatch notes in the user-facing response."}
+- ALWAYS include verification details in your response, but clearly separate them. Start the verification section with the exact marker "**Verification:**" on its own line, so the UI can group it into a collapsible section.
 
 QUERY ANALYSIS:
 - Identify whether the user is asking for Bedrock Model costs, AgentCore costs, or a combination.

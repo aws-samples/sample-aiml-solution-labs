@@ -74,20 +74,46 @@ def handle_request(prompt: str) -> str:
     
     Args:
         prompt: User query about AWS costs or TCO analysis
+              (may be JSON with 'prompt' and optional 'model_id' fields)
     
     Returns:
         Analysis response
     """
     try:
-        agent = get_analyst()
+        import json as _json
         
-        # Ensure prompt is a string
+        # Parse payload — may be JSON with model_id or plain string
+        model_id = None
+        if isinstance(prompt, str):
+            try:
+                payload = _json.loads(prompt)
+                if isinstance(payload, dict) and "prompt" in payload:
+                    model_id = payload.get("model_id")
+                    prompt = payload["prompt"]
+            except (ValueError, _json.JSONDecodeError):
+                pass
+        
         if not isinstance(prompt, str):
             prompt = str(prompt)
         
-        response = invoke_with_retry(agent, prompt)
+        agent = get_analyst()
         
-        # AgentResult.__str__() extracts text content from the final message
+        # If admin specified a model, swap it for this request
+        if model_id:
+            agent._model = None  # Reset cached model
+            agent._tools = None  # Reset cached tools (they reference model)
+            original_model_id = agent.model_id
+            agent.model_id = model_id
+            try:
+                response = invoke_with_retry(agent, prompt)
+            finally:
+                # Restore default model for next request
+                agent.model_id = original_model_id
+                agent._model = None
+                agent._tools = None
+        else:
+            response = invoke_with_retry(agent, prompt)
+        
         return str(response)
     except Exception as e:
         import traceback

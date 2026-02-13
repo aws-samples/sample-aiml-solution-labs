@@ -5,7 +5,7 @@
  */
 import { CognitoIdentityClient, GetIdCommand, GetCredentialsForIdentityCommand } from "@aws-sdk/client-cognito-identity";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, PutCommand, QueryCommand, UpdateCommand, GetCommand } from "@aws-sdk/lib-dynamodb";
 import {
   BedrockAgentCoreClient,
   InvokeAgentRuntimeCommand,
@@ -18,6 +18,7 @@ import { cognitoConfig } from "./authConfig";
 
 const REGION = cognitoConfig.region;
 const TABLE_NAME = "tco-bva-chat-sessions";
+const ADMIN_TABLE_NAME = "tco-bva-admin-users";
 const AGENT_NAME = "aws_tco_biz_value_analyst";
 
 // Identity Pool ID — set during build via deploy.sh or .env
@@ -119,10 +120,10 @@ class AwsService {
   /**
    * Save a message to DynamoDB.
    */
-  async saveMessage(credentials, userId, sessionId, sessionTitle, role, content) {
+  async saveMessage(credentials, userId, sessionId, sessionTitle, role, content, modelId) {
     const ddb = this.getDdbClient(credentials);
     const now = getESTTimestamp();
-    const msg = { role, content, timestamp: now };
+    const msg = { role, content, timestamp: now, modelId: modelId || "us.anthropic.claude-sonnet-4-5-20250929-v1:0" };
 
     try {
       await ddb.send(new UpdateCommand({
@@ -179,12 +180,29 @@ class AwsService {
   }
 
   /**
+   * Check if a user is an admin.
+   */
+  async isAdmin(credentials, userId) {
+    const ddb = this.getDdbClient(credentials);
+    try {
+      const result = await ddb.send(new GetCommand({
+        TableName: ADMIN_TABLE_NAME,
+        Key: { userId },
+      }));
+      return !!result.Item;
+    } catch (err) {
+      console.error("Admin check failed:", err);
+      return false;
+    }
+  }
+
+  /**
    * Send a chat message — calls AgentCore directly from the browser.
    */
-  async chat(credentials, { prompt, sessionId, userId, sessionTitle }) {
+  async chat(credentials, { prompt, sessionId, userId, sessionTitle, modelId }) {
     // Save user message
     if (userId && sessionId) {
-      await this.saveMessage(credentials, userId, sessionId, sessionTitle, "user", prompt);
+      await this.saveMessage(credentials, userId, sessionId, sessionTitle, "user", prompt, modelId);
     }
 
     const runtimeArn = await this.getRuntimeArn(credentials);
@@ -207,10 +225,13 @@ class AwsService {
       }
     }
 
+    const payloadObj = { prompt: fullPrompt };
+    if (modelId) payloadObj.model_id = modelId;
+
     const command = new InvokeAgentRuntimeCommand({
       agentRuntimeArn: runtimeArn,
       runtimeSessionId: sessionId,
-      payload: JSON.stringify({ prompt: fullPrompt }),
+      payload: JSON.stringify(payloadObj),
     });
 
     const response = await client.send(command);
@@ -259,7 +280,7 @@ class AwsService {
 
     // Save assistant response
     if (userId && sessionId) {
-      await this.saveMessage(credentials, userId, sessionId, sessionTitle, "assistant", responseText);
+      await this.saveMessage(credentials, userId, sessionId, sessionTitle, "assistant", responseText, modelId);
     }
 
     return responseText;

@@ -9,7 +9,8 @@ import sys
 # Set environment variables
 os.environ["AWS_REGION"] = "us-west-2"
 os.environ["STRANDS_KNOWLEDGE_BASE_ID"] = "OAQDDJYZSK"
-os.environ["MODEL_ID"] = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+# Switch models via this env var (e.g., us.anthropic.claude-haiku-4-5-20251001-v1:0 for cheaper runs)
+os.environ["MODEL_ID"] = "us.anthropic.claude-sonnet-4-5-20250514-v1:0"
 
 from aws_tco_bva_analyst import AwsTcoBvaAnalyst
 

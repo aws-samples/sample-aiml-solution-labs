@@ -75,6 +75,24 @@ Resources:
           Value: aws-tco-bva
 
   # ═══════════════════════════════════════════════════════════
+  # DynamoDB Table for Admin Users
+  # ═══════════════════════════════════════════════════════════
+  AdminUsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tco-bva-admin-users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      Tags:
+        - Key: Application
+          Value: aws-tco-bva
+
+  # ═══════════════════════════════════════════════════════════
   # IAM Role for Knowledge Base
   # ═══════════════════════════════════════════════════════════
   KnowledgeBaseRole:
@@ -426,6 +444,10 @@ Resources:
                 Resource: !GetAtt ChatSessionsTable.Arn
               - Effect: Allow
                 Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt AdminUsersTable.Arn
+              - Effect: Allow
+                Action:
                   - bedrock-agentcore:InvokeAgentRuntime
                 Resource: '*'
               - Effect: Allow
@@ -497,6 +519,10 @@ Outputs:
   ChatSessionsTableName:
     Value: !Ref ChatSessionsTable
     Description: DynamoDB table for chat sessions
+
+  AdminUsersTableName:
+    Value: !Ref AdminUsersTable
+    Description: DynamoDB table for admin users
 
   FrontendBucketName:
     Value: !Ref FrontendBucket
