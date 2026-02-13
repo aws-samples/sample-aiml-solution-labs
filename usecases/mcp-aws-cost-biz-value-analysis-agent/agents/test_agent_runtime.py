@@ -36,13 +36,31 @@ def _get_runtime_config():
         if arn:
             return region, arn
 
-    # Fallback: derive from STS + environment
+    # Fallback: derive from STS + environment, auto-discover agent runtime
     region = os.environ.get("AWS_REGION", "us-west-2")
-    sts = boto3.client("sts", region_name=region)
-    account_id = sts.get_caller_identity()["Account"]
-    # Agent ID must be looked up or set via env var
-    agent_id = os.environ.get("AGENTCORE_AGENT_ID", f"{AGENT_NAME}-UNKNOWN")
-    arn = f"arn:aws:bedrock-agentcore:{region}:{account_id}:runtime/{agent_id}"
+    agent_id = os.environ.get("AGENTCORE_AGENT_ID", "")
+
+    if not agent_id:
+        # Auto-discover by listing runtimes and matching by name
+        try:
+            control = boto3.client("bedrock-agentcore-control", region_name=region)
+            resp = control.list_agent_runtimes()
+            for rt in resp.get("agentRuntimes", []):
+                if rt.get("agentRuntimeName") == AGENT_NAME and rt.get("status") == "READY":
+                    return region, rt["agentRuntimeArn"]
+        except Exception as e:
+            print(f"Warning: could not auto-discover agent runtime: {e}")
+
+    if not agent_id:
+        sts = boto3.client("sts", region_name=region)
+        account_id = sts.get_caller_identity()["Account"]
+        agent_id = f"{AGENT_NAME}-UNKNOWN"
+        arn = f"arn:aws:bedrock-agentcore:{region}:{account_id}:runtime/{agent_id}"
+    else:
+        sts = boto3.client("sts", region_name=region)
+        account_id = sts.get_caller_identity()["Account"]
+        arn = f"arn:aws:bedrock-agentcore:{region}:{account_id}:runtime/{agent_id}"
+
     return region, arn
 
 

@@ -1,0 +1,144 @@
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import {
+  Box,
+  Button,
+  SpaceBetween,
+  Textarea,
+  StatusIndicator,
+  Alert,
+} from "@cloudscape-design/components";
+import MessageContent from "./MessageContent";
+import awsService from "./awsService";
+
+function getETTimestamp() {
+  const d = new Date();
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false,
+  }).formatToParts(d);
+  const get = (type) => parts.find((p) => p.type === type).value;
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")}`;
+}
+
+export default function ChatPanel({ sessionId, userId, messages: initialMessages, onFirstMessage, getCredentials }) {
+  const [messages, setMessages] = useState(initialMessages || []);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const messagesEndRef = useRef(null);
+  const titleSentRef = useRef(false);
+
+  useEffect(() => {
+    setMessages(initialMessages || []);
+    titleSentRef.current = false;
+  }, [sessionId, initialMessages]);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
+  useEffect(() => { scrollToBottom(); }, [messages, loading, scrollToBottom]);
+
+  const sendMessage = async () => {
+    const prompt = input.trim();
+    if (!prompt || loading) return;
+
+    setInput("");
+    setError(null);
+    const ts = getETTimestamp();
+    setMessages((prev) => [...prev, { role: "user", content: prompt, timestamp: ts }]);
+    setLoading(true);
+
+    const isFirst = messages.length === 0 && !titleSentRef.current;
+    if (isFirst) {
+      titleSentRef.current = true;
+      if (onFirstMessage) onFirstMessage(prompt);
+    }
+
+    try {
+      const creds = await getCredentials();
+      const responseText = await awsService.chat(creds, {
+        prompt, sessionId, userId,
+        sessionTitle: isFirst ? prompt.slice(0, 80) : undefined,
+      });
+
+      setMessages((prev) => [...prev, { role: "assistant", content: responseText, timestamp: getETTimestamp() }]);
+    } catch (err) {
+      const msg = err.message || "Failed to invoke agent";
+      setError(msg);
+      setMessages((prev) => [...prev, { role: "error", content: msg }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.detail.key === "Enter" && !e.detail.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  };
+
+  return (
+    <div className="chat-container">
+      <div className="chat-messages">
+        {messages.length === 0 && (
+          <Box textAlign="center" padding={{ top: "xxxl" }}>
+            <SpaceBetween size="s">
+              <Box variant="h2" color="text-status-inactive">AWS TCO & Business Value Analyst</Box>
+              <Box variant="p" color="text-body-secondary">Ask me about AWS pricing, cost analysis, or business value assessments.</Box>
+              <Box variant="small" color="text-status-inactive">Powered by Amazon Bedrock AgentCore</Box>
+            </SpaceBetween>
+          </Box>
+        )}
+
+        {messages.map((msg, i) => (
+          <div key={i} className="chat-message-wrapper">
+            <div className={`chat-message ${msg.role}`}>
+              {msg.role === "assistant" ? <MessageContent content={msg.content} /> : msg.content}
+            </div>
+            {msg.timestamp && (
+              <div className={`chat-timestamp ${msg.role}`}>{msg.timestamp} ET</div>
+            )}
+          </div>
+        ))}
+
+        {loading && (
+          <div className="typing-indicator"><span /><span /><span /></div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      <div className="chat-input-area">
+        <SpaceBetween size="xs">
+          {error && (
+            <Alert type="error" dismissible onDismiss={() => setError(null)}>{error}</Alert>
+          )}
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <Textarea
+                value={input}
+                onChange={({ detail }) => setInput(detail.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask about AWS costs, pricing, or TCO analysis..."
+                rows={1}
+                disabled={loading}
+                autoFocus
+              />
+            </div>
+            <Button variant="primary" onClick={sendMessage} loading={loading} disabled={!input.trim()} iconName="send">
+              Send
+            </Button>
+          </div>
+          <Box variant="small" color="text-status-inactive" textAlign="center">
+            <StatusIndicator type="success">Connected</StatusIndicator>
+            &nbsp;·&nbsp;Session: {sessionId ? sessionId.slice(0, 8) + "..." : "—"}
+          </Box>
+        </SpaceBetween>
+      </div>
+    </div>
+  );
+}
