@@ -162,6 +162,11 @@ function AuthenticatedApp({ user, getCredentials }) {
         identity={{ href: "#", title: "AWS TCO & Business Value Analyst" }}
         utilities={[
           {
+            type: "button",
+            text: "Pre-Beta Release - AWS Internal Only",
+            disableTextCollapse: true,
+          },
+          {
             type: "menu-dropdown",
             text: user.email || user.username || "User",
             iconName: "user-profile",
