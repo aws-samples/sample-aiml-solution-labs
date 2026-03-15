@@ -3,3 +3,5 @@ strands-agents>=1.12.0
 strands-agents-tools>=0.2.11
 mcp
 boto3
+python-dotenv
+pandas

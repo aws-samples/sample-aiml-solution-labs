@@ -16,6 +16,7 @@ from pricing_search_assistant import call_pricing_search_agent
 from calculator_bva import bva_calculator, bva_what_if_analysis
 from calculator_agentcore import use_agentcore_calculator, agentcore_what_if_analysis
 from calculator_bedrock import use_bedrock_calculator, bedrock_what_if_analysis
+from calculator_capacity_planning import capacity_planning_calculator
 from system_prompt import TCO_ANALYST_PROMPT
 
 # =============================================================================
@@ -75,6 +76,8 @@ class AwsTcoBvaAnalyst:
             # Bedrock calculators
             use_bedrock_calculator,
             bedrock_what_if_analysis,
+            # Capacity planning
+            capacity_planning_calculator,
         ]
         
         # Add MCP tools if available
