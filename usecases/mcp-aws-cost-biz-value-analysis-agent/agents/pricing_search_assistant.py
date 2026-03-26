@@ -21,12 +21,20 @@ RETRIEVE_NUM_RESULTS = 15
 RETRIEVE_MIN_SCORE = 0.2
 
 # =============================================================================
-# BEDROCK CLIENT
+# BEDROCK CLIENT - Lazy initialization
 # =============================================================================
-bedrock_agent_runtime = boto3.client(
-    'bedrock-agent-runtime',
-    region_name=REGION
-)
+_bedrock_agent_runtime = None
+
+
+def get_bedrock_client():
+    """Get or create Bedrock agent runtime client (lazy initialization)."""
+    global _bedrock_agent_runtime
+    if _bedrock_agent_runtime is None:
+        _bedrock_agent_runtime = boto3.client(
+            'bedrock-agent-runtime',
+            region_name=REGION
+        )
+    return _bedrock_agent_runtime
 
 
 def filtered_retrieve(query: str, target_region: str = "us-east-1") -> List[Dict[str, Any]]:
@@ -41,6 +49,7 @@ def filtered_retrieve(query: str, target_region: str = "us-east-1") -> List[Dict
         List of retrieved documents with content and metadata
     """
     try:
+        bedrock_agent_runtime = get_bedrock_client()
         response = bedrock_agent_runtime.retrieve(
             knowledgeBaseId=STRANDS_KNOWLEDGE_BASE_ID,
             retrievalQuery={

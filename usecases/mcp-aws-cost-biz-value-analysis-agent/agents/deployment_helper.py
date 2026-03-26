@@ -29,11 +29,10 @@ import json
 # CONFIGURATION
 # =============================================================================
 AGENT_NAME = "aws_tco_biz_value_analyst"
-ENTRYPOINT = "aws_tco_bva_analyst_agentcore.py"
+ENTRYPOINT = "agent_entrypoint.py"
 REQUIREMENTS_FILE = "requirements.txt"
-DEFAULT_REGION = os.environ.get("AWS_REGION", "us-east-1")
-RUNTIME = "PYTHON_3_12"
-PROTOCOL = "MCP"
+DEFAULT_REGION = os.environ.get("AWS_REGION", "us-west-2")
+DEPLOYMENT_TYPE = "container"  # Use Docker-based deployment
 
 # Environment variables to pass to the agent
 STRANDS_KNOWLEDGE_BASE_ID = os.environ.get("STRANDS_KNOWLEDGE_BASE_ID", "")
@@ -64,8 +63,7 @@ def configure_agent(region: str):
         "--entrypoint", ENTRYPOINT,
         "--name", AGENT_NAME,
         "--region", region,
-        "--runtime", RUNTIME,
-        "--protocol", PROTOCOL,
+        "--deployment-type", DEPLOYMENT_TYPE,
         "--requirements-file", REQUIREMENTS_FILE,
         "--disable-memory",
         "--non-interactive"
@@ -79,12 +77,12 @@ def configure_agent(region: str):
 
 
 def launch_agent(region: str, local: bool = False):
-    """Launch the agent to AgentCore."""
+    """Deploy the agent to AgentCore."""
     print("=" * 60)
-    print("LAUNCHING AGENT TO AGENTCORE")
+    print("DEPLOYING AGENT TO AGENTCORE")
     print("=" * 60)
     
-    cmd = ["agentcore", "launch", "--agent", AGENT_NAME]
+    cmd = ["agentcore", "deploy", "--agent", AGENT_NAME]
     
     if local:
         cmd.append("--local")
@@ -98,7 +96,7 @@ def launch_agent(region: str, local: bool = False):
         print(f"  STRANDS_KNOWLEDGE_BASE_ID: {STRANDS_KNOWLEDGE_BASE_ID}")
     else:
         print("  ERROR: STRANDS_KNOWLEDGE_BASE_ID not set - pricing search may not work")
-        exit()
+        sys.exit(1)
     
     # Pass MODEL_ID if set
     if MODEL_ID:
@@ -106,7 +104,7 @@ def launch_agent(region: str, local: bool = False):
         print(f"  MODEL_ID: {MODEL_ID}")
     
     run_command(cmd)
-    print("\n✓ Agent launched successfully")
+    print("\n✓ Agent deployed successfully")
 
 
 def check_status():

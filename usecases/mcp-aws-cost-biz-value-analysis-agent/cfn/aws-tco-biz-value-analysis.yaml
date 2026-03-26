@@ -1,19 +1,41 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS TCO and Business Value Analysis - Bedrock Knowledge Base with OpenSearch Serverless
+Description: AWS TCO and Business Value Analysis - Full Stack (KB + DynamoDB + CloudFront + API)
 
 Parameters:
-  EmbeddingModelArn:
+  EmbeddingModelId:
     Type: String
-    Default: arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0
-    Description: ARN of the embedding model
+    Default: amazon.titan-embed-text-v2:0
+    Description: Foundation model ID for embeddings
 
   EmbeddingDimension:
     Type: Number
     Default: 1024
     Description: Dimension of embedding vectors (1024 for Titan v2)
 
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID (created externally)
+    Default: us-west-2_6AuG0cghr
+
+  CognitoClientId:
+    Type: String
+    Description: Cognito App Client ID (created externally)
+    Default: 7sueti9imhqmlrubqvj97lqvse
+
+  CognitoDomain:
+    Type: String
+    Description: Cognito domain prefix
+    Default: us-west-26aug0cghr
+
+  AgentRuntimeName:
+    Type: String
+    Default: aws_tco_biz_value_analyst
+    Description: Name of the AgentCore runtime
+
 Resources:
-  # S3 Bucket for Pricing Documents
+  # ═══════════════════════════════════════════════════════════
+  # S3 Bucket for Pricing Documents (Knowledge Base source)
+  # ═══════════════════════════════════════════════════════════
   PricingDocsBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -28,7 +50,51 @@ Resources:
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
 
+  # ═══════════════════════════════════════════════════════════
+  # DynamoDB Table for Chat Sessions
+  # ═══════════════════════════════════════════════════════════
+  ChatSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tco-bva-chat-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: sessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: sessionId
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Application
+          Value: aws-tco-bva
+
+  # ═══════════════════════════════════════════════════════════
+  # DynamoDB Table for Admin Users
+  # ═══════════════════════════════════════════════════════════
+  AdminUsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tco-bva-admin-users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      Tags:
+        - Key: Application
+          Value: aws-tco-bva
+
+  # ═══════════════════════════════════════════════════════════
   # IAM Role for Knowledge Base
+  # ═══════════════════════════════════════════════════════════
   KnowledgeBaseRole:
     Type: AWS::IAM::Role
     Properties:
@@ -59,14 +125,14 @@ Resources:
                 Action:
                   - bedrock:InvokeModel
                 Resource:
-                  - !Ref EmbeddingModelArn
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
               - Effect: Allow
                 Action:
                   - aoss:APIAccessAll
                 Resource:
                   - !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
 
-  # Lambda Role for Index Wait Function (created first for data access policy)
+  # Lambda Role for Index Wait Function
   IndexWaitLambdaRole:
     Type: AWS::IAM::Role
     Properties:
@@ -89,7 +155,9 @@ Resources:
                   - aoss:APIAccessAll
                 Resource: !Sub 'arn:aws:aoss:${AWS::Region}:${AWS::AccountId}:collection/*'
 
-  # OpenSearch Serverless Encryption Policy
+  # ═══════════════════════════════════════════════════════════
+  # OpenSearch Serverless (Vector Store)
+  # ═══════════════════════════════════════════════════════════
   OpenSearchEncryptionPolicy:
     Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
@@ -101,7 +169,6 @@ Resources:
           "AWSOwnedKey": true
         }
 
-  # OpenSearch Serverless Network Policy
   OpenSearchNetworkPolicy:
     Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
@@ -110,7 +177,6 @@ Resources:
       Policy: |
         [{"Rules": [{"ResourceType": "collection", "Resource": ["collection/pricing-kb-collection"]}, {"ResourceType": "dashboard", "Resource": ["collection/pricing-kb-collection"]}], "AllowFromPublic": true}]
 
-  # OpenSearch Serverless Data Access Policy - includes Lambda role
   OpenSearchDataAccessPolicy:
     Type: AWS::OpenSearchServerless::AccessPolicy
     Properties:
@@ -119,7 +185,6 @@ Resources:
       Policy: !Sub |
         [{"Rules": [{"ResourceType": "collection", "Resource": ["collection/pricing-kb-collection"], "Permission": ["aoss:CreateCollectionItems", "aoss:DeleteCollectionItems", "aoss:UpdateCollectionItems", "aoss:DescribeCollectionItems"]}, {"ResourceType": "index", "Resource": ["index/pricing-kb-collection/*"], "Permission": ["aoss:CreateIndex", "aoss:DeleteIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"]}], "Principal": ["arn:aws:iam::${AWS::AccountId}:root", "${KnowledgeBaseRole.Arn}", "${IndexWaitLambdaRole.Arn}"]}]
 
-  # OpenSearch Serverless Collection
   OpenSearchCollection:
     Type: AWS::OpenSearchServerless::Collection
     DependsOn:
@@ -131,7 +196,6 @@ Resources:
       Type: VECTORSEARCH
       Description: Vector store for AWS pricing knowledge base
 
-  # OpenSearch Serverless Index
   OpenSearchIndex:
     Type: AWS::OpenSearchServerless::Index
     Properties:
@@ -159,7 +223,9 @@ Resources:
             Type: text
             Index: false
 
-  # Lambda Function to Wait for Index
+  # ═══════════════════════════════════════════════════════════
+  # Lambda + Custom Resource to Wait for Index
+  # ═══════════════════════════════════════════════════════════
   IndexWaitFunction:
     Type: AWS::Lambda::Function
     DependsOn: OpenSearchDataAccessPolicy
@@ -173,6 +239,7 @@ Resources:
           import json
           import time
           import urllib.request
+          import urllib.error
           import boto3
           from botocore.auth import SigV4Auth
           from botocore.awsrequest import AWSRequest
@@ -209,7 +276,6 @@ Resources:
               session = boto3.Session()
               credentials = session.get_credentials()
               
-              # Wait for index - up to 5 minutes
               max_attempts = 30
               for attempt in range(max_attempts):
                   try:
@@ -238,7 +304,6 @@ Resources:
               
               send_response(event, context, 'FAILED', reason=f'Index {index_name} not ready after {max_attempts} attempts')
 
-  # Custom Resource to Wait for Index
   WaitForIndex:
     Type: Custom::WaitForIndex
     DependsOn: OpenSearchIndex
@@ -248,7 +313,9 @@ Resources:
       IndexName: pricing-docs-index
       Region: !Ref AWS::Region
 
+  # ═══════════════════════════════════════════════════════════
   # Bedrock Knowledge Base
+  # ═══════════════════════════════════════════════════════════
   PricingKnowledgeBase:
     Type: AWS::Bedrock::KnowledgeBase
     DependsOn: WaitForIndex
@@ -259,7 +326,7 @@ Resources:
       KnowledgeBaseConfiguration:
         Type: VECTOR
         VectorKnowledgeBaseConfiguration:
-          EmbeddingModelArn: !Ref EmbeddingModelArn
+          EmbeddingModelArn: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}'
       StorageConfiguration:
         Type: OPENSEARCH_SERVERLESS
         OpensearchServerlessConfiguration:
@@ -270,7 +337,6 @@ Resources:
             TextField: text
             MetadataField: metadata
 
-  # Knowledge Base Data Source
   PricingDataSource:
     Type: AWS::Bedrock::DataSource
     Properties:
@@ -285,15 +351,195 @@ Resources:
         ChunkingConfiguration:
           ChunkingStrategy: NONE
 
+  # ═══════════════════════════════════════════════════════════
+  # S3 Bucket for Frontend (React build)
+  # ═══════════════════════════════════════════════════════════
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${AWS::Region}-tco-bva-frontend'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ═══════════════════════════════════════════════════════════
+  # CloudFront Origin Access Control
+  # ═══════════════════════════════════════════════════════════
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ═══════════════════════════════════════════════════════════
+  # Cognito Identity Pool (for browser AWS credentials)
+  # ═══════════════════════════════════════════════════════════
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub '${AWS::StackName}-identity-pool'
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref CognitoClientId
+          ProviderName: !Sub 'cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}'
+
+  CognitoIdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+
+  CognitoAuthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-cognito-auth-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                cognito-identity.amazonaws.com:aud: !Ref CognitoIdentityPool
+              ForAnyValue:StringLike:
+                cognito-identity.amazonaws.com:amr: authenticated
+      Policies:
+        - PolicyName: CognitoAuthPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt ChatSessionsTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt AdminUsersTable.Arn
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:InvokeAgentRuntime
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:ListAgentRuntimes
+                  - bedrock-agentcore:GetAgentRuntime
+                Resource: '*'
+
+  # ═══════════════════════════════════════════════════════════
+  # CloudFront Distribution
+  # ═══════════════════════════════════════════════════════════
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Comment: !Sub '${AWS::StackName} - TCO BVA Chatbot'
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !Ref CloudFrontOAC
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+        PriceClass: PriceClass_100
+        HttpVersion: http2and3
+
 Outputs:
   PricingDocsBucketName:
     Value: !Ref PricingDocsBucket
+    Description: S3 bucket for pricing documents
 
   KnowledgeBaseId:
     Value: !Ref PricingKnowledgeBase
+    Description: Bedrock Knowledge Base ID
 
   DataSourceId:
     Value: !GetAtt PricingDataSource.DataSourceId
+    Description: Knowledge Base Data Source ID
 
   OpenSearchCollectionEndpoint:
     Value: !GetAtt OpenSearchCollection.CollectionEndpoint
+    Description: OpenSearch Serverless collection endpoint
+
+  ChatSessionsTableName:
+    Value: !Ref ChatSessionsTable
+    Description: DynamoDB table for chat sessions
+
+  AdminUsersTableName:
+    Value: !Ref AdminUsersTable
+    Description: DynamoDB table for admin users
+
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+    Description: S3 bucket for frontend static files
+
+  CloudFrontDomainName:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Description: CloudFront distribution domain name
+
+  CloudFrontDistributionId:
+    Value: !Ref CloudFrontDistribution
+    Description: CloudFront distribution ID
+
+  CloudFrontURL:
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Description: Full CloudFront URL for the application
+
+  IdentityPoolId:
+    Value: !Ref CognitoIdentityPool
+    Description: Cognito Identity Pool ID for browser AWS credentials
