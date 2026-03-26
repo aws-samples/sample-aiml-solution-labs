@@ -1,0 +1,5 @@
+__pycache__
+.bedrock_agentcore
+.bedrock_agentcore.yaml
+.DS_Store
+.env

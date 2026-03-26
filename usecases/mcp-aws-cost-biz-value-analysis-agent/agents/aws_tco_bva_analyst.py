@@ -96,7 +96,7 @@ class AwsTcoBvaAnalyst:
             bedrock_what_if_analysis,
             # Capacity planning
             capacity_planning_calculator,
-            # Bedrock quota lookup (sub-agent)
+            # Bedrock quota lookup
             call_bedrock_quota_agent,
         ]
         
@@ -107,15 +107,8 @@ class AwsTcoBvaAnalyst:
         return Agent(
             model=model,
             system_prompt=TCO_ANALYST_PROMPT,
-            tools=self._get_tools(mcp_tools),
-            messages=messages or [],
-            hooks=[self._tool_throttle],
+            tools=tools,
         )
-        if interactive:
-            pass  # Use default PrintingCallbackHandler
-        else:
-            kwargs["callback_handler"] = self._logging_callback
-        return Agent(**kwargs)
     
     @staticmethod
     def _compact_messages(messages: list, keep_last_tool_pairs: int = 3) -> list:
@@ -237,7 +230,7 @@ class AwsTcoBvaAnalyst:
             mcp_tools = self._mcp_client.list_tools_sync()
             print(f"Loaded {len(mcp_tools)} tools from AWS Knowledge MCP server\n")
             self._mcp_tools = mcp_tools
-            self._agent = self._create_agent(mcp_tools, interactive=True)
+            self._agent = self._create_agent(mcp_tools)
             
             while True:
                 user_input = input("You: ").strip()

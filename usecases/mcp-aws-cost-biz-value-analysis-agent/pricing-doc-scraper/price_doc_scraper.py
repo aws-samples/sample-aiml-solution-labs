@@ -107,8 +107,8 @@ def save_product_files(
             'global'
         )
         
-        # Filter by region
-        if region_code not in regions_filter and region_code != 'global':
+        # Filter by region (skip if regions_filter is None = all regions)
+        if regions_filter is not None and region_code not in regions_filter and region_code != 'global':
             continue
         
         region_code = sanitize_filename(region_code)
@@ -193,11 +193,11 @@ def get_pricing_documents(
     pricing_documents = []
     total_files = 0
     
-    # Use default regions if not specified
+    # Use default regions if not specified (None = all regions)
     if regions_filter is None:
-        regions_filter = DEFAULT_REGIONS
-    
-    logger.info(f"Filtering to regions: {regions_filter}")
+        logger.info("No region filter — including ALL regions")
+    else:
+        logger.info(f"Filtering to regions: {regions_filter}")
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -281,8 +281,12 @@ def main():
         return
     
     # Fetch pricing documents and save files
+    regions = args.region
+    if args.all_regions:
+        regions = None  # None means no region filtering
     documents = get_pricing_documents(
         services_filter=args.service,
+        regions_filter=regions,
         output_dir=args.output
     )
     
