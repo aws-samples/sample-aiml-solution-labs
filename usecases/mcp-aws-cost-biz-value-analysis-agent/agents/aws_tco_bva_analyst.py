@@ -17,6 +17,7 @@ from calculator_bva import bva_calculator, bva_what_if_analysis
 from calculator_agentcore import use_agentcore_calculator, agentcore_what_if_analysis
 from calculator_bedrock import use_bedrock_calculator, bedrock_what_if_analysis
 from calculator_capacity_planning import capacity_planning_calculator
+from search_bedrock_quota import call_bedrock_quota_agent
 from system_prompt import TCO_ANALYST_PROMPT
 
 # =============================================================================
@@ -78,6 +79,8 @@ class AwsTcoBvaAnalyst:
             bedrock_what_if_analysis,
             # Capacity planning
             capacity_planning_calculator,
+            # Bedrock quota lookup (sub-agent)
+            call_bedrock_quota_agent,
         ]
         
         # Add MCP tools if available
@@ -125,6 +128,7 @@ class AwsTcoBvaAnalyst:
         print("  - BVA calculator (ROI, cost savings, revenue impact)")
         print("  - Bedrock cost calculator with what-if analysis")
         print("  - AgentCore cost calculator with what-if analysis")
+        print("  - Bedrock quota lookup (RPM/TPM limits)")
         print("\nType 'quit' to exit\n")
         
         # Create MCP client for interactive session

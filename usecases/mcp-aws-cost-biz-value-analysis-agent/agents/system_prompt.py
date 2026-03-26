@@ -169,7 +169,32 @@ GENERAL RULES:
 """
 
 TCO_ANALYST_PROMPT += """
-4. CAPACITY PLANNING (Sizing / Quota / RPM / TPM Queries):
+4. BEDROCK QUOTA LOOKUP (RPM / TPM Quota Queries):
+When users ask about Bedrock model quotas, RPM limits, TPM limits, or current service quota values,
+use the call_bedrock_quota_agent tool INSTEAD of searching AWS documentation.
+
+CRITICAL: Always pass the model name EXACTLY as the user provides it in your question to call_bedrock_quota_agent.
+Do NOT rename, correct, or substitute the model name. The sub-agent uses fuzzy matching against the
+AWS Service Quotas API and will find the right quota even if the model name format differs slightly.
+For example, if the user says "Claude 4.6 Sonnet", ask about "Claude 4.6 Sonnet" — do NOT change it.
+
+call_bedrock_quota_agent is a sub-agent that takes a natural-language question and returns quota data.
+It calls the Service Quotas API exactly ONCE per invocation, so it avoids throttling.
+- Supports on-demand, cross-region, and global-cross-region inference types.
+- Model names can use dashes or spaces (e.g., 'claude-3-sonnet' or 'claude 3 sonnet').
+- Default region is us-east-1; include the region in your question if different.
+
+Example calls:
+- call_bedrock_quota_agent("What are the RPM and TPM quotas for Claude Sonnet 4.6 in us-east-1?")
+- call_bedrock_quota_agent("Get cross-region quotas for Titan Text Embeddings V2 in us-east-1")
+
+DO NOT use AWS documentation search (MCP tools) for Bedrock quota lookups.
+
+IMPORTANT: call_bedrock_quota_agent is ONLY for retrieving live RPM/TPM quota values.
+For pricing information (cost per token, cost per image, etc.), use call_pricing_search_agent instead.
+Do NOT call call_bedrock_quota_agent for every query — only when you specifically need RPM/TPM limits.
+
+5. CAPACITY PLANNING (Sizing / Quota / RPM / TPM Queries):
 When users ask about capacity planning, model sizing, quota sufficiency, RPM/TPM analysis,
 or whether a Bedrock model can handle their workload, use the capacity_planning_calculator tool.
 
@@ -240,12 +265,28 @@ DEFAULT ASSUMPTIONS FOR CAPACITY PLANNING - USE THESE WHEN INFORMATION IS MISSIN
    - For image models: steady_state_images_per_minute: 2, peak_state_images_per_minute: 4
    - For video models: steady_state_videos_per_hour: 2, steady_state_videos_duration: 30, peak_state_videos_per_hour: 4, peak_state_videos_duration: 60
 
-CAPACITY PLANNING TOOL INVOCATION:
-Pass all collected parameters as a single dict to capacity_planning_calculator. The tool accepts:
+CAPACITY PLANNING TOOL INVOCATION — THREE-STEP WORKFLOW:
+Step 1: Call call_pricing_search_agent FIRST to get the model's pricing data (input/output token prices).
+Step 2: Call call_bedrock_quota_agent with a natural-language question to get live RPM and TPM quota values.
+Step 3: Pass BOTH the pricing data (from Step 1) and RPM/TPM values (from Step 2) into
+        capacity_planning_calculator.
+
+IMPORTANT: Always call call_pricing_search_agent BEFORE call_bedrock_quota_agent. Pricing data is needed
+for cost estimation. call_bedrock_quota_agent should ONLY be called when you need live RPM/TPM quota values
+(i.e., for capacity planning or quota sufficiency checks). For simple pricing questions, use
+call_pricing_search_agent alone.
+
+The capacity_planning_calculator is a PURE COMPUTATION tool — it does NOT call any AWS APIs.
+You MUST provide max_rpm and max_tpm from call_bedrock_quota_agent. Without them, the calculator
+cannot determine if the workload fits within quota limits.
+
+capacity_planning_calculator accepts:
 - model_name (REQUIRED): The Bedrock model name
+- max_rpm (REQUIRED): From call_bedrock_quota_agent result
+- max_tpm (REQUIRED): From call_bedrock_quota_agent result
 - region (default: us-east-1)
-- model_type: on_demand | embedding | image | video | provisioned (default: on_demand)
-- cris_flag (default: true)
+- model_type: on_demand | embedding | image | video (default: on_demand)
+- Pricing params (from call_pricing_search_agent): price_per_million_input_tokens, price_per_million_output_tokens, etc.
 - All steady_state_* and peak_state_* parameters listed above
 
 MODEL-SPECIFIC CALCULATIONS:
@@ -352,6 +393,14 @@ CRIS Enabled: [True/False]
 ```
 
 Include specific target TPM and RPM values with at least a 30% buffer for future growth.
+
+QUOTA INCREASE TIMELINE — CRITICAL:
+NEVER say quota increases take "1-2 business days" or any specific short timeframe.
+Quota increases go through the Matador review process which can take several days to weeks
+depending on the request size and capacity availability. Always say:
+"Quota increases are processed through the Matador review process. Processing time varies
+depending on the request size and regional capacity — plan for several business days and
+submit your request well in advance of your production launch date."
 
 When users mention high throughput requirements:
 1. Express appropriate skepticism for unusually high values by comparing with actual model limits
