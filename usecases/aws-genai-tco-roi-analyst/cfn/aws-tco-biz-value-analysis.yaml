@@ -1,0 +1,831 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS TCO and Business Value Analysis - Full Stack (KB + DynamoDB + CloudFront + API)
+
+Parameters:
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: Foundation model ID for embeddings
+
+  CognitoUserPoolId:
+    Type: String
+    Description: Cognito User Pool ID (created externally)
+    Default: REPLACE_ME
+
+  CognitoClientId:
+    Type: String
+    Description: Cognito App Client ID (created externally)
+    Default: REPLACE_ME
+
+  CognitoDomain:
+    Type: String
+    Description: Cognito domain prefix
+    Default: REPLACE_ME
+
+  AgentRuntimeName:
+    Type: String
+    Default: aws_tco_biz_value_analyst
+    Description: Name of the AgentCore runtime
+
+Resources:
+  # ═══════════════════════════════════════════════════════════
+  # S3 Bucket for Pricing Documents (Knowledge Base source)
+  # ═══════════════════════════════════════════════════════════
+  PricingDocsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${AWS::Region}-aws-pricing-docs'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # ═══════════════════════════════════════════════════════════
+  # DynamoDB Table for Chat Sessions
+  # ═══════════════════════════════════════════════════════════
+  ChatSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tco-bva-chat-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: sessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: sessionId
+          KeyType: RANGE
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Application
+          Value: aws-tco-bva
+
+  # ═══════════════════════════════════════════════════════════
+  # DynamoDB Table for Admin Users
+  # ═══════════════════════════════════════════════════════════
+  AdminUsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: tco-bva-admin-users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      Tags:
+        - Key: Application
+          Value: aws-tco-bva
+
+  # ═══════════════════════════════════════════════════════════
+  # IAM Role for Knowledge Base (Bedrock service)
+  # ═══════════════════════════════════════════════════════════
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'BedrockKB-${AWS::StackName}-${AWS::Region}-Role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: KnowledgeBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt PricingDocsBucket.Arn
+                  - !Sub '${PricingDocsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:Rerank
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                Resource: '*'
+
+  # ═══════════════════════════════════════════════════════════
+  # OpenSearch Serverless Collection for Knowledge Base
+  # ═══════════════════════════════════════════════════════════
+  AOSSEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: tco-bva-enc
+      Type: encryption
+      Policy: !Sub |
+        {
+          "Rules": [{"ResourceType": "collection", "Resource": ["collection/tco-bva-kb"]}],
+          "AWSOwnedKey": true
+        }
+
+  AOSSNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: tco-bva-net
+      Type: network
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {"ResourceType": "collection", "Resource": ["collection/tco-bva-kb"]},
+              {"ResourceType": "dashboard", "Resource": ["collection/tco-bva-kb"]}
+            ],
+            "AllowFromPublic": true
+          }
+        ]
+
+  AOSSDataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: tco-bva-access
+      Type: data
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {"ResourceType": "collection", "Resource": ["collection/tco-bva-kb"], "Permission": ["aoss:*"]},
+              {"ResourceType": "index", "Resource": ["index/tco-bva-kb/*"], "Permission": ["aoss:*"]}
+            ],
+            "Principal": [
+              "arn:aws:iam::${AWS::AccountId}:root",
+              "${KnowledgeBaseRole.Arn}",
+              "${KBSetupRole.Arn}"
+            ]
+          }
+        ]
+
+  AOSSCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - AOSSEncryptionPolicy
+      - AOSSNetworkPolicy
+      - AOSSDataAccessPolicy
+    Properties:
+      Name: !Sub 'tco-bva-kb'
+      Type: VECTORSEARCH
+      Description: Vector store for TCO BVA Knowledge Base
+
+  AOSSIndex:
+    Type: AWS::OpenSearchServerless::Index
+    Properties:
+      CollectionEndpoint: !GetAtt AOSSCollection.CollectionEndpoint
+      IndexName: bedrock-kb-index
+      Settings:
+        Index:
+          Knn: true
+      Mappings:
+        Properties:
+          bedrock-knowledge-base-default-vector:
+            Type: knn_vector
+            Dimension: 1024
+            Method:
+              Engine: faiss
+              Name: hnsw
+              SpaceType: l2
+              Parameters:
+                EfConstruction: 512
+                M: 16
+          AMAZON_BEDROCK_TEXT_CHUNK:
+            Type: text
+            Index: true
+          AMAZON_BEDROCK_METADATA:
+            Type: text
+            Index: false
+
+  # ═══════════════════════════════════════════════════════════
+  # IAM Role for KB Setup Lambda
+  # ═══════════════════════════════════════════════════════════
+  KBSetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'tco-bva-kb-setup-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: KBSetupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                  - aoss:BatchGetCollection
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:CreateKnowledgeBase
+                  - bedrock:CreateDataSource
+                  - bedrock:GetKnowledgeBase
+                  - bedrock:StartIngestionJob
+                  - bedrock:ListKnowledgeBases
+                  - bedrock:ListDataSources
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt KnowledgeBaseRole.Arn
+
+  # ═══════════════════════════════════════════════════════════
+  # Lambda: Create KB with OpenSearch Serverless (Custom Resource)
+  # ═══════════════════════════════════════════════════════════
+  KBSetupFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'tco-bva-kb-setup'
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt KBSetupRole.Arn
+      Timeout: 600
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import time
+
+          def handler(event, context):
+              data = {}
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  props = event['ResourceProperties']
+                  data_bucket_name = props['DataBucketName']
+                  role_arn = props['RoleArn']
+                  embedding_model = props['EmbeddingModelId']
+                  collection_arn = props['CollectionArn']
+                  region = context.invoked_function_arn.split(':')[3]
+
+                  bedrock = boto3.client('bedrock-agent')
+                  index_name = 'bedrock-kb-index'
+                  vector_field = 'bedrock-knowledge-base-default-vector'
+                  text_field = 'AMAZON_BEDROCK_TEXT_CHUNK'
+                  metadata_field = 'AMAZON_BEDROCK_METADATA'
+
+                  print("Creating knowledge base...")
+                  kb_name = "tco-bva-kb"
+
+                  # Check if KB already exists (idempotent)
+                  kb_id = None
+                  try:
+                      list_resp = bedrock.list_knowledge_bases(maxResults=100)
+                      for kb in list_resp.get('knowledgeBaseSummaries', []):
+                          if kb['name'] == kb_name:
+                              kb_id = kb['knowledgeBaseId']
+                              print(f"Found existing KB: {kb_id}")
+                              break
+                  except Exception:
+                      pass
+
+                  if not kb_id:
+                      kb_resp = bedrock.create_knowledge_base(
+                          name=kb_name,
+                          roleArn=role_arn,
+                          knowledgeBaseConfiguration={
+                              'type': 'VECTOR',
+                              'vectorKnowledgeBaseConfiguration': {
+                                  'embeddingModelArn': f'arn:aws:bedrock:{region}::foundation-model/{embedding_model}',
+                                  'embeddingModelConfiguration': {
+                                      'bedrockEmbeddingModelConfiguration': {
+                                          'dimensions': 1024,
+                                          'embeddingDataType': 'FLOAT32'
+                                      }
+                                  }
+                              }
+                          },
+                          storageConfiguration={
+                              'type': 'OPENSEARCH_SERVERLESS',
+                              'opensearchServerlessConfiguration': {
+                                  'collectionArn': collection_arn,
+                                  'vectorIndexName': index_name,
+                                  'fieldMapping': {
+                                      'vectorField': vector_field,
+                                      'textField': text_field,
+                                      'metadataField': metadata_field
+                                  }
+                              }
+                          }
+                      )
+                      kb_id = kb_resp['knowledgeBase']['knowledgeBaseId']
+
+                  for _ in range(30):
+                      status = bedrock.get_knowledge_base(knowledgeBaseId=kb_id)['knowledgeBase']['status']
+                      if status == 'ACTIVE':
+                          break
+                      time.sleep(10)
+
+                  print("Creating data source...")
+                  ds_name = "tco-bva-datasource"
+
+                  # Check if data source already exists (idempotent)
+                  ds_id = None
+                  try:
+                      ds_list = bedrock.list_data_sources(knowledgeBaseId=kb_id, maxResults=100)
+                      for ds in ds_list.get('dataSourceSummaries', []):
+                          if ds['name'] == ds_name:
+                              ds_id = ds['dataSourceId']
+                              print(f"Found existing data source: {ds_id}")
+                              break
+                  except Exception:
+                      pass
+
+                  if not ds_id:
+                      ds_resp = bedrock.create_data_source(
+                          knowledgeBaseId=kb_id,
+                          name=ds_name,
+                          dataSourceConfiguration={
+                              'type': 'S3',
+                              's3Configuration': {
+                                  'bucketArn': f"arn:aws:s3:::{data_bucket_name}"
+                              }
+                          },
+                          vectorIngestionConfiguration={
+                              'chunkingConfiguration': {'chunkingStrategy': 'NONE'}
+                          }
+                      )
+                      ds_id = ds_resp['dataSource']['dataSourceId']
+
+                  data = {
+                      'KnowledgeBaseId': kb_id,
+                      'DataSourceId': ds_id,
+                      'CollectionArn': collection_arn
+                  }
+                  print(f"Success: {json.dumps(data)}")
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, data)
+
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  import traceback
+                  traceback.print_exc()
+                  cfnresponse.send(event, context, cfnresponse.FAILED, data)
+
+  KBSetup:
+    Type: AWS::CloudFormation::CustomResource
+    DependsOn: AOSSIndex
+    Properties:
+      ServiceToken: !GetAtt KBSetupFunction.Arn
+      Version: "6"
+      DataBucketName: !Ref PricingDocsBucket
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      EmbeddingModelId: !Ref EmbeddingModelId
+      CollectionArn: !GetAtt AOSSCollection.Arn
+
+  # ═══════════════════════════════════════════════════════════
+  # S3 Bucket for Frontend (React build)
+  # ═══════════════════════════════════════════════════════════
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${AWS::Region}-tco-bva-frontend'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ═══════════════════════════════════════════════════════════
+  # CloudFront Origin Access Control
+  # ═══════════════════════════════════════════════════════════
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${AWS::StackName}-oac'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  # ═══════════════════════════════════════════════════════════
+  # Cognito Identity Pool (for browser AWS credentials)
+  # ═══════════════════════════════════════════════════════════
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub '${AWS::StackName}-identity-pool'
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref CognitoClientId
+          ProviderName: !Sub 'cognito-idp.${AWS::Region}.amazonaws.com/${CognitoUserPoolId}'
+
+  CognitoIdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        authenticated: !GetAtt CognitoAuthenticatedRole.Arn
+
+  CognitoAuthenticatedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-cognito-auth-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                cognito-identity.amazonaws.com:aud: !Ref CognitoIdentityPool
+              ForAnyValue:StringLike:
+                cognito-identity.amazonaws.com:amr: authenticated
+      Policies:
+        - PolicyName: CognitoAuthPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt ChatSessionsTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: !GetAtt AdminUsersTable.Arn
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:InvokeAgentRuntime
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock-agentcore:ListAgentRuntimes
+                  - bedrock-agentcore:GetAgentRuntime
+                Resource: '*'
+
+  # ═══════════════════════════════════════════════════════════
+  # CloudFront Distribution
+  # ═══════════════════════════════════════════════════════════
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Comment: !Sub '${AWS::StackName} - TCO BVA Chatbot'
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !Ref CloudFrontOAC
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+        PriceClass: PriceClass_100
+        HttpVersion: http2and3
+
+  # ═══════════════════════════════════════════════════════════
+  # IAM Role for Scraper CodeBuild Project
+  # ═══════════════════════════════════════════════════════════
+  ScraperCodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ScraperCodeBuildPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetObject
+                Resource:
+                  - !GetAtt PricingDocsBucket.Arn
+                  - !Sub '${PricingDocsBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - bedrock:StartIngestionJob
+                Resource:
+                  - !Sub 'arn:aws:bedrock:*:${AWS::AccountId}:knowledge-base/*'
+              - Effect: Allow
+                Action:
+                  - servicequotas:ListServiceQuotas
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeRegions
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+
+  # ═══════════════════════════════════════════════════════════
+  # CodeBuild Project for Scraping (Pricing + Quota + KB Sync)
+  # ═══════════════════════════════════════════════════════════
+  ScraperCodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${AWS::StackName}-scraper'
+      Description: Weekly scraper for Bedrock pricing and quota data
+      ServiceRole: !GetAtt ScraperCodeBuildRole.Arn
+      TimeoutInMinutes: 60
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: S3_BUCKET_NAME
+            Value: !Ref PricingDocsBucket
+          - Name: KNOWLEDGE_BASE_ID
+            Value: !GetAtt KBSetup.KnowledgeBaseId
+          - Name: DATA_SOURCE_ID
+            Value: !GetAtt KBSetup.DataSourceId
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.12
+              commands:
+                - pip install requests boto3
+            build:
+              commands:
+                - echo "=== Running Pricing Scraper ==="
+                - |
+                  python3 -c "
+                  import requests, json, os, re, boto3
+
+                  BASE_URL = 'https://pricing.us-east-1.amazonaws.com'
+                  INDEX_URL = BASE_URL + '/offers/v1.0/aws/index.json'
+                  SERVICES = ['AmazonBedrock', 'AmazonBedrockAgentCore', 'AmazonBedrockService', 'AmazonBedrockFoundationModels']
+                  S3_BUCKET = os.environ['S3_BUCKET_NAME']
+                  s3 = boto3.client('s3')
+
+                  def sanitize(name):
+                      s = re.sub(r'[<>:\"/\\\\|?*]', '_', name).strip(' .')
+                      return (s[:200]) if s else 'unknown'
+
+                  index = requests.get(INDEX_URL, timeout=30).json()
+                  offers = index.get('offers', {})
+                  total = 0
+
+                  for svc in SERVICES:
+                      if svc not in offers:
+                          print(f'WARN: {svc} not in index')
+                          continue
+                      url = BASE_URL + offers[svc]['currentVersionUrl']
+                      print(f'Fetching {svc}...')
+                      data = requests.get(url, timeout=300).json()
+                      products = data.get('products', {})
+                      terms = data.get('terms', {})
+
+                      for sku, product in products.items():
+                          attrs = product.get('attributes', {})
+                          region = attrs.get('regionCode', attrs.get('location', 'global'))
+                          pname = attrs.get('usagetype', attrs.get('operation', sku))
+                          lines = [f'SKU: {sku}', f'Service: {svc}', f'Region: {region}', '', '=== ATTRIBUTES ===']
+                          for k, v in sorted(attrs.items()):
+                              lines.append(f'{k}: {v}')
+                          od = terms.get('OnDemand', {}).get(sku, {})
+                          if od:
+                              lines.append('')
+                              lines.append('=== ON-DEMAND PRICING ===')
+                              for tc, td in od.items():
+                                  for dc, dd in td.get('priceDimensions', {}).items():
+                                      lines.append(f'  {dd.get(\"unit\",\"\")}: \${dd.get(\"pricePerUnit\",{}).get(\"USD\",\"N/A\")} - {dd.get(\"description\",\"\")}')
+                          content = '\n'.join(lines)
+                          key = f'pricing_data/{svc}/{sanitize(region)}/{sanitize(pname)}_{sku[:8]}.txt'
+                          s3.put_object(Bucket=S3_BUCKET, Key=key, Body=content.encode(), ContentType='text/plain')
+                          total += 1
+
+                      print(f'  {svc}: done')
+                  print(f'Pricing scraper: {total} files uploaded')
+                  "
+                - echo "=== Running Quota Scraper ==="
+                - |
+                  python3 -c "
+                  import boto3, json, os, re, time
+
+                  S3_BUCKET = os.environ['S3_BUCKET_NAME']
+                  s3 = boto3.client('s3')
+                  ec2 = boto3.client('ec2')
+
+                  def sanitize(name):
+                      s = re.sub(r'[^\w\s\-.]', '', name)
+                      s = re.sub(r'\s+', '_', s.strip())
+                      return s[:200]
+
+                  regions = sorted(r['RegionName'] for r in ec2.describe_regions(AllRegions=False)['Regions'])
+                  print(f'Discovered {len(regions)} regions')
+                  total = 0
+
+                  for region in regions:
+                      try:
+                          sq = boto3.client('service-quotas', region_name=region)
+                          paginator = sq.get_paginator('list_service_quotas')
+                          for page in paginator.paginate(ServiceCode='bedrock'):
+                              for q in page.get('Quotas', []):
+                                  name = q['QuotaName']
+                                  nl = name.lower()
+                                  if 'requests per minute' not in nl and 'tokens per minute' not in nl:
+                                      continue
+                                  if 'model customization' in nl or 'custom model deployment' in nl:
+                                      continue
+                                  metric = 'rpm' if 'requests per minute' in nl else 'tpm'
+                                  if 'global cross-region' in nl:
+                                      itype = 'global-cross-region'
+                                  elif 'cross-region' in nl:
+                                      itype = 'cross-region'
+                                  elif 'on-demand' in nl:
+                                      itype = 'on-demand'
+                                  else:
+                                      itype = 'on-demand'
+                                  content = f'Quota Name: {name}\nQuota Code: {q.get(\"QuotaCode\",\"\")}\nRegion: {region}\nInference Type: {itype}\nMetric: {metric}\nValue: {q.get(\"Value\",0)}\nUnit: {q.get(\"Unit\",\"None\")}\nAdjustable: {q.get(\"Adjustable\",False)}\nGlobal Quota: {q.get(\"GlobalQuota\",False)}'
+                                  key = f'quota_data/{region}/{sanitize(name)}.txt'
+                                  s3.put_object(Bucket=S3_BUCKET, Key=key, Body=content.encode(), ContentType='text/plain')
+                                  total += 1
+                      except Exception as e:
+                          print(f'  Error {region}: {e}')
+                      time.sleep(1)
+                  print(f'Quota scraper: {total} files uploaded')
+                  "
+                - echo "=== Triggering KB Ingestion ==="
+                - |
+                  python3 -c "
+                  import boto3, os
+                  bedrock = boto3.client('bedrock-agent')
+                  bedrock.start_ingestion_job(
+                      knowledgeBaseId=os.environ['KNOWLEDGE_BASE_ID'],
+                      dataSourceId=os.environ['DATA_SOURCE_ID']
+                  )
+                  print('KB ingestion job started')
+                  "
+                - echo "=== Scraper Complete ==="
+      Artifacts:
+        Type: NO_ARTIFACTS
+
+  # ═══════════════════════════════════════════════════════════
+  # EventBridge Schedule (Weekly Sunday 9 AM UTC / 1 AM PST)
+  # ═══════════════════════════════════════════════════════════
+  ScraperEventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartCodeBuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                Resource: !GetAtt ScraperCodeBuildProject.Arn
+
+  ScraperScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Weekly trigger for pricing and quota scraper CodeBuild
+      ScheduleExpression: 'cron(0 9 ? * SUN *)'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ScraperCodeBuildProject.Arn
+          Id: ScraperCodeBuildTarget
+          RoleArn: !GetAtt ScraperEventBridgeRole.Arn
+
+Outputs:
+  PricingDocsBucketName:
+    Value: !Ref PricingDocsBucket
+    Description: S3 bucket for pricing documents
+
+  KnowledgeBaseId:
+    Value: !GetAtt KBSetup.KnowledgeBaseId
+    Description: Bedrock Knowledge Base ID
+
+  DataSourceId:
+    Value: !GetAtt KBSetup.DataSourceId
+    Description: Knowledge Base Data Source ID
+
+  CollectionEndpoint:
+    Value: !GetAtt AOSSCollection.CollectionEndpoint
+    Description: OpenSearch Serverless collection endpoint
+
+  ChatSessionsTableName:
+    Value: !Ref ChatSessionsTable
+    Description: DynamoDB table for chat sessions
+
+  AdminUsersTableName:
+    Value: !Ref AdminUsersTable
+    Description: DynamoDB table for admin users
+
+  FrontendBucketName:
+    Value: !Ref FrontendBucket
+    Description: S3 bucket for frontend static files
+
+  CloudFrontDomainName:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Description: CloudFront distribution domain name
+
+  CloudFrontDistributionId:
+    Value: !Ref CloudFrontDistribution
+    Description: CloudFront distribution ID
+
+  CloudFrontURL:
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Description: Full CloudFront URL for the application
+
+  IdentityPoolId:
+    Value: !Ref CognitoIdentityPool
+    Description: Cognito Identity Pool ID for browser AWS credentials
+
+  ScraperCodeBuildProjectName:
+    Value: !Ref ScraperCodeBuildProject
+    Description: CodeBuild project name for weekly scraping
+
+  ScraperScheduleRuleName:
+    Value: !Ref ScraperScheduleRule
+    Description: EventBridge schedule rule name for weekly scraping

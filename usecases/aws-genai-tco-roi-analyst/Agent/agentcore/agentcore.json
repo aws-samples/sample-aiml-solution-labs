@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.agentcore.aws.dev/v1/agentcore.json",
+  "name": "GenAiTcoRoiTool",
+  "version": 1,
+  "managedBy": "CDK",
+  "tags": {
+    "agentcore:created-by": "agentcore-cli",
+    "agentcore:project-name": "MyAgent"
+  },
+  "runtimes": [
+    {
+      "name": "AnalystAgent",
+      "build": "CodeZip",
+      "entrypoint": "main.py",
+      "codeLocation": "app/AnalystAgent/",
+      "runtimeVersion": "PYTHON_3_12",
+      "idleTimeout": 1800,
+      "maxLifetime": 7200,
+      "envVars": [
+        {
+          "name": "STRANDS_KNOWLEDGE_BASE_ID",
+          "value": ""
+        },
+        {
+          "name": "MEMORY_ID",
+          "value": "AmazonGenAiTcoRoiTool_LessonsLearned-"
+        }
+      ],
+      "networkMode": "PUBLIC",
+      "protocol": "HTTP"
+    }
+  ],
+  "memories": [
+    {
+      "name": "LessonsLearned",
+      "eventExpiryDuration": 7,
+      "strategies": [
+        {
+          "type": "EPISODIC",
+          "namespaces": [
+            "/episodes/{actorId}/{sessionId}"
+          ],
+          "reflectionNamespaces": [
+            "/episodes"
+          ]
+        }
+      ]
+    }
+  ],
+  "credentials": [],
+  "evaluators": [],
+  "onlineEvalConfigs": [],
+  "agentCoreGateways": [],
+  "policyEngines": []
+}
