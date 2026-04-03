@@ -30,6 +30,7 @@ from search_bedrock_quota import call_bedrock_quota_agent
 from system_prompt import TCO_ANALYST_PROMPT
 from strands.models import CacheConfig
 from strands import tool
+from relevancy_steering_handler import RelevancySteeringHandler
 
 os.environ["BYPASS_TOOL_CONSENT"] = "true"
 
@@ -280,11 +281,13 @@ def get_or_create_agent(model_id=None, session_id="default"):
             system_prompt=TCO_ANALYST_PROMPT,
             tools=all_tools,
             session_manager=_session_manager,
+            plugins=[RelevancySteeringHandler()],
         )
         _agent_model_id = requested_model
         _agent_session_id = session_id
         log.info(f"Agent created with model: {requested_model}")
 
+    _agent._steering_session_id = session_id
     return _agent
 
 def invoke_with_retry(agent, query: str, max_retries: int = 3, base_delay: int = 1):

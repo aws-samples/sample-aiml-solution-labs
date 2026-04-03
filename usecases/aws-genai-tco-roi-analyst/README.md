@@ -35,7 +35,7 @@ aws cloudformation deploy \
     CognitoDomain=<your-cognito-domain>
 ```
 
-Note the stack outputs — you'll need `KnowledgeBaseId`, `IdentityPoolId`, `CloudFrontURL`, and `PricingDocsBucketName`.
+Note the stack outputs — you'll need `KnowledgeBaseId`, `IdentityPoolId`, `CloudFrontURL`, `PricingDocsBucketName`, `RelevancyGuardrailId`, and `SteeringLogsBucketName`.
 
 ### 2. Run Initial Data Scrape
 
@@ -70,16 +70,28 @@ The EventBridge schedule runs this automatically every Sunday at 1 AM PST.
 ### 3. Deploy the Agent
 
 ```bash
-cd AnalystAgent/app/AnalystAgent
-pip install -r requirements.txt  # or use pyproject.toml with uv
+cd Agent
 
-# Set environment variables
-export STRANDS_KNOWLEDGE_BASE_ID=<kb-id-from-stack-outputs>
-export MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0
+# Configure with the execution role from stack outputs
+agentcore configure \
+  --create \
+  -n AnalystAgent \
+  -e app/AnalystAgent/main.py \
+  -dt direct_code_deploy \
+  -rt PYTHON_3_12 \
+  -r us-west-2 \
+  -p HTTP \
+  --execution-role <AgentCoreRuntimeRoleArn-from-stack-outputs> \
+  --non-interactive
 
-# Deploy to AgentCore
-cd ../../
-agentcore deploy
+# Deploy with environment variables from stack outputs
+agentcore deploy -a AnalystAgent --auto-update-on-conflict \
+  --env STRANDS_KNOWLEDGE_BASE_ID=<KnowledgeBaseId> \
+  --env AWS_REGION=us-west-2 \
+  --env STEERING_MODE=passive \
+  --env STEERING_GUARDRAIL_ID=<RelevancyGuardrailId> \
+  --env STEERING_GUARDRAIL_VERSION=DRAFT \
+  --env STEERING_LOG_BUCKET=<SteeringLogsBucketName>
 ```
 
 ### 4. Build and Deploy Chatbot UI
@@ -119,6 +131,84 @@ aws cloudfront create-invalidation --distribution-id <dist-id> --paths "/*"
 | `MODEL_ID` | Bedrock model ID (default: Claude Sonnet 4.5) |
 | `AWS_REGION` | AWS region (default: `us-east-1`) |
 
+### Relevancy Steering Configuration
+
+The agent includes a relevancy steering handler that scores every KB query and response using an LLM judge and Bedrock Guardrails contextual grounding. Scores are logged to S3 for analysis.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STEERING_MODE` | `passive` | `passive` = log scores only, `active` = retry on low scores |
+| `STEERING_RETRY_THRESHOLD` | `0.6` | Score below this triggers retry (0.0-1.0) |
+| `STEERING_MAX_RETRIES` | `2` | Max retries before accepting the response |
+| `STEERING_GUARDRAIL_ID` | | Bedrock Guardrail ID from stack outputs |
+| `STEERING_GUARDRAIL_VERSION` | `DRAFT` | Guardrail version |
+| `STEERING_LOG_BUCKET` | | S3 bucket for score logs (from stack outputs) |
+| `STEERING_JUDGE_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Model for LLM judge evaluations |
+
+**How it works:**
+1. Before each KB tool call, an LLM judge checks if the query matches the user's intent
+2. After the final response, both an LLM judge and Bedrock Guardrails score the response for relevancy and grounding
+3. All scores are logged to S3 as JSON under `scores/{date}/{session_id}/`
+4. In `active` mode, low scores trigger automatic retries (up to `STEERING_MAX_RETRIES`)
+
+### Score Log Structure
+
+Logs are stored in S3 at:
+```
+s3://{STEERING_LOG_BUCKET}/scores/{YYYY}/{MM}/{DD}/{session_id}/{invocation_id}_{check_type}_{HHMMSS}.json
+```
+
+Each agent invocation produces two files sharing the same `invocation_id`:
+- `{invocation_id}_before_kb_call_*.json` — scored before the KB lookup runs
+- `{invocation_id}_after_response_*.json` — scored after the agent generates its answer
+
+If the agent calls multiple KB tools in one invocation, there will be one `before_kb_call` file per KB tool call.
+
+**Log record fields:**
+
+| Field | Description |
+|-------|-------------|
+| `timestamp` | UTC ISO timestamp |
+| `session_id` | AgentCore session ID (groups all turns in a conversation) |
+| `invocation_id` | 8-char UUID (groups all files from one agent invocation) |
+| `check_type` | `before_kb_call` or `after_response` |
+| `tool_name` | KB tool being called (only for `before_kb_call`) |
+| `user_query` | What the user asked |
+| `tool_query` | What the agent sent to the KB (only for `before_kb_call`) |
+| `llm_judge_score` | 0.0-1.0 from the LLM judge |
+| `guardrail_grounding` | 0.0-1.0 from Bedrock Guardrails (only for `after_response`) |
+| `guardrail_relevance` | 0.0-1.0 from Bedrock Guardrails (only for `after_response`) |
+| `mode` | `passive` or `active` |
+| `retry_count` | Number of retries so far in this invocation |
+| `details` | LLM judge reasoning for the score |
+
+**What to look for when analyzing:**
+
+- Low `llm_judge_score` on `before_kb_call` → agent is querying the KB with wrong/incomplete terms
+- Low `guardrail_grounding` on `after_response` → agent fabricated data not in the KB results
+- High `guardrail_relevance` + low `guardrail_grounding` → agent answered the right question with wrong data
+- `llm_judge_score` and `guardrail_grounding` disagreeing → one check catches issues the other misses (this is the key experiment insight)
+- `retry_count > 0` (in active mode) → the handler triggered a retry
+
+### Running Evaluations
+
+The project includes a Strands Evals-based test suite with 50 test cases across user levels (L100 vague → L400 expert + edge cases). It runs each case through the agent, collects Strands Evals scores (Faithfulness, Output quality) alongside steering scores (LLM judge, Guardrails grounding/relevance), and links them via session_id.
+
+```bash
+pip install strands-agents-evals
+
+# Run all 50 cases
+python eval_runner.py --output results.json
+
+# Run a specific level
+python eval_runner.py --level L300 --cases 5
+
+# Run edge cases only
+python eval_runner.py --level edge
+```
+
+Results are saved as JSON with both eval scores and S3 steering scores per case. Use this to validate that the steering handler catches issues standard evaluators miss, and to tune `STEERING_RETRY_THRESHOLD` before switching to active mode.
+
 ### Chatbot UI Environment Variables
 
 See `chatbot-ui/.env.example` for the full list with descriptions.
@@ -138,6 +228,8 @@ aws-genai-tco-roi-analyst/
 │       ├── calculator_capacity_planning.py  # Capacity planner
 │       ├── search_pricing_info.py   # KB pricing search tool
 │       ├── search_bedrock_quota.py  # KB quota search tool
+│       ├── relevancy_steering_handler.py  # Steering hook: LLM judge + Guardrails scoring
+│       ├── relevancy_logger.py      # S3 score logger
 │       ├── model/load.py            # Bedrock model loader
 │       └── mcp_client/client.py     # AWS Knowledge MCP client
 ├── cfn/                             # CloudFormation template

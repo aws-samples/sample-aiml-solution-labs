@@ -13,3 +13,6 @@ cdk/node_modules/
 
 # Exception: Commit the State
 !.cli/deployed-state.json
+
+# Local deployment state
+.cli/deployed-state.json
