@@ -23,7 +23,35 @@
         },
         {
           "name": "MEMORY_ID",
-          "value": "AmazonGenAiTcoRoiTool_LessonsLearned-"
+          "value": ""
+        },
+        {
+          "name": "STEERING_MODE",
+          "value": "passive"
+        },
+        {
+          "name": "STEERING_RETRY_THRESHOLD",
+          "value": "0.6"
+        },
+        {
+          "name": "STEERING_MAX_RETRIES",
+          "value": "2"
+        },
+        {
+          "name": "STEERING_GUARDRAIL_ID",
+          "value": ""
+        },
+        {
+          "name": "STEERING_GUARDRAIL_VERSION",
+          "value": "DRAFT"
+        },
+        {
+          "name": "STEERING_LOG_BUCKET",
+          "value": ""
+        },
+        {
+          "name": "STEERING_JUDGE_MODEL_ID",
+          "value": "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         }
       ],
       "networkMode": "PUBLIC",

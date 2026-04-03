@@ -777,6 +777,116 @@ Resources:
           Id: ScraperCodeBuildTarget
           RoleArn: !GetAtt ScraperEventBridgeRole.Arn
 
+  # ═══════════════════════════════════════════════════════════
+  # IAM Role for AgentCore Runtime (passed via agentcore configure --execution-role)
+  # ═══════════════════════════════════════════════════════════
+  AgentCoreRuntimeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-agentcore-runtime-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: AgentCoreRuntimePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: BedrockModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  - !Sub 'arn:aws:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:aws:bedrock:*:*:inference-profile/*'
+              - Sid: KnowledgeBase
+                Effect: Allow
+                Action:
+                  - bedrock:Retrieve
+                Resource:
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*'
+              - Sid: GuardrailScoring
+                Effect: Allow
+                Action:
+                  - bedrock:ApplyGuardrail
+                Resource:
+                  - !GetAtt RelevancyGuardrail.GuardrailArn
+              - Sid: SteeringLogs
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub '${SteeringLogsBucket.Arn}/*'
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                  - logs:DescribeLogGroups
+                Resource:
+                  - !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/*'
+              - Sid: Observability
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: '*'
+
+  # ═══════════════════════════════════════════════════════════
+  # S3 Bucket for Steering Logs
+  # ═══════════════════════════════════════════════════════════
+  SteeringLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::AccountId}-${AWS::Region}-tco-bva-steering-logs'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLogs90Days
+            Status: Enabled
+            ExpirationInDays: 90
+
+  # ═══════════════════════════════════════════════════════════
+  # Bedrock Guardrail for Relevancy Scoring
+  # ═══════════════════════════════════════════════════════════
+  RelevancyGuardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: tco-bva-relevancy-guardrail
+      Description: Contextual grounding checks for TCO analyst relevancy scoring experiment
+      BlockedInputMessaging: Input blocked by guardrail
+      BlockedOutputsMessaging: Output blocked by guardrail
+      ContextualGroundingPolicyConfig:
+        FiltersConfig:
+          - Type: GROUNDING
+            Threshold: 0.01
+            Action: NONE
+            Enabled: true
+          - Type: RELEVANCE
+            Threshold: 0.01
+            Action: NONE
+            Enabled: true
+
 Outputs:
   PricingDocsBucketName:
     Value: !Ref PricingDocsBucket
@@ -829,3 +939,19 @@ Outputs:
   ScraperScheduleRuleName:
     Value: !Ref ScraperScheduleRule
     Description: EventBridge schedule rule name for weekly scraping
+
+  SteeringLogsBucketName:
+    Value: !Ref SteeringLogsBucket
+    Description: S3 bucket for steering relevancy logs
+
+  RelevancyGuardrailId:
+    Value: !GetAtt RelevancyGuardrail.GuardrailId
+    Description: Bedrock Guardrail ID for relevancy scoring
+
+  RelevancyGuardrailArn:
+    Value: !GetAtt RelevancyGuardrail.GuardrailArn
+    Description: Bedrock Guardrail ARN for relevancy scoring
+
+  AgentCoreRuntimeRoleArn:
+    Value: !GetAtt AgentCoreRuntimeRole.Arn
+    Description: IAM role ARN for AgentCore runtime (pass to agentcore configure --execution-role)

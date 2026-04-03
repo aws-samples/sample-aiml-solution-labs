@@ -39,3 +39,8 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# Eval outputs
+*.log
+smoke_*.json
+full_eval_results.json
