@@ -7,6 +7,11 @@
             "runtimeId": "GenAiTcoRoiTool_AnalystAgent-D4kX1XGvri",
             "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:440577664410:runtime/GenAiTcoRoiTool_AnalystAgent-D4kX1XGvri",
             "roleArn": "arn:aws:iam::440577664410:role/AgentCore-GenAiTcoRoiTool-ApplicationAgentAnalystAg-Yz7QQNJwRrzH"
+          },
+          "MyAgent": {
+            "runtimeId": "GenAiTcoRoiTool_MyAgent-zuppce7agb",
+            "runtimeArn": "arn:aws:bedrock-agentcore:us-west-2:440577664410:runtime/GenAiTcoRoiTool_MyAgent-zuppce7agb",
+            "roleArn": "arn:aws:iam::440577664410:role/AgentCore-GenAiTcoRoiTool-ApplicationAgentMyAgentRu-PcL7tVBBynGp"
           }
         },
         "memories": {

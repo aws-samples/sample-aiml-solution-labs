@@ -14,16 +14,14 @@
       "entrypoint": "main.py",
       "codeLocation": "app/AnalystAgent/",
       "runtimeVersion": "PYTHON_3_12",
-      "idleTimeout": 1800,
-      "maxLifetime": 7200,
       "envVars": [
         {
           "name": "STRANDS_KNOWLEDGE_BASE_ID",
-          "value": ""
+          "value": "ZKPRZMJQZX"
         },
         {
           "name": "MEMORY_ID",
-          "value": "AmazonGenAiTcoRoiTool_LessonsLearned-"
+          "value": "AmazonGenAiTcoRoiTool_LessonsLearned-NWXSeHCPkG"
         }
       ],
       "networkMode": "PUBLIC",
