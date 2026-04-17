@@ -5,7 +5,7 @@
   "managedBy": "CDK",
   "tags": {
     "agentcore:created-by": "agentcore-cli",
-    "agentcore:project-name": "tco-roi-analyst"
+    "agentcore:project-name": "MyAgent"
   },
   "runtimes": [
     {
