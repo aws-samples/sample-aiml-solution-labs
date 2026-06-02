@@ -1,0 +1,17 @@
+temp/
+__pycache__/
+*.pyc
+.DS_Store
+
+# Temporary scratch scripts
+debug_*.py
+run_*.py
+
+# Test outputs (generated, not source)
+tco_bva_capacity_skills/tests/text_output/
+tco_bva_capacity_skills/tests/test_cases.md
+tco_bva_capacity_skills/tests/execute_test_cases.md
+tco_bva_capacity_skills/tests/bedrock_vs_competition_prompt_caching_support.md
+
+# Backup folder
+backup/
