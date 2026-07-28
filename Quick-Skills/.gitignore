@@ -15,6 +15,8 @@ tco_bva_capacity_skills/tests/text_output/
 tco_bva_capacity_skills/tests/test_cases.md
 tco_bva_capacity_skills/tests/execute_test_cases.md
 tco_bva_capacity_skills/tests/bedrock_vs_competition_prompt_caching_support.md
+tco_bva_capacity_skills/tests/pricing_spec_v1.2.md
+tco_bva_capacity_skills/tests/use_cases.md
 
 # Backup folder
 backup/
