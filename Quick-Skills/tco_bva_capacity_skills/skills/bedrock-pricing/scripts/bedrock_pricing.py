@@ -5026,6 +5026,7 @@ def refresh_cache(output_dir):
     try:
         import boto3
     except ImportError:
+        print(ImportError)
         print("ERROR: boto3 is required for refresh mode. Install with: pip install boto3", file=sys.stderr)
         sys.exit(1)
     os.makedirs(output_dir, exist_ok=True)
