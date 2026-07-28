@@ -1,0 +1,2776 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Coding Agents on Amazon Bedrock AgentCore Runtime - workshop environment
+  (VS Code server + Docker buildx + vendored coding-agent harness)
+
+# Adapted from the proven everyday-productivity-accelerators workshop template.
+# Provisions one EC2 instance running code-server behind CloudFront, bootstrapped
+# via SSM with every tool the workshop needs: AWS CLI v2, Docker (buildx + arm64
+# binfmt), Python 3.11, Node 20, jq, gh, awscurl, plus the Stage 3 reference repo
+# (aws-samples/sample-agent-assisted-sdlc) and the code repository (console +
+# orchestrator + APIs + the coding-agent harnesses) cloned from WorkshopRepoUrl.
+
+Parameters:
+  WorkshopInstanceType:
+    Description: >-
+      Workshop EC2 instance type. Graviton (arm64) is recommended because the agent
+      images are arm64. m9g/m9gd are the newest Graviton5 family (GA in us-west-2,
+      us-east-1/2, eu-central-1); m7g is the broadly-available Graviton3 default.
+      If m7g.xlarge hits an InsufficientInstanceCapacity error in your AZ, pick an
+      alternate of the same size from the list (Graviton: m6g/c7g/r7g/c6g/r6g;
+      the x86 m7i/m6i/c7i fallbacks switch the AMI to amd64 automatically via the
+      IsGraviton condition). Combine with AZIndex to land where capacity exists.
+      Burstable types (t4g/t3) are intentionally excluded: their CPU-credit
+      throttling made bootstrap time unpredictable.
+    Type: String
+    Default: m7g.xlarge
+    AllowedValues:
+      # --- Graviton3 (default family) ---
+      - m7g.large
+      - m7g.xlarge
+      - m7g.2xlarge
+      # --- Graviton5 (newest; GA us-west-2/us-east-1/2/eu-central-1) ---
+      - m9g.large
+      - m9g.xlarge
+      - m9g.2xlarge
+      - m9gd.xlarge
+      - m9gd.2xlarge
+      # --- Graviton fallbacks (same arm64 AMI) when m7g is capacity-constrained ---
+      - m6g.xlarge
+      - m6g.2xlarge
+      - c7g.xlarge
+      - c7g.2xlarge
+      - c6g.xlarge
+      - r7g.xlarge
+      - r6g.xlarge
+      # --- x86 fallbacks (IsGraviton=false -> amd64 AMI auto-selected) ---
+      - m7i.xlarge
+      - m7i.2xlarge
+      - m6i.xlarge
+      - c7i.xlarge
+    ConstraintDescription: Must be a valid instance type
+  WorkshopInstanceVolumeSize:
+    Description: Workshop EC2 instance volume size (GB) - Docker layers need room
+    Type: Number
+    Default: 50
+  AZIndex:
+    Description: >-
+      Which Availability Zone (by index into the region's AZ list) to place the
+      single workshop subnet + instance in. 0 is the first AZ (e.g. us-west-2a).
+      If you hit InsufficientInstanceCapacity for the instance type in that AZ,
+      bump this to 1/2/3 (us-west-2b/c/d) and revalidate; the EC2 error message
+      names which AZs currently have capacity.
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1, 2, 3]
+  OutputVscsPassword:
+    Description: Whether to provide the VS Code Server password as stack output
+    Type: String
+    Default: 'True'
+    AllowedValues: ['True', 'False']
+  AssetsBucketName:
+    Description: S3 bucket containing workshop assets
+    Type: String
+    Default: ''
+  AssetsBucketPrefix:
+    Description: S3 prefix for workshop assets
+    Type: String
+    Default: ''
+  WorkshopRepoUrl:
+    Description: >-
+      Public git repo holding the whole code payload (console + orchestrator +
+      coding-agents harnesses + usecase + grading), the single source of truth for
+      code. The box clones this into ~/src, the same way a customer reproduces the
+      workshop from one clone. A failed clone is fatal: there is no offline fallback.
+    Type: String
+    # Must point at a repo that actually EXISTS. aws-samples/... is not published
+    # yet (404), and cloning a 404 makes DownloadWorkshopAssets burn time on three
+    # failed clones + backoff. The didhd public repo is the live code source
+    # (verified). Switch this to aws-samples once that repo is published.
+    Default: 'https://github.com/didhd/amazon-bedrock-agentcore-coding-agents.git'
+  WorkshopRepoRef:
+    Description: Branch or tag of WorkshopRepoUrl to clone.
+    Type: String
+    Default: 'main'
+  CodeServerUser:
+    Type: String
+    Description: UserName for code-server
+    Default: ubuntu
+  HomeFolder:
+    Type: String
+    Description: >-
+      Filesystem folder code-server opens and where the code repo is cloned
+      (HomeFolder/src). Defaults to /home/ubuntu so it equals the ubuntu user's
+      $HOME, which makes ~/src resolve on the box (keep it == the CodeServerUser
+      home if you override it, or tilde paths in the content will not resolve).
+    Default: /home/ubuntu
+  KiroApiKey:
+    Type: String
+    Description: >-
+      Kiro vendor API key. Kiro's Runtime is ALWAYS pre-provisioned at bootstrap
+      (like opencode), so its ARN is always wired in the console. This key only sets
+      up the Token Vault credential provider: when supplied, the runtime authenticates
+      automatically; when blank, the image is built with --skip-identity and the
+      attendee adds their own ksk_ key on the wired instance in console Settings.
+    Default: ''
+    NoEcho: true
+  CentralEcrAccount:
+    Type: String
+    Description: >-
+      Account ID of the CENTRAL workshop ECR that holds the prebuilt opencode/kiro arm64
+      images (repos coding-agents-opencode / coding-agents-kiro). When set, the bootstrap
+      PULLS those images cross-account instead of building them on this box, and
+      auto-creates the opencode/kiro AgentCore Runtimes. The central repos must grant
+      this account ecr:BatchGetImage + ecr:GetDownloadUrlForLayer. Leave blank to
+      build each image in this account (the self-contained, slower path).
+    Default: ''
+  CentralEcrRegion:
+    Type: String
+    Description: >-
+      Region of the central workshop ECR (defaults to this stack's region). Only used
+      when CentralEcrAccount is set; the central repo must exist in this region.
+    Default: ''
+  OpencodePublicImageUri:
+    Type: String
+    Description: >-
+      A PUBLIC ECR image (public.ecr.aws/...) for the pre-deployed opencode frontend
+      runtime. When set, the bootstrap mirrors this image into the account's own ECR
+      and registers the opencode AgentCore Runtime from it (with the /mnt/s3files mount),
+      so attendees run opencode by clicking the Agents sidebar, never building it. Leave
+      blank to build/pull opencode by the central-ECR or per-account path.
+    Default: ''
+  ConsoleLoginEmail:
+    Type: String
+    Description: >-
+      Email/username for the seeded console login. The stack creates this Cognito
+      user with a generated permanent password; the username + password appear in
+      the stack Outputs. The console redirects to the Cognito Hosted UI for login.
+    Default: 'attendee@workshop.aws'
+
+Metadata:
+  # m9g/m9gd are Graviton5 (GA in us-west-2 per the 2026-06-10 launch); cfn-lint's
+  # bundled instance-type catalog predates them and would W1030-false-positive on the
+  # WorkshopInstanceType AllowedValues. Suppress that one stale check.
+  cfn-lint:
+    config:
+      ignore_checks:
+        - W1030
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Workshop Environment Configuration
+        Parameters:
+          - WorkshopInstanceType
+          - AZIndex
+          - WorkshopInstanceVolumeSize
+          - OutputVscsPassword
+          - AssetsBucketName
+          - AssetsBucketPrefix
+          - CodeServerUser
+          - HomeFolder
+          - KiroApiKey
+          - ConsoleLoginEmail
+    ParameterLabels:
+      WorkshopInstanceType:
+        default: Instance Type
+      AZIndex:
+        default: Availability Zone Index
+      WorkshopInstanceVolumeSize:
+        default: Volume Size (GB)
+      OutputVscsPassword:
+        default: Output VS Code Password?
+      AssetsBucketName:
+        default: Assets Bucket Name
+      AssetsBucketPrefix:
+        default: Assets Bucket Prefix
+      CodeServerUser:
+        default: Code-server User
+      HomeFolder:
+        default: Home Folder
+      KiroApiKey:
+        default: Kiro API Key (optional, pre-provisions the Kiro validator)
+      ConsoleLoginEmail:
+        default: Console Login Email (seeded Cognito user)
+
+Conditions:
+  VscsPasswordOutput:
+    !Equals [!Ref OutputVscsPassword, 'True']
+  HasAssetsBucket:
+    !Not [!Equals [!Ref AssetsBucketName, '']]
+  IsGraviton: !Not [
+    !Equals [
+      !Select [0, !Split ['g', !Select [0, !Split ['.', !Ref WorkshopInstanceType]]]],
+      !Select [0, !Split ['.', !Ref WorkshopInstanceType]]
+    ]
+  ]
+
+Mappings:
+  ArmImage:
+    Ubuntu-22:
+      ImageId: '{{resolve:ssm:/aws/service/canonical/ubuntu/server/jammy/stable/current/arm64/hvm/ebs-gp2/ami-id}}'
+  AmdImage:
+    Ubuntu-22:
+      ImageId: '{{resolve:ssm:/aws/service/canonical/ubuntu/server/jammy/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
+  # AgentCore is AZ-constrained; the agent runtime's private subnets must sit in
+  # specific AZ IDs per region (matches coding-agents/infra/cfn-vpc.yaml).
+  AgentCoreAZs:
+    us-east-1:
+      AZ1: use1-az1
+      AZ2: use1-az2
+    us-east-2:
+      AZ1: use2-az1
+      AZ2: use2-az2
+    us-west-2:
+      AZ1: usw2-az1
+      AZ2: usw2-az2
+    eu-west-1:
+      AZ1: euw1-az1
+      AZ2: euw1-az2
+    eu-central-1:
+      AZ1: euc1-az1
+      AZ2: euc1-az2
+  # EC2 Instance Connect source ranges (ip-ranges.json, service EC2_INSTANCE_CONNECT).
+  # Only the workshop's deployable regions are listed; us-west-2 is the pinned region.
+  AWSRegions2InstanceConnectCidr:
+    us-east-1:
+      Cidr: 18.206.107.24/29
+    us-east-2:
+      Cidr: 3.16.146.0/29
+    us-west-2:
+      Cidr: 18.237.140.160/29
+    eu-west-1:
+      Cidr: 18.202.216.48/29
+    eu-central-1:
+      Cidr: 3.120.181.40/29
+  AWSRegions2PrefixListID:
+    ap-northeast-1:
+      PrefixList: pl-58a04531
+    ap-northeast-2:
+      PrefixList: pl-22a6434b
+    ap-south-1:
+      PrefixList: pl-9aa247f3
+    ap-southeast-1:
+      PrefixList: pl-31a34658
+    ap-southeast-2:
+      PrefixList: pl-b8a742d1
+    ca-central-1:
+      PrefixList: pl-38a64351
+    eu-central-1:
+      PrefixList: pl-a3a144ca
+    eu-north-1:
+      PrefixList: pl-fab65393
+    eu-west-1:
+      PrefixList: pl-4fa04526
+    eu-west-2:
+      PrefixList: pl-93a247fa
+    eu-west-3:
+      PrefixList: pl-75b1541c
+    sa-east-1:
+      PrefixList: pl-5da64334
+    us-east-1:
+      PrefixList: pl-3b927c52
+    us-east-2:
+      PrefixList: pl-b6a144df
+    us-west-1:
+      PrefixList: pl-4ea04527
+    us-west-2:
+      PrefixList: pl-82a045eb
+
+Resources:
+  ##### Workshop VPC and Networking
+  WorkshopVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-VPC
+  WorkshopInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-IGW
+  WorkshopInternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref WorkshopInternetGateway
+      VpcId: !Ref WorkshopVpc
+  WorkshopPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WorkshopVpc
+      # AZ is parameterized (AZIndex) so a capacity-constrained default AZ can be
+      # moved without editing the template: bump AZIndex and revalidate.
+      AvailabilityZone: !Select [!Ref AZIndex, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-Subnet
+  WorkshopPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WorkshopVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Public-Routes
+  WorkshopDefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: WorkshopInternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref WorkshopPublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref WorkshopInternetGateway
+  WorkshopPublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref WorkshopPublicRouteTable
+      SubnetId: !Ref WorkshopPublicSubnet
+
+  ##### Agent runtime networking (pre-provisioned for Stage 1 S3 Files mount)
+  # Two private subnets (pinned to AgentCore AZ IDs) + a NAT gateway for egress +
+  # an NFS security group. Stage 1 attendees create the S3 Files access point on
+  # top of THIS networking by hand; the IDs are published to SSM (below) so the
+  # page-1 commands and infra/setup.sh can read them. Mirrors the standalone
+  # coding-agents/infra/cfn-vpc.yaml, folded into the workshop VPC.
+  AgentPrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WorkshopVpc
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZoneId: !FindInMap [AgentCoreAZs, !Ref 'AWS::Region', AZ1]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-agent-private-1
+  AgentPrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref WorkshopVpc
+      CidrBlock: 10.0.12.0/24
+      AvailabilityZoneId: !FindInMap [AgentCoreAZs, !Ref 'AWS::Region', AZ2]
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-agent-private-2
+  AgentNatEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  AgentNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt AgentNatEIP.AllocationId
+      SubnetId: !Ref WorkshopPublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-agent-nat
+  AgentPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref WorkshopVpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-agent-private-rt
+  AgentPrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref AgentPrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref AgentNatGateway
+  AgentPrivateSubnet1RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AgentPrivateSubnet1
+      RouteTableId: !Ref AgentPrivateRouteTable
+  AgentPrivateSubnet2RTAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref AgentPrivateSubnet2
+      RouteTableId: !Ref AgentPrivateRouteTable
+  AgentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for coding agent runtimes (S3 Files NFS mount)
+      VpcId: !Ref WorkshopVpc
+      SecurityGroupIngress:
+        - Description: NFS for S3 Files mount
+          IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          CidrIp: 10.0.0.0/16
+      SecurityGroupEgress:
+        - Description: All outbound
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-agent-sg
+
+  ##### Pre-created S3 Files service role (attendees do NOT create roles).
+  # The S3 Files file system assumes THIS role (trust = elasticfilesystem, the EFS
+  # service family that backs S3 Files) to reach the bucket + KMS + its managed
+  # EventBridge rules. The attendee passes its ARN (from SSM, below) to
+  # `aws s3files create-file-system --role-arn` on Stage 1 page 1. Mirrors the
+  # S3FilesRole in coding-agents/infra/cfn-vpc.yaml.
+  S3FilesServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'agentcore-s3files-${AWS::Region}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: elasticfilesystem.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: s3files-bucket-access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject*
+                  - s3:PutObject*
+                  - s3:DeleteObject*
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                  - s3:GetBucketLocation
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - 'arn:aws:s3:::coding-agents-*'
+                  - 'arn:aws:s3:::coding-agents-*/*'
+              - Sid: UseKmsKeyWithS3Files
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Encrypt
+                  - kms:Decrypt
+                  - kms:ReEncryptFrom
+                  - kms:ReEncryptTo
+                Condition:
+                  StringLike:
+                    kms:ViaService: !Sub 's3.${AWS::Region}.amazonaws.com'
+                Resource: !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*'
+              - Sid: EventBridgeManage
+                Effect: Allow
+                Action:
+                  - events:DeleteRule
+                  - events:DisableRule
+                  - events:EnableRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                Condition:
+                  StringEquals:
+                    events:ManagedBy: elasticfilesystem.amazonaws.com
+                Resource:
+                  - 'arn:aws:events:*:*:rule/DO-NOT-DELETE-S3-Files*'
+              - Sid: EventBridgeRead
+                Effect: Allow
+                Action:
+                  - events:DescribeRule
+                  - events:ListRuleNamesByTarget
+                  - events:ListRules
+                  - events:ListTargetsByRule
+                Resource:
+                  - 'arn:aws:events:*:*:rule/*'
+
+  ##### SSM parameters: publish the pre-provisioned agent VPC IDs for Stage 1
+  AgentVpcIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /workshop/agent/vpc-id
+      Type: String
+      Value: !Ref WorkshopVpc
+  AgentS3FilesRoleArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /workshop/agent/s3files-role-arn
+      Type: String
+      Value: !GetAtt S3FilesServiceRole.Arn
+  AgentPrivateSubnet1Param:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /workshop/agent/private-subnet-1
+      Type: String
+      Value: !Ref AgentPrivateSubnet1
+  AgentPrivateSubnet2Param:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /workshop/agent/private-subnet-2
+      Type: String
+      Value: !Ref AgentPrivateSubnet2
+  AgentSecurityGroupParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /workshop/agent/security-group-id
+      Type: String
+      Value: !Ref AgentSecurityGroup
+
+  ##### VS Code Server Password
+  # DeletionPolicy is intentionally the default (Delete): this is an ephemeral,
+  # per-attendee workshop stack and the Cleanup module tears everything down. A
+  # Retain policy here would orphan secrets/log groups (and keep billing) after
+  # the event. The durable workshop data (PRs, agent artifacts) lives in the
+  # attendee's own GitHub + S3 Files, not in this stack.
+  VscsPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Visual Studio Code Server password for workshop
+      GenerateSecretString:
+        PasswordLength: 16
+        ExcludePunctuation: true
+        SecretStringTemplate: !Sub '{"username":"${CodeServerUser}"}'
+        GenerateStringKey: 'password'
+
+  VscsPasswordCustom:
+    Condition: VscsPasswordOutput
+    Type: Custom::VscsPassword
+    Properties:
+      ServiceToken: !GetAtt VscsPasswordLambda.Arn
+      SecretArn: !Ref VscsPassword
+
+  VscsPasswordLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /${AWS::StackName}/VscsPasswordLambda
+      RetentionInDays: 90
+
+  VscsPasswordLambdaRole:
+    Condition: VscsPasswordOutput
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AwsSecretsManager
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref VscsPassword
+
+  VscsPasswordLambda:
+    Condition: VscsPasswordOutput
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Get the VS Code Server password for workshop
+      Handler: index.lambda_handler
+      Role: !GetAtt VscsPasswordLambdaRole.Arn
+      Architectures:
+        - arm64
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 60
+      LoggingConfig:
+        LogGroup: !Ref VscsPasswordLambdaLogGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import time
+          import cfnresponse
+          def lambda_handler(event, context):
+            try:
+              if event['RequestType'] == 'Delete':
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='No action to take')
+              else:
+                secret_name = (event['ResourceProperties']['SecretArn'])
+                secrets_mgr = boto3.client('secretsmanager')
+                # Secrets Manager is eventually consistent: a just-created secret can
+                # still raise ResourceNotFoundException here. Retry with backoff so
+                # propagation lag never fails the stack.
+                secret_value = None
+                for attempt in range(8):
+                  try:
+                    secret_value = secrets_mgr.get_secret_value(SecretId = secret_name)['SecretString']
+                    break
+                  except secrets_mgr.exceptions.ResourceNotFoundException:
+                    if attempt == 7:
+                      raise
+                    time.sleep(2 ** attempt if attempt < 4 else 10)
+                secret_json = json.loads(secret_value)
+                responseData = {'Password': secret_json['password']}
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, reason='OK')
+            except Exception as e:
+              cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason=str(e))
+
+  ##### Cognito: the console's login (Hosted UI, one seeded user, password in Outputs)
+  # The console (src/console/cognito_auth.py) redirects unauthenticated requests to
+  # the Cognito Hosted UI and validates the returned id_token. CFN provisions the
+  # whole pool here and seeds ONE user with a generated permanent password, surfaced
+  # in the stack Outputs so an attendee can log in with two copy-paste values. When
+  # the COGNITO_* env is set on the console unit, the password gate becomes the
+  # fallback (used only for local/dev, where Cognito is unset).
+  ConsoleUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${AWS::StackName}-console
+      # Admin-create only: no public self-signup (one seeded attendee user).
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+
+  # A unique Hosted UI domain. The Cognito domain prefix must be globally unique,
+  # so it is keyed by account+region+stack. cognito_auth builds the OAuth2 URLs as
+  # https://<COGNITO_DOMAIN>/oauth2/...; COGNITO_DOMAIN below is this full hostname.
+  ConsoleUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref ConsoleUserPool
+      Domain: !Sub agentcore-console-${AWS::AccountId}-${AWS::Region}
+
+  # The app client: authorization-code flow with a secret (cognito_auth uses HTTP
+  # Basic client auth on the token endpoint). The callback/logout URLs point at the
+  # CloudFront domain; /auth/* is routed to the console by nginx + a CloudFront
+  # behavior (added below). Logout returns to the console at /console/.
+  ConsoleUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref ConsoleUserPool
+      ClientName: !Sub ${AWS::StackName}-console-client
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - openid
+        - email
+        - profile
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - !Sub https://${CloudFrontDistribution.DomainName}/auth/callback
+      LogoutURLs:
+        - !Sub https://${CloudFrontDistribution.DomainName}/console/
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+
+  # The seeded login password (generated, stored in Secrets Manager, surfaced in
+  # Outputs). Same GenerateSecretString pattern as VscsPassword; the seed-user
+  # Lambda reads it and sets it as the user's PERMANENT password (no force-change).
+  ConsoleLoginPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Cognito console login password (seeded attendee user)
+      GenerateSecretString:
+        PasswordLength: 16
+        ExcludePunctuation: true
+        SecretStringTemplate: !Sub '{"username":"${ConsoleLoginEmail}"}'
+        GenerateStringKey: 'password'
+
+  # The app client secret is not a CFN attribute you can read directly in a usable
+  # form for env wiring; fetch it (and seed the user) via a small custom resource.
+  ConsoleCognitoSetupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CognitoSeedAndDescribe
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminCreateUser
+                  - cognito-idp:AdminSetUserPassword
+                  - cognito-idp:DescribeUserPoolClient
+                Resource: !GetAtt ConsoleUserPool.Arn
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref ConsoleLoginPasswordSecret
+
+  ConsoleCognitoSetupLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /${AWS::StackName}/ConsoleCognitoSetup
+      RetentionInDays: 90
+
+  ConsoleCognitoSetupLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Seed the console Cognito user + return the app client secret
+      Handler: index.lambda_handler
+      Role: !GetAtt ConsoleCognitoSetupRole.Arn
+      Architectures:
+        - arm64
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 90
+      LoggingConfig:
+        LogGroup: !Ref ConsoleCognitoSetupLogGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import time
+          import cfnresponse
+
+          def lambda_handler(event, context):
+            try:
+              if event['RequestType'] == 'Delete':
+                # The pool/user are deleted by CFN tearing down ConsoleUserPool.
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, reason='No action on delete')
+                return
+              p = event['ResourceProperties']
+              pool_id = p['UserPoolId']
+              client_id = p['ClientId']
+              email = p['Email']
+              secret_arn = p['PasswordSecretArn']
+
+              sm = boto3.client('secretsmanager')
+              # Secrets Manager is eventually consistent: a secret CFN just reported
+              # CREATE_COMPLETE can still raise ResourceNotFoundException on the first
+              # GetSecretValue here, which fails this custom resource (and the stack).
+              # Retry with backoff so propagation lag never breaks deployment.
+              pw = None
+              for attempt in range(8):
+                try:
+                  pw = json.loads(sm.get_secret_value(SecretId=secret_arn)['SecretString'])['password']
+                  break
+                except sm.exceptions.ResourceNotFoundException:
+                  if attempt == 7:
+                    raise
+                  time.sleep(2 ** attempt if attempt < 4 else 10)
+
+              idp = boto3.client('cognito-idp')
+              # Create the user (idempotent: ignore if it already exists on update).
+              try:
+                idp.admin_create_user(
+                  UserPoolId=pool_id,
+                  Username=email,
+                  UserAttributes=[
+                    {'Name': 'email', 'Value': email},
+                    {'Name': 'email_verified', 'Value': 'true'},
+                  ],
+                  MessageAction='SUPPRESS',
+                )
+              except idp.exceptions.UsernameExistsException:
+                pass
+              # Set it PERMANENT so there is no force-change-password step.
+              idp.admin_set_user_password(
+                UserPoolId=pool_id, Username=email, Password=pw, Permanent=True)
+
+              # Fetch the app client secret so the stack can wire COGNITO_CLIENT_SECRET.
+              desc = idp.describe_user_pool_client(UserPoolId=pool_id, ClientId=client_id)
+              client_secret = desc['UserPoolClient'].get('ClientSecret', '')
+
+              # Return the seeded password too, so the stack Output can surface it
+              # via !GetAtt. A Secrets Manager dynamic reference does NOT resolve in
+              # Outputs (it ships as the literal string), so we pass the plaintext
+              # back as a custom-resource attribute instead. (Do not write the
+              # resolve-secretsmanager token literally anywhere in this ZipFile:
+              # CloudFormation scans inline Lambda code for dynamic references and
+              # would try to resolve it as a real secret, failing stack creation.)
+              cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                               {'ClientSecret': client_secret, 'Username': email,
+                                'Password': pw},
+                               reason='OK')
+            except Exception as e:
+              cfnresponse.send(event, context, cfnresponse.FAILED, {}, reason=str(e)[:960])
+
+  ConsoleCognitoSetupCustom:
+    Type: Custom::ConsoleCognitoSetup
+    Properties:
+      ServiceToken: !GetAtt ConsoleCognitoSetupLambda.Arn
+      UserPoolId: !Ref ConsoleUserPool
+      ClientId: !Ref ConsoleUserPoolClient
+      Email: !Ref ConsoleLoginEmail
+      PasswordSecretArn: !Ref ConsoleLoginPasswordSecret
+
+  ##### Workshop EC2 Instance
+  WorkshopInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Workshop instance security group
+      SecurityGroupIngress:
+        - Description: VS Code Server from CloudFront
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourcePrefixListId: !FindInMap [AWSRegions2PrefixListID, !Ref 'AWS::Region', PrefixList]
+        # SSH for EC2 Instance Connect, kept ONLY as a break-glass shell fallback
+        # (alongside SSM Session Manager). Stage 1 attendees do NOT use this: they
+        # build and deploy in the console Development workspace terminal. Sourced
+        # from the regional EC2 Instance Connect IP range so 22 is NOT open to the
+        # world (ip-ranges.json, service EC2_INSTANCE_CONNECT). us-west-2 is pinned.
+        - Description: SSH from EC2 Instance Connect (break-glass fallback only)
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !FindInMap [AWSRegions2InstanceConnectCidr, !Ref 'AWS::Region', Cidr]
+      SecurityGroupEgress:
+        - Description: All outbound traffic
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref WorkshopVpc
+
+  WorkshopInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+                - ssm.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonBedrockFullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/BedrockAgentCoreFullAccess
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: WorkshopPermissions
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              # GPT-5.5 over the Bedrock OpenAI-compatible (mantle) Responses
+              # endpoint, a separate service prefix that AmazonBedrockFullAccess
+              # does not cover. The ACTIVE frontend role is opencode on the NATIVE
+              # amazon-bedrock provider (claude-sonnet-4-6), which needs no Mantle,
+              # so the workshop no longer depends on this grant. It stays only for
+              # the hidden/legacy Codex harness (a manual deploy): a Workshop Studio
+              # account without the Mantle entitlement returns a 401 explicit-deny
+              # (org SCP) on that legacy path. Tracking: EE-14394. Do NOT widen this
+              # policy -- it is already maximal, and the frontend no longer uses it.
+              - Effect: Allow
+                Action:
+                  - bedrock-mantle:CreateInference
+                Resource: '*'
+              # VS Code server password
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref VscsPassword
+              # The gateway_mcp deploy stores the GitHub App credential at
+              # agentcore/github-mcp/github-app; agent setup scripts create
+              # API-key credential providers (Token Vault -> Secrets Manager).
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:GetSecretValue
+                  - secretsmanager:PutSecretValue
+                  - secretsmanager:UpdateSecret
+                  - secretsmanager:DeleteSecret
+                  - secretsmanager:TagResource
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:agentcore*'
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:bedrock-agentcore*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                  - kms:GenerateDataKey
+                Resource: '*'
+              # Stage 3 per-user cost: the console runs a Logs Insights query over
+              # the Bedrock model-invocation log to build the by-user chargeback view.
+              - Effect: Allow
+                Action:
+                  - logs:StartQuery
+                  - logs:StopQuery
+                  - logs:GetQueryResults
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                Resource: '*'
+              # vendored coding-agent harness deploy.py creates roles named
+              # agentcore-<agent>-<region>-role; gateway_mcp/deploy-all.sh creates
+              # the GitHub MCP runtime role agentcore-github-mcp-role AND the
+              # gateway role github-mcp-gateway-role; Lab 3's deploy.sh creates
+              # agentcore-cost-analyzer-mcp-role. The gateway role is the one name
+              # that is NOT agentcore-*, so it needs its own prefix here or
+              # deploy-all.sh dies at CreateRole on every own-account/event box.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:TagRole
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/agentcore-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/*BedrockAgentCore*'
+                  # gateway_mcp/deploy-gateway.sh creates github-mcp-gateway-role.
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/github-mcp-gateway-role'
+                  # cdk bootstrap (Stage 2 agentcore deploy) creates the
+                  # cdk-hnb659fds-* execution/publishing/lookup roles.
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/agentcore-*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/*BedrockAgentCore*'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/github-mcp-gateway-role'
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/cdk-*'
+                  - !GetAtt BedrockInvocationLoggingRole.Arn
+              # infra/setup.sh deploys cfn-vpc.yaml (stack: coding-agents-infra)
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeChangeSet
+                Resource:
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/coding-agents-*/*'
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/AgentCore-*/*'
+                  # `agentcore deploy` (Stage 2) is a CDK app; cdk bootstrap creates the
+                  # CDKToolkit stack and the deploy reads/writes it.
+                  - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/CDKToolkit/*'
+              - Effect: Allow
+                Action:
+                  - cloudformation:ListStacks
+                  - cloudformation:ListStackResources
+                Resource: '*'
+              # AgentCore CLI container builds use CodeBuild plus a
+              # bedrock-agentcore-* staging bucket and ECR repository.
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - codebuild:ListBuildsForProject
+                  - codebuild:CreateProject
+                  - codebuild:UpdateProject
+                  - codebuild:BatchGetProjects
+                  - codebuild:ListProjects
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                  - s3:PutLifecycleConfiguration
+                  # cdk bootstrap's StagingBucket needs its full create/configure set;
+                  # without these the CDKToolkit stack rolls back on
+                  # s3:PutBucketPolicy / versioning / public-access-block, and
+                  # DeleteBucket* lets a failed bootstrap roll back clean instead of
+                  # wedging in ROLLBACK_FAILED with an orphaned staging bucket.
+                  - s3:DeleteBucket
+                  - s3:PutBucketPolicy
+                  - s3:GetBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutBucketTagging
+                Resource:
+                  - 'arn:aws:s3:::bedrock-agentcore-*'
+                  - 'arn:aws:s3:::bedrock-agentcore-*/*'
+                  # cdk bootstrap creates the cdk-hnb659fds-assets-* staging bucket.
+                  - 'arn:aws:s3:::cdk-*'
+                  - 'arn:aws:s3:::cdk-*/*'
+              # cfn-vpc.yaml creates a VPC + private subnets + S3 Files mount targets
+              - Effect: Allow
+                Action:
+                  - ec2:CreateVpc
+                  - ec2:DeleteVpc
+                  - ec2:ModifyVpcAttribute
+                  - ec2:CreateSubnet
+                  - ec2:DeleteSubnet
+                  - ec2:CreateRouteTable
+                  - ec2:DeleteRouteTable
+                  - ec2:CreateRoute
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:CreateNatGateway
+                  - ec2:DeleteNatGateway
+                  - ec2:AllocateAddress
+                  - ec2:ReleaseAddress
+                  - ec2:CreateInternetGateway
+                  - ec2:DeleteInternetGateway
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                  - ec2:Describe*
+                Resource: '*'
+              # Agent images: ECR repos coding-agents-* (one per agent) + github-mcp
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:GetRepositoryPolicy
+                  - ecr:InitiateLayerUpload
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:ListImages
+                  - ecr:BatchDeleteImage
+                  - ecr:TagResource
+                  # cdk bootstrap's ContainerAssetsRepository sets a lifecycle policy
+                  # and image-scanning config on its repo; without these the bootstrap
+                  # stack rolls back with an ecr:PutLifecyclePolicy AccessDenied.
+                  # GetLifecyclePolicy is the CFN handler's read-back after create;
+                  # DeleteLifecyclePolicy is what its rollback/delete path calls.
+                  - ecr:PutLifecyclePolicy
+                  - ecr:GetLifecyclePolicy
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:PutImageScanningConfiguration
+                  - ecr:PutImageTagMutability
+                  - ecr:SetRepositoryPolicy
+                Resource:
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/coding-agents-*'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/github-mcp*'
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/bedrock-agentcore-*'
+                  # cdk bootstrap creates the cdk-hnb659fds-container-assets-* repo
+                  # that `agentcore deploy` pushes the orchestrator image to.
+                  - !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/cdk-*'
+              - Effect: Allow
+                Action:
+                  - ecr:DescribeRepositories
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              # Shared files bucket: coding-agents-<account>-<region> (S3 Files)
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:PutBucketVersioning
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketLocation
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  - s3:GetAccessPoint
+                  - s3:CreateAccessPoint
+                  - s3:DeleteAccessPoint
+                Resource:
+                  - 'arn:aws:s3:::coding-agents-*'
+                  - 'arn:aws:s3:::coding-agents-*/*'
+                  - !Sub 'arn:aws:s3:${AWS::Region}:${AWS::AccountId}:accesspoint/*'
+              # Stage 1: the attendee creates the S3 Files mount by hand from the box
+              # (aws s3files create-file-system / create-access-point / create-mount-target)
+              # on top of the pre-provisioned agent VPC, referencing the PRE-CREATED
+              # s3files service role (S3FilesServiceRole). The s3files API caller (this
+              # instance role) needs, beyond s3files:* itself: bucket-notification +
+              # versioning reads on the bucket, iam:PassRole on the service role,
+              # EventBridge rule management (S3 Files installs managed rules), and ENI
+              # perms (mount targets create network interfaces). Verified end-to-end on
+              # a live deploy: with these, CreateFileSystem reaches 'available' in ~25s
+              # and create-access-point / create-mount-target succeed.
+              - Effect: Allow
+                Action:
+                  - s3files:*
+                  - elasticfilesystem:DescribeMountTargets
+                  - elasticfilesystem:DescribeAccessPoints
+                Resource: '*'
+              - Sid: S3FilesCallerBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketNotification
+                  - s3:PutBucketNotification
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:GetEncryptionConfiguration
+                Resource:
+                  - 'arn:aws:s3:::coding-agents-*'
+              - Sid: S3FilesPassServiceRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub 'arn:aws:iam::${AWS::AccountId}:role/agentcore-s3files-*'
+              - Sid: S3FilesEventBridge
+                Effect: Allow
+                Action:
+                  - events:ListRules
+                  - events:DescribeRule
+                  - events:ListRuleNamesByTarget
+                  - events:ListTargetsByRule
+                  - events:PutRule
+                  - events:PutTargets
+                  - events:DeleteRule
+                  - events:RemoveTargets
+                  - events:EnableRule
+                  - events:DisableRule
+                Resource: 'arn:aws:events:*:*:rule/*'
+              - Sid: S3FilesMountTargetEni
+                Effect: Allow
+                Action:
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeNetworkInterfaceAttribute
+                  - ec2:ModifyNetworkInterfaceAttribute
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeAvailabilityZones
+                Resource: '*'
+              # S3 Files creates a service-linked role on first CreateFileSystem in an
+              # account. Without this the hand-run Stage-1 mount setup fails the first time.
+              - Sid: S3FilesServiceLinkedRole
+                Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    iam:AWSServiceName: s3files.amazonaws.com
+              # Stage 1: the attendee builds + pushes the Claude Code harness image
+              # and runs deploy.py by hand in the console Development workspace
+              # terminal (a shell on this box). EC2 Instance Connect stays as a
+              # break-glass shell fallback only; DescribeInstances backs the console.
+              - Sid: EC2InstanceConnectAndDescribe
+                Effect: Allow
+                Action:
+                  - ec2-instance-connect:SendSSHPublicKey
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceTypes
+                Resource: '*'
+              - !If
+                - HasAssetsBucket
+                - Effect: Allow
+                  Action:
+                    - s3:GetObject
+                    - s3:ListBucket
+                  Resource:
+                    - !Sub 'arn:aws:s3:::${AssetsBucketName}'
+                    - !Sub 'arn:aws:s3:::${AssetsBucketName}/*'
+                - !Ref 'AWS::NoValue'
+              # Stage 3 observability: session table, logs, traces, dashboards
+              - Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:GetLogEvents
+                  - logs:FilterLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:PutDashboard
+                  - cloudwatch:GetDashboard
+                  - xray:PutTraceSegments
+                  - xray:GetTraceSummaries
+                  - xray:BatchGetTraces
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                  - ssm:GetParameter
+                  - ssm:DeleteParameter
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/workshop/*'
+                  # cdk bootstrap writes/reads /cdk-bootstrap/<qualifier>/version.
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/cdk-bootstrap/*'
+
+  # Module 2 orchestrator execution role. The AgentCore CLI project references
+  # this ARN instead of creating a model-only default role: the orchestrator also
+  # needs to stage files in S3, open command shells on the three role runtimes,
+  # run the reviewer, and read the GitHub connection from Secrets Manager.
+  OrchestratorRuntimeRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      cfn-lint:
+        config:
+          # The interactive-shell action is already in the AgentCore developer
+          # guide, but the cfn-lint IAM action catalog can lag a service launch.
+          ignore_checks:
+            - W3037
+    Properties:
+      RoleName: !Sub 'agentcore-orchestrator-${AWS::Region}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub 'arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*'
+      Policies:
+        - PolicyName: OrchestratorRuntimeExecution
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EcrImagePull
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: '*'
+              - Sid: RuntimeLogs
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                  - cloudwatch:PutMetricData
+                Resource: '*'
+              - Sid: OrchestratorModel
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ListInferenceProfiles
+                Resource: '*'
+              - Sid: DispatchCodingAgents
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:InvokeAgentRuntime
+                  - bedrock-agentcore:InvokeAgentRuntimeCommand
+                  - bedrock-agentcore:InvokeAgentRuntimeCommandShell
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/*'
+              - Sid: StageSharedFiles
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource:
+                  - 'arn:aws:s3:::coding-agents-*'
+                  - 'arn:aws:s3:::coding-agents-*/*'
+              - Sid: InvokeGitHubMcpGateway
+                Effect: Allow
+                # The orchestrator opens PRs by calling the GitHub MCP Gateway's
+                # tools over SigV4 (bedrock-agentcore:InvokeGateway); the GitHub App
+                # credential lives only inside the gateway runtime, never here.
+                Action:
+                  - bedrock-agentcore:InvokeGateway
+                Resource: !Sub 'arn:${AWS::Partition}:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*'
+              - Sid: IdentifyAccount
+                Effect: Allow
+                Action: sts:GetCallerIdentity
+                Resource: '*'
+              - Sid: AssumePerUserRole
+                Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/cca-peruser-${AWS::Region}'
+
+  # Stage 3 per-user cost attribution: a shared role the coding-agent runtimes
+  # assume with RoleSessionName=<user>, so their Bedrock calls are logged per user.
+  # Trust is account-root scoped by an ArnLike condition to the agent runtime exec
+  # roles (created later by deploy.py), so the exact role need not exist at stack time.
+  PerUserAttributionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'cca-peruser-${AWS::Region}'
+      Description: Per-user cost attribution; coding-agent runtimes assume this with the user as the role-session-name.
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action: sts:AssumeRole
+            Condition:
+              ArnLike:
+                aws:PrincipalArn: !Sub 'arn:aws:iam::${AWS::AccountId}:role/agentcore-*-role'
+      Policies:
+        - PolicyName: BedrockInvoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:ListInferenceProfiles
+                Resource:
+                  - 'arn:aws:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:aws:bedrock:*:${AWS::AccountId}:*'
+
+  # Stage 3: the log group + role that Bedrock model-invocation logging writes to,
+  # so per-user / per-agent token and cost data exists for the Cost dashboard to read.
+  BedrockInvocationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/bedrock/modelinvocations
+      RetentionInDays: 14
+  BedrockInvocationLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'cca-bedrock-invlog-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteInvocationLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt BedrockInvocationLogGroup.Arn
+
+  WorkshopInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WorkshopInstanceRole
+
+  WorkshopInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref WorkshopPublicSubnet
+      InstanceType: !Ref WorkshopInstanceType
+      IamInstanceProfile: !Ref WorkshopInstanceProfile
+      ImageId: !If
+        - IsGraviton
+        - !FindInMap [ArmImage, Ubuntu-22, ImageId]
+        - !FindInMap [AmdImage, Ubuntu-22, ImageId]
+      SecurityGroupIds:
+        - !Ref WorkshopInstanceSecurityGroup
+      BlockDeviceMappings:
+        - Ebs:
+            VolumeSize: !Ref WorkshopInstanceVolumeSize
+            VolumeType: gp3
+            DeleteOnTermination: true
+            Encrypted: true
+          DeviceName: /dev/sda1
+      Monitoring: true
+      UserData:
+        Fn::Base64: !Sub |
+          #cloud-config
+          hostname: WorkshopInstance
+          runcmd:
+            - mkdir -p ${HomeFolder} && chown -R ${CodeServerUser}:${CodeServerUser} ${HomeFolder}
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-Workshop-Instance
+
+  ##### CloudFront Distribution
+  CloudfrontCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        MinTTL: 1
+        MaxTTL: 31536000
+        DefaultTTL: 86400
+        Name: !Join ['-', [!Ref AWS::StackName, !Select [4, !Split ['-', !Select [2, !Split ['/', !Ref AWS::StackId]]]]]]
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: all
+          EnableAcceptEncodingGzip: False
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - Accept-Charset
+              - Authorization
+              - Origin
+              - Accept
+              - Referer
+              - Host
+              - Accept-Language
+              - Accept-Encoding
+              - Accept-Datetime
+          QueryStringsConfig:
+            QueryStringBehavior: all
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: True
+        HttpVersion: http2and3
+        CacheBehaviors:
+          # The Stage 2 routed console (src/console/server.py on :8081) is reached
+          # over /console/, /api/*, and /vendor/*; nginx routes those prefixes to
+          # :8081 (code-server stays on /). These must NOT be cached: API responses
+          # and the live UI are dynamic. Disable caching via the AWS managed
+          # CachingDisabled policy so every method/path passes straight to origin.
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # AWS managed: CachingDisabled
+            Compress: False
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+            TargetOriginId: !Sub CloudFront-${AWS::StackName}
+            ViewerProtocolPolicy: redirect-to-https
+            PathPattern: '/api/*'
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # AWS managed: CachingDisabled
+            Compress: False
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+            TargetOriginId: !Sub CloudFront-${AWS::StackName}
+            ViewerProtocolPolicy: redirect-to-https
+            PathPattern: '/console*'
+          # Cognito OAuth2 routes (/auth/login, /auth/callback, /auth/logout). nginx
+          # forwards /auth/ to the console on :8081; this behavior keeps the redirect
+          # + the code exchange uncached and passes query strings (?code=, ?state=)
+          # straight to origin. Without it, /auth/* would hit the default behavior
+          # (code-server) and login would break.
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # AWS managed: CachingDisabled
+            Compress: False
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+            TargetOriginId: !Sub CloudFront-${AWS::StackName}
+            ViewerProtocolPolicy: redirect-to-https
+            PathPattern: '/auth/*'
+          - AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - PATCH
+              - POST
+              - DELETE
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # AWS managed: CachingDisabled
+            Compress: False
+            OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+            TargetOriginId: !Sub CloudFront-${AWS::StackName}
+            ViewerProtocolPolicy: redirect-to-https
+            PathPattern: '/vendor/*'
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          CachePolicyId: !Ref CloudfrontCachePolicy
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+          TargetOriginId: !Sub CloudFront-${AWS::StackName}
+          ViewerProtocolPolicy: redirect-to-https
+        Origins:
+          - DomainName: !GetAtt WorkshopInstance.PublicDnsName
+            Id: !Sub CloudFront-${AWS::StackName}
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+              # The console's chat/PTY SSE streams and the editor's WebSocket can
+              # legitimately go quiet while a model thinks or a tab idles. The
+              # 30s default read timeout cut those mid-stream ("editor stopped
+              # responding" / dropped chat). 60s is the no-quota maximum; the
+              # app-level keepalives (15s chat ping, 2-5s PTY pings) stay well
+              # inside it.
+              OriginReadTimeout: 60
+              OriginKeepaliveTimeout: 60
+
+  ##### Workshop Setup SSM Document
+  WorkshopSsmDocLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /${AWS::StackName}/${WorkshopSsmDoc}
+      RetentionInDays: 90
+
+  WorkshopSsmDoc:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Command
+      Content:
+        schemaVersion: '2.2'
+        description: Bootstrap Coding Agents on AgentCore workshop environment
+        parameters:
+          CodeServerPassword:
+            type: String
+            default: !Ref AWS::StackId
+          KiroApiKey:
+            type: String
+            default: ''
+          CognitoUserPoolId:
+            type: String
+            default: ''
+          CognitoClientId:
+            type: String
+            default: ''
+          CognitoClientSecret:
+            type: String
+            default: ''
+          CognitoDomain:
+            type: String
+            default: ''
+        mainSteps:
+          - name: InstallCloudWatchAgent
+            action: aws:configurePackage
+            inputs:
+              name: AmazonCloudWatchAgent
+              action: Install
+          - name: SetBashAsDefaultShell
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - ln -sf /bin/bash /bin/sh
+          - name: ConfigureCloudWatchAgent
+            action: aws:runDocument
+            inputs:
+              documentType: SSMDocument
+              documentPath: AmazonCloudWatch-ManageAgent
+              documentParameters:
+                action: configure
+                mode: ec2
+                optionalConfigurationSource: default
+                optionalRestart: 'yes'
+          - name: InstallBasePackages
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # nfs-common: S3 Files is EFS-powered, so the attendee mounts it in
+                # Stage 1 with the efs-utils helper (/sbin/mount.s3files), NOT raw
+                # `mount -t nfs4` (the server denies a raw NFS mount; it requires TLS +
+                # IAM auth). python3-botocore is REQUIRED by the helper for IAM auth
+                # (without it the mount fails "access denied by server", verified
+                # 2026-06-27). The helper itself is installed in InstallEfsUtils via
+                # AWS's official prebuilt installer, so NO build toolchain (Rust/Go/
+                # cmake/gcc) is needed here anymore.
+                - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y curl unzip git git-lfs jq nginx openssl argon2 software-properties-common nfs-common python3-botocore
+          - name: InstallEfsUtils
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # amazon-efs-utils provides /sbin/mount.s3files, the helper the attendee
+                # uses in Stage 1 to mount S3 Files (`mount -t s3files`). It is NOT in
+                # the Ubuntu apt repo. Per the AWS S3 Files docs, "other supported Linux
+                # distributions" install the PREBUILT package via AWS's official
+                # installer script - no Rust/Go source build. This replaced a ~326s
+                # rustup + cargo release build (the single biggest, most variable
+                # bootstrap step) with a ~5s download+install.
+                #   https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-files-prereq-policies.html
+                # Retry the transient download, then fail loud if the helper is absent:
+                # Stage 1 cannot mount S3 Files without this executable.
+                - |
+                  for i in 1 2 3; do
+                    curl -fsSL https://amazon-efs-utils.aws.com/efs-utils-installer.sh -o /tmp/efs-utils-installer.sh &&
+                      sh /tmp/efs-utils-installer.sh --install && break || sleep $((i*15))
+                  done
+                  rm -f /tmp/efs-utils-installer.sh
+                  test -x /sbin/mount.s3files || { echo 'ERROR: mount.s3files missing after install'; exit 1; }
+                  echo 'INFO: mount.s3files installed'
+          - name: InstallAwsCli
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - curl -fsSL https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip -o /tmp/aws-cli.zip
+                - unzip -q -d /tmp /tmp/aws-cli.zip
+                - /tmp/aws/install
+                - rm -rf /tmp/aws*
+                - aws --version
+          - name: InstallDocker
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # Agent images are arm64 and built with `docker buildx` (the
+                # vendored coding-agent harness setup.sh scripts). docker-ce ships buildx.
+                # Retry the network install: transient apt/registry failures on a
+                # fresh box are common and would otherwise fail the whole stack.
+                - for i in 1 2 3; do curl -fsSL https://get.docker.com | bash - && break || sleep $((i*10)); done
+                - !Sub usermod -aG docker ${CodeServerUser}
+                - systemctl enable --now docker
+                # binfmt so amd64 instances can still cross-build arm64 images
+                - docker run --privileged --rm tonistiigi/binfmt --install arm64 || true
+                - docker buildx version
+          - name: InstallNode
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # Node 20 for the git_mcp_skill gateway proxy (index.js + node_modules)
+                - while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do echo "Waiting for apt lock..."; sleep 5; done
+                - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+                - apt-get install -y nodejs
+                - node --version && npm --version
+                # The coding-agent CLIs the Stage 1 sessions boot with: picking an
+                # agent in the console opens a shell where that CLI is installed and
+                # configured (claude: CLAUDE_CODE_USE_BEDROCK=1 + model env, no API
+                # key; opencode: ~/.config/opencode/opencode.json amazon-bedrock
+                # provider; kiro: ~/.kiro/steering). The AgentCore CLI is the deploy
+                # surface attendees use later (agentcore create/dev/deploy/invoke/exec).
+                - for i in 1 2 3; do npm install -g @anthropic-ai/claude-code opencode-ai @aws/agentcore && break || sleep $((i*10)); done
+                - command -v claude && claude --version || echo "claude install failed (non-fatal; Stage 1 banner will say so)"
+                - command -v opencode && opencode --version || echo "opencode install failed (non-fatal)"
+                - command -v agentcore && agentcore --version || echo "agentcore CLI install failed (non-fatal)"
+                - curl -fsSL https://cli.kiro.dev/install | bash || echo "kiro install failed (non-fatal)"
+                - command -v kiro || echo "kiro not on PATH (non-fatal; Stage 1 banner will say so)"
+          - name: InstallPython
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - while fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do echo "Waiting for apt lock..."; sleep 5; done
+                # python-is-python3: the content runs `python deploy.py` / `python
+                # cleanup.py` (bare `python`), but Ubuntu ships only `python3`. This
+                # package provides the `python` -> python3 symlink so those commands
+                # work as written. (python3 keeps working for the grading commands.)
+                - apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip python3.11-venv python3-boto3 python3-full pipx python-is-python3
+                # Ubuntu 22.04 ships pip 22.x, which does NOT understand
+                # --break-system-packages (added in pip 23.0). Every later install
+                # uses that flag, so pip MUST be upgraded FIRST, and the upgrade
+                # itself must NOT pass the flag (old pip would reject it). This is
+                # also why bare `pip3` "worked" before: it resolved to a newer
+                # ~/.local pip, masking that the system pip was stale. Upgrade is
+                # FAIL-LOUD (no `|| true`): if pip can't be upgraded, the later
+                # --break-system-packages installs cannot succeed.
+                - for i in 1 2 3; do python3 -m pip install --upgrade pip && break || sleep $((i*10)); done
+                # Prove the upgraded pip understands the flag the rest of the doc relies on.
+                - python3 -m pip install --help | grep -q -- --break-system-packages || { echo "FATAL - pip still too old to support --break-system-packages after upgrade ($(python3 -m pip --version))"; exit 1; }
+                - python3 --version
+                - python3 -m pip --version
+          - name: InstallGhCli
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # gh lets attendees create the sample repo + seed issues; agents
+                # open PRs through the Gateway's GitHub App, not through gh.
+                - curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+                - chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg
+                - echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+                - apt-get update && apt-get install -y gh
+                - gh --version
+          - name: ConfigureEnvironment
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - echo LANG=en_US.utf-8 >> /etc/environment
+                - echo LC_ALL=en_US.UTF-8 >> /etc/environment
+                - !Sub export HOME=/home/${CodeServerUser}
+                - !Sub sudo -u ${CodeServerUser} -H bash -c 'echo "export AWS_REGION=${AWS::Region}" >> ~/.bashrc'
+                - !Sub sudo -u ${CodeServerUser} -H bash -c 'echo "export AWS_DEFAULT_REGION=${AWS::Region}" >> ~/.bashrc'
+                - !Sub sudo -u ${CodeServerUser} -H bash -c 'echo "export AWS_ACCOUNT_ID=${AWS::AccountId}" >> ~/.bashrc'
+                - !Sub sudo -u ${CodeServerUser} -H bash -c 'echo "export PATH=\"\$HOME/.local/bin:\$PATH\"" >> ~/.bashrc'
+                # Claude Code on the build box talks to Bedrock via the instance role
+                # (no Anthropic login / API key). The CLI reads these from its global
+                # settings file, so `claude --print ...` works in the Development
+                # terminal exactly as the content promises. Model matches run.sh
+                # (us.anthropic.claude-opus-4-6-v1) and the region is the stack region.
+                # MERGE, never clobber: if the file already exists (an AMI or a later
+                # step may seed it), keep its other keys and only set our three env
+                # entries (jq is installed by InstallBasePackages, which runs first).
+                - !Sub |
+                  sudo -u ${CodeServerUser} -H mkdir -p /home/${CodeServerUser}/.claude
+                  CLAUDE_SETTINGS=/home/${CodeServerUser}/.claude/settings.json
+                  ADD='{"CLAUDE_CODE_USE_BEDROCK":"1","AWS_REGION":"${AWS::Region}","ANTHROPIC_MODEL":"us.anthropic.claude-opus-4-6-v1","ANTHROPIC_DEFAULT_OPUS_MODEL":"us.anthropic.claude-opus-4-6-v1","ANTHROPIC_DEFAULT_SONNET_MODEL":"us.anthropic.claude-sonnet-4-6","ANTHROPIC_DEFAULT_HAIKU_MODEL":"us.anthropic.claude-haiku-4-5-20251001-v1:0"}'
+                  if [ -s "$CLAUDE_SETTINGS" ] && jq -e . "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
+                    TMP=$(mktemp)
+                    jq --argjson add "$ADD" '.env = ((.env // {}) + $add)' "$CLAUDE_SETTINGS" > "$TMP" \
+                      && mv "$TMP" "$CLAUDE_SETTINGS"
+                  else
+                    echo "{\"env\":$ADD}" | jq . > "$CLAUDE_SETTINGS"
+                  fi
+                  chown ${CodeServerUser}:${CodeServerUser} "$CLAUDE_SETTINGS"
+                - !Sub sudo -u ${CodeServerUser} -H git config --global user.email "${CodeServerUser}@example.com"
+                - !Sub sudo -u ${CodeServerUser} -H git config --global user.name "Workshop ${CodeServerUser}"
+                - !Sub sudo -u ${CodeServerUser} -H git config --global init.defaultBranch "main"
+          - name: CloneReferenceRepos
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - !Sub mkdir -p ${HomeFolder}
+                - !Sub chown -R ${CodeServerUser}:${CodeServerUser} ${HomeFolder}
+                # The coding-agent container harness (Dockerfile + setup.sh + deploy.py +
+                # connect.py per agent, plus gateway_mcp and infra) arrives with the whole
+                # workshop payload that DownloadWorkshopAssets below CLONES into
+                # ${HomeFolder}/src (so it lands at ${HomeFolder}/src/coding-agents). There is
+                # no separate harness clone to fetch here.
+                # agent-assisted-sdlc: the event-triggered pipeline + inspector dashboard
+                - !Sub |
+                  for i in 1 2 3; do
+                    sudo -u ${CodeServerUser} -H bash -c 'cd ${HomeFolder} && rm -rf sample-agent-assisted-sdlc && git clone --depth 1 https://github.com/aws-samples/sample-agent-assisted-sdlc.git sample-agent-assisted-sdlc' && break || sleep $((i*10))
+                  done
+                - !Sub chown -R ${CodeServerUser}:${CodeServerUser} ${HomeFolder}
+          - name: DownloadWorkshopAssets
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - !Sub |
+                  set -e
+                  # CLONE-FIRST: the box gets the whole code payload the SAME way a
+                  # customer does, from one public `git clone` of the code repository.
+                  # The repo root maps to ${HomeFolder}/src, so src/console,
+                  # src/orchestrator, src/coding-agents, src/usecase-sample-to-mcp all
+                  # land exactly where downstream steps expect. There is no offline zip:
+                  # the code repo IS the single source of truth, so a failed clone is fatal.
+                  cd ${HomeFolder}
+                  CLONED=""
+                  for i in 1 2 3; do
+                    rm -rf ${HomeFolder}/src
+                    if sudo -u ${CodeServerUser} -H bash -c "git clone --depth 1 --branch '${WorkshopRepoRef}' '${WorkshopRepoUrl}' '${HomeFolder}/src'"; then
+                      CLONED="yes"; break
+                    fi
+                    # Short backoff: a healthy shallow clone of this payload finishes
+                    # in <1s, so this only runs on a genuine transient failure.
+                    sleep $((i*3))
+                  done
+                  if [ -n "$CLONED" ] && [ -f ${HomeFolder}/src/console/server.py ]; then
+                    # KEEP .git: it is a shallow (--depth 1) clone, so it is small, and
+                    # the Stage 1 content has the attendee run `git remote -v` in ~/src to
+                    # see the repo the workshop runs from (and reproduce it with a plain
+                    # `git clone <origin> ~/src`).
+                    chown -R ${CodeServerUser}:${CodeServerUser} ${HomeFolder}/src
+                    echo "Code payload cloned from ${WorkshopRepoUrl} (${WorkshopRepoRef})"
+                  else
+                    echo "FATAL: could not clone ${WorkshopRepoUrl}; the code repository is the only source and has no offline fallback"; exit 1
+                  fi
+          - name: SetupWorkshopEnvironment
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # Python deps for the deploy/connect scripts + awscurl for signed MCP calls.
+                # Retry the pip installs (PyPI hiccups shouldn't fail the stack). The vendored
+                # harness lands at ${HomeFolder}/src/coding-agents from the same
+                # repository root, so its requirements.txt is there, not in a mirror.
+                #
+                # Install with `python3 -m pip` (NOT bare `pip3`): `pip3` and the
+                # `command -v python3` that StartStage2Console runs the console with can
+                # resolve to DIFFERENT interpreters on this box (python3-full +
+                # python3.11-venv sit beside the system python3). A bare `pip3 --user`
+                # then drops the wheels into one version's ~/.local site-packages while
+                # the console's python reads another's -> ModuleNotFoundError: fastapi.
+                # `python3 -m pip` pins install + runtime to the same interpreter.
+                - !Sub for i in 1 2 3; do sudo -u ${CodeServerUser} -H bash -c 'python3 -m pip install --user --break-system-packages -r ${HomeFolder}/src/coding-agents/requirements.txt' && break || sleep $((i*10)); done
+                - !Sub for i in 1 2 3; do sudo -u ${CodeServerUser} -H bash -c 'python3 -m pip install --user --break-system-packages awscurl' && break || sleep $((i*10)); done
+                # (The harness is now obtained by `git clone` of the workshop repo into
+                # ~/src, so there is no scaffolder to global-install: the attendee copies
+                # the cloned coding-agents/<role>/ harness into the mount and builds it up
+                # in the editor. The npx create-agentcore-agent scaffolder is retired.)
+                # Stage 3 per-user cost: enable Bedrock model-invocation logging to the
+                # pre-created log group via the pre-created role, so per-user/per-agent
+                # token + cost data exists for the Cost dashboard. Idempotent; fail-soft.
+                - !Sub >-
+                  aws bedrock put-model-invocation-logging-configuration --region ${AWS::Region}
+                  --logging-config '{"cloudWatchConfig":{"logGroupName":"/aws/bedrock/modelinvocations","roleArn":"${BedrockInvocationLoggingRole.Arn}"},"textDataDeliveryEnabled":true}'
+                  || echo 'WARN: enable Bedrock invocation logging failed (non-fatal)'
+                # The Stage 2 engine's bedrock mode: boto3 (Converse) + the bearer-token
+                # generator (GPT-5.5 on the mantle Responses endpoint). The instance role
+                # carries AmazonBedrockFullAccess, so with these installed the console
+                # engine auto-detects credentials and runs REAL model calls.
+                - !Sub for i in 1 2 3; do sudo -u ${CodeServerUser} -H bash -c 'python3 -m pip install --user --break-system-packages boto3 aws-bedrock-token-generator' && break || sleep $((i*10)); done
+                # Console backend deps (fastapi, uvicorn): the console CANNOT boot without
+                # them, so this install is FAIL-LOUD: if all 3 retries fail, stop the stack
+                # HERE with the real pip error, instead of letting it surface 200 lines
+                # later as an opaque "ModuleNotFoundError: fastapi" in StartStage2Console.
+                - !Sub |
+                  for i in 1 2 3; do
+                    sudo -u ${CodeServerUser} -H bash -c 'python3 -m pip install --user --break-system-packages -r ${HomeFolder}/src/console/requirements.txt' && break || sleep $((i*10))
+                  done
+                  sudo -u ${CodeServerUser} -H python3 -c 'import fastapi, uvicorn, multipart' || { echo "FATAL - fastapi/uvicorn/python-multipart still not importable after installing src/console/requirements.txt; see pip output above (multipart is required for the /login form parse, else /console/login 500s)"; exit 1; }
+                # Build the React console UI. Node 20 is already on PATH (installed above).
+                # npm install then the vite build; vite emits to src/console/dist/
+                # (outDir ../dist), which server.py serves as static files.
+                - !Sub for i in 1 2 3; do sudo -u ${CodeServerUser} -H bash -c 'npm --prefix ${HomeFolder}/src/console/web install' && break || sleep $((i*10)); done
+                - !Sub sudo -u ${CodeServerUser} -H bash -c 'npm --prefix ${HomeFolder}/src/console/web run build'
+          - name: ProvisionPreBuiltAgents
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # PRE-BUILD (not pre-deploy) the two agents attendees do NOT build by hand:
+                # Kiro (validator) and opencode (frontend). We build their arm64 images + push to
+                # ECR and set up their Token Vault identity here; this is the slow, mount-INDEPENDENT
+                # work. We do NOT run their deploy.py yet, because CreateAgentRuntime must attach
+                # the S3 Files access point the ATTENDEE creates by hand on Stage 1 page 1 (the
+                # learning step). After that, opencode/kiro deploy.py runs fast against the
+                # attendee's mount (./deploy-prebuilt.sh on the Stage 1 frontend page): pre-built
+                # images, so it is just CreateAgentRuntime. Claude Code is built + deployed
+                # entirely by hand (so attendees see a harness is not native to AgentCore).
+                # ONE VPC, ONE mount: everything uses the CFN-provisioned agent VPC
+                # (/workshop/agent/* SSM params) + the attendee's single S3 Files AP. The console
+                # reconcile (interactive_api.py) is unchanged; it reads each runtime_config.json
+                # whenever deploy.py writes it. FAIL-SOFT: every line ends `|| echo ...` so a
+                # hiccup never blocks the console; a missing runtime is deployable by hand later.
+                # Writes a PARTIAL infra.config (account/region/VPC/subnets/SG from SSM, no AP yet)
+                # so the build-only setup.sh scripts find account+region; page 1 completes it.
+                - !Sub |
+                  CA="${HomeFolder}/src/coding-agents"
+                  sudo -u ${CodeServerUser} -H bash -lc "
+                    set -o pipefail
+                    cd '$CA' || exit 0
+                    ACCT=\$(aws sts get-caller-identity --query Account --output text)
+                    BKT=coding-agents-\$ACCT-${AWS::Region}
+                    SUB1=\$(aws ssm get-parameter --name /workshop/agent/private-subnet-1 --query Parameter.Value --output text)
+                    SUB2=\$(aws ssm get-parameter --name /workshop/agent/private-subnet-2 --query Parameter.Value --output text)
+                    SG=\$(aws ssm get-parameter --name /workshop/agent/security-group-id --query Parameter.Value --output text)
+                    ROLE_ARN=\$(aws ssm get-parameter --name /workshop/agent/s3files-role-arn --query Parameter.Value --output text)
+                    cat > infra.config <<CFG
+                  INFRA_REGION=${AWS::Region}
+                  INFRA_ACCOUNT_ID=\$ACCT
+                  INFRA_BUCKET=\$BKT
+                  INFRA_VPC_ID=\$(aws ssm get-parameter --name /workshop/agent/vpc-id --query Parameter.Value --output text)
+                  INFRA_SUBNET_1=\$SUB1
+                  INFRA_SUBNET_2=\$SUB2
+                  INFRA_SECURITY_GROUP=\$SG
+                  INFRA_S3FILES_ROLE_ARN=\$ROLE_ARN
+                  CFG
+                    # S3 Files bucket WITH VERSIONING (S3 Files requires it). The bucket
+                    # is the only S3 Files piece the bootstrap touches; the file system,
+                    # access point, and mount targets are NOT created here. The attendee
+                    # creates them by hand in Stage 1 ('aws s3files create-*'), mounts the
+                    # file system on the box, and attaches the same access point to each
+                    # deployed runtime, so dev box and runtime share one /mnt/s3files. So
+                    # infra.config ships WITHOUT INFRA_S3FILES_AP_ARN; the Stage 1 page
+                    # appends it after the attendee creates the access point.
+                    aws s3api head-bucket --bucket \$BKT 2>/dev/null || aws s3api create-bucket --bucket \$BKT --region ${AWS::Region} --create-bucket-configuration LocationConstraint=${AWS::Region} || echo 'WARN: bucket create'
+                    aws s3api put-bucket-versioning --bucket \$BKT --versioning-configuration Status=Enabled || echo 'WARN: bucket versioning'
+                    # Prebuilt central ECR (optional): when CentralEcrAccount is set, setup.sh
+                    # PULLS the image from the central registry instead of building here, and
+                    # deploy.py grants the cross-account pull from the image URI.
+                    export WORKSHOP_CENTRAL_ECR_ACCOUNT='${CentralEcrAccount}'
+                    export WORKSHOP_CENTRAL_ECR_REGION='${CentralEcrRegion}'
+                    # opencode: build (or mirror the public image when OpencodePublicImageUri is
+                    # set / pull from the central ECR), then PRE-DEPLOY the Runtime MOUNTLESS.
+                    # infra.config has no INFRA_S3FILES_AP_ARN yet (the attendee creates the
+                    # access point on Stage 1 page 1), so deploy.py registers the Runtime with
+                    # NO /mnt/s3files attached and a wildcard-scoped S3Files IAM policy. The
+                    # attendee never runs a build/deploy for opencode; on the frontend page they
+                    # only re-run deploy.py (via '../deploy-prebuilt.sh opencode') to ATTACH the
+                    # mount to the already-deployed Runtime (update_agent_runtime).
+                    export WORKSHOP_PUBLIC_IMAGE_URI='${OpencodePublicImageUri}'
+                    ( cd opencode && ./setup.sh ) || echo 'WARN: opencode image step failed; build it by hand from the Stage 1 frontend page'
+                    unset WORKSHOP_PUBLIC_IMAGE_URI
+                    ( cd opencode && python3 deploy.py ) || echo 'WARN: opencode pre-deploy failed; ../deploy-prebuilt.sh opencode by hand'
+                    # Kiro: ALWAYS pre-build the image + PRE-DEPLOY the Runtime MOUNTLESS,
+                    # exactly like opencode, so the console ALWAYS shows a Kiro ARN
+                    # (never in a not-wired state). NOTE: this whole block runs inside a
+                    # sudo bash -lc double-quoted arg, so it must contain NO double-quote
+                    # character anywhere -- even one in a comment closes the arg early and
+                    # silently drops everything after it (that truncation is exactly what
+                    # skipped the Kiro deploy before). Keep it quote-clean.
+                    # The API key is the ONLY thing that varies:
+                    #   * KiroApiKey set  -> setup.sh also provisions the Token Vault identity
+                    #     (credential provider) from the key, so the runtime authenticates with
+                    #     no further attendee action.
+                    #   * KiroApiKey blank -> setup.sh --skip-identity builds the image WITHOUT a
+                    #     key (no interactive prompt), deploy.py still creates the Runtime + ARN;
+                    #     the attendee adds their ksk_ key on the wired instance in Settings later
+                    #     (run.sh reads it from Token Vault at session start).
+                    # deploy.py treats KIRO_API_KEY as optional (injects it only when present),
+                    # so the same deploy path works either way and the ARN is always populated.
+                    if [ -n '{{ KiroApiKey }}' ]; then
+                      export KIRO_API_KEY='{{ KiroApiKey }}'
+                      ( cd kiro && ./setup.sh ) || echo 'WARN: kiro image/identity step failed; do it by hand from the Stage 1 validator page'
+                      ( cd kiro && python3 deploy.py ) || echo 'WARN: kiro pre-deploy failed; ../deploy-prebuilt.sh kiro by hand'
+                      unset KIRO_API_KEY
+                    else
+                      ( cd kiro && ./setup.sh --skip-identity ) || echo 'WARN: kiro image build failed; build it by hand from the Stage 1 validator page'
+                      ( cd kiro && python3 deploy.py ) || echo 'WARN: kiro pre-deploy failed; ../deploy-prebuilt.sh kiro by hand'
+                      echo 'INFO: KiroApiKey blank; Kiro pre-deployed WITHOUT a key (ARN is wired). Attendee adds the ksk_ key on the wired instance in console Settings.'
+                    fi
+                  " || echo 'WARN: ProvisionPreBuiltAgents step had failures (fail-soft; console still starts)'
+          - name: BootstrapCdk
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # Stage 2 'agentcore deploy' is a CDK app; CDK requires the account +
+                # region to be bootstrapped once (the CDKToolkit stack + cdk-hnb659fds-*
+                # roles + assets bucket). Do it here so the attendee only runs
+                # 'agentcore deploy'. FAIL-SOFT: if it cannot complete, the attendee can
+                # still run 'npx cdk bootstrap' by hand; the console is unaffected.
+                # Pin the region explicitly (the CDK app defaults to us-east-1 otherwise).
+                - !Sub |
+                  sudo -u ${CodeServerUser} -H bash -lc '
+                    export AWS_REGION=${AWS::Region} AWS_DEFAULT_REGION=${AWS::Region}
+                    ACCT=$(aws sts get-caller-identity --query Account --output text)
+                    npx --yes aws-cdk@2 bootstrap "aws://$ACCT/${AWS::Region}" \
+                      --qualifier hnb659fds 2>&1 | tail -5
+                  ' || echo 'WARN: cdk bootstrap failed (fail-soft; run npx cdk bootstrap by hand before Stage 2 deploy)'
+          - name: InstallVsCodeServer
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - !Sub export HOME=/home/${CodeServerUser}
+                # Retry the code-server install (transient download failures shouldn't fail the stack).
+                - for i in 1 2 3; do curl -fsSL https://code-server.dev/install.sh | bash -s -- 2>&1 && break || sleep $((i*10)); done
+                - !Sub systemctl enable --now code-server@${CodeServerUser} 2>&1
+          - name: ConfigureNginx
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - |
+                  tee /etc/nginx/sites-available/workshop <<EOF
+                  server {
+                    listen 80;
+                    listen [::]:80;
+                    server_name *.cloudfront.net;
+
+                    # --- Stage 2 routed console (src/console/server.py on :8081) ---
+                    # The console UI uses ABSOLUTE same-origin paths (/api/s1, /api/s2,
+                    # /api/s3, /api/health, /vendor/*) that code-server does NOT serve, so
+                    # we route exactly those prefixes to the console on :8081. The HTML
+                    # itself is served at /console (proxied to the console root). Because
+                    # the page's fetches are absolute, they resolve back through these
+                    # same nginx locations with no client-side path rewriting needed.
+                    location = /console {
+                      return 302 /console/;
+                    }
+                    location /console/ {
+                      proxy_pass http://localhost:8081/;
+                      proxy_set_header Host \$host;
+                    }
+                    # SSE endpoints (chat, PTY, runtime-shell streams) idle between
+                    # deltas; the app pings every <=15s, so 300s is generous margin.
+                    # proxy_buffering off lets each SSE frame flush immediately (the
+                    # app also sends X-Accel-Buffering: no per response).
+                    location /api/ {
+                      proxy_pass http://localhost:8081/api/;
+                      proxy_set_header Host \$host;
+                      proxy_buffering off;
+                      proxy_read_timeout 300s;
+                      proxy_send_timeout 300s;
+                    }
+                    location /vendor/ {
+                      proxy_pass http://localhost:8081/vendor/;
+                      proxy_set_header Host \$host;
+                    }
+                    # The Vite SPA bundles (built with base:'/') load from /assets/*;
+                    # code-server (the default / target) does not serve them, so route
+                    # /assets/ to the console on :8081 like /vendor/ above. Without this
+                    # the SPA JS/CSS 401 and the console UI (incl. the Governance
+                    # dashboard) renders blank.
+                    location /assets/ {
+                      proxy_pass http://localhost:8081/assets/;
+                      proxy_set_header Host \$host;
+                    }
+                    # Cognito OAuth2 routes (/auth/login, /auth/callback, /auth/logout)
+                    # live on the console at :8081 with NO /console prefix, and the
+                    # console builds its redirect_uri from the X-Forwarded-* headers, so
+                    # forward the FULL path (no trailing slash on proxy_pass) and pass
+                    # the real host + proto through. Without this, /auth/callback would
+                    # hit code-server and the OAuth code exchange would 404.
+                    location /auth/ {
+                      proxy_pass http://localhost:8081;
+                      proxy_set_header Host \$host;
+                      proxy_set_header X-Forwarded-Host \$host;
+                      proxy_set_header X-Forwarded-Proto https;
+                    }
+
+                    # VS Code Server (incl. its /proxy/<port> port forwarding) at the root.
+                    # Long read/send timeouts: the editor WebSocket goes quiet while a
+                    # tab idles; nginx's 60s default cut the socket and the editor froze
+                    # until a manual reload.
+                    location / {
+                      proxy_pass http://localhost:8080/;
+                      proxy_set_header Host \$host;
+                      proxy_set_header Upgrade \$http_upgrade;
+                      proxy_set_header Connection upgrade;
+                      proxy_set_header Accept-Encoding gzip;
+                      proxy_read_timeout 4h;
+                      proxy_send_timeout 4h;
+                    }
+                  }
+                  EOF
+                - ln -s ../sites-available/workshop /etc/nginx/sites-enabled/workshop
+                - rm -f /etc/nginx/sites-enabled/default
+                - nginx -t 2>&1
+                - systemctl enable nginx
+                - systemctl restart nginx
+          - name: ConfigureVsCodeServer
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - !Sub mkdir -p /home/${CodeServerUser}/.config/code-server
+                - !Sub |
+                  tee /home/${CodeServerUser}/.config/code-server/config.yaml <<EOF
+                  cert: false
+                  auth: password
+                  hashed-password: "$(echo -n {{ CodeServerPassword }} | argon2 $(openssl rand -base64 12) -e)"
+                  EOF
+                - !Sub mkdir -p /home/${CodeServerUser}/.local/share/code-server/User/
+                - !Sub touch /home/${CodeServerUser}/.hushlogin
+                - !Sub mkdir -p ${HomeFolder} && chown -R ${CodeServerUser}:${CodeServerUser} ${HomeFolder}
+                - !Sub |
+                  tee /home/${CodeServerUser}/.local/share/code-server/User/settings.json <<EOF
+                  {
+                    "extensions.autoUpdate": false,
+                    "extensions.autoCheckUpdates": false,
+                    "terminal.integrated.cwd": "${HomeFolder}",
+                    "telemetry.telemetryLevel": "off",
+                    "security.workspace.trust.startupPrompt": "never",
+                    "security.workspace.trust.enabled": false,
+                    "security.workspace.trust.banner": "never",
+                    "security.workspace.trust.emptyWindow": false,
+                    "editor.indentSize": "tabSize",
+                    "editor.tabSize": 2,
+                    "python.testing.pytestEnabled": true,
+                    "auto-run-command.rules": [
+                      {
+                        "command": "workbench.action.terminal.new"
+                      }
+                    ]
+                  }
+                  EOF
+                - !Sub chown -R ${CodeServerUser}:${CodeServerUser} /home/${CodeServerUser}
+                - !Sub systemctl restart code-server@${CodeServerUser}
+                - echo "CodeServer configured. Checking status"
+                - code-server -v
+                - !Sub systemctl status code-server@${CodeServerUser}
+          - name: InstallVsCodeExtensions
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                - !Sub sudo -u ${CodeServerUser} --login code-server --install-extension ms-python.python --force
+                - !Sub sudo -u ${CodeServerUser} --login code-server --install-extension synedra.auto-run-command --force
+                - !Sub chown -R ${CodeServerUser}:${CodeServerUser} /home/${CodeServerUser}
+          - name: StartStage2Console
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # The Stage 2 routed console (src/console/server.py) runs on
+                # FastAPI/uvicorn (installed --user from src/console/requirements.txt
+                # above) and serves the built React dist; it must actually be
+                # RUNNING for attendees to open it. Run it as a systemd service on
+                # :8081 (code-server owns :8080),
+                # as ${CodeServerUser}, restart-on-failure, after the network is up.
+                # stdout/stderr go to the journal, which rsyslog mirrors into
+                # /var/log/syslog, a file the default CloudWatch agent config ships.
+                # This step runs AFTER DownloadWorkshopAssets/SetupWorkshopEnvironment
+                # so ${HomeFolder}/src/console/server.py exists.
+                - PY3=$(command -v python3)
+                # Credentials live in a 0600 env file (root:CodeServerUser-readable),
+                # NOT inline in the world-readable (0644) unit. {{ CodeServerPassword }}
+                # is the SSM-doc param (substituted by the SSM agent, NOT CFN !Sub).
+                - !Sub |
+                  install -m 0600 -o ${CodeServerUser} -g ${CodeServerUser} /dev/null /etc/stage2-console.env
+                  # CONSOLE_USER/CONSOLE_PASSWORD = the password-gate FALLBACK (used
+                  # only if Cognito env is unset). COGNITO_* engages the Hosted UI as
+                  # the default login. {{ ... }} are SSM-doc params (the SSM agent
+                  # substitutes them, not CFN !Sub), so the secrets never sit inline in
+                  # the world-readable unit. The callback path /auth/callback is routed
+                  # to the console by nginx + a CloudFront behavior.
+                  printf 'CONSOLE_USER=%s\nCONSOLE_PASSWORD=%s\nCOGNITO_USER_POOL_ID=%s\nCOGNITO_CLIENT_ID=%s\nCOGNITO_CLIENT_SECRET=%s\nCOGNITO_DOMAIN=%s\nCOGNITO_REGION=%s\nCOGNITO_CALLBACK_PATH=%s\n' \
+                    '${CodeServerUser}' '{{ CodeServerPassword }}' \
+                    '{{ CognitoUserPoolId }}' '{{ CognitoClientId }}' '{{ CognitoClientSecret }}' \
+                    '{{ CognitoDomain }}' '${AWS::Region}' '/auth/callback' > /etc/stage2-console.env
+                  chmod 0600 /etc/stage2-console.env
+                - !Sub |
+                  tee /etc/systemd/system/stage2-console.service <<EOF
+                  [Unit]
+                  Description=Stage 2 routed console (coding-agents workshop)
+                  After=network-online.target
+                  Wants=network-online.target
+                  ConditionPathExists=${HomeFolder}/src/console/server.py
+
+                  [Service]
+                  Type=simple
+                  User=${CodeServerUser}
+                  WorkingDirectory=${HomeFolder}/src/console
+                  Environment=CONSOLE_PORT=8081
+                  Environment=PYTHONUNBUFFERED=1
+                  # Cookie login gate: reuse the code-server credential (same user +
+                  # password the attendee already has). CONSOLE_USER/CONSOLE_PASSWORD
+                  # come from the 0600 /etc/stage2-console.env written above (the unit
+                  # itself is world-readable 0644, so the password must NOT sit inline).
+                  # Setting CONSOLE_PASSWORD engages the gate; it is never echoed.
+                  EnvironmentFile=/etc/stage2-console.env
+                  # GitHub PR path: the orchestrator opens PRs through the GitHub MCP
+                  # Gateway (a GitHub App held inside the gateway runtime), NOT a PAT.
+                  # The attendee creates the App and deploys the gateway by hand in
+                  # Stage 2 (gateway_mcp/deploy-all.sh, on this box); github.py then
+                  # AUTO-DISCOVERS the gateway URL from that deploy's .deployed-state.json
+                  # (no URL to paste, no CFN param). The attendee only sets their
+                  # template-derived repo in Settings. No token is ever stored here.
+                  # Stage 3 per-user cost: point the dispatch at the pre-baked
+                  # per-user role, and turn on the metrics by-user source so the
+                  # Cost tab reads per-user spend from the Bedrock invocation log.
+                  Environment=PERUSER_ROLE_ARN=${PerUserAttributionRole.Arn}
+                  Environment=METRICS_BEDROCK_INVOCATION_LOG=1
+                  # Clone-first start: the Development workspace opens at the cloned
+                  # repo (${HomeFolder}/src == ~/src for the ${CodeServerUser} user,
+                  # since HomeFolder defaults to that user's home), NOT /mnt/s3files
+                  # (which the attendee has not created yet in Stage 1). Pass the
+                  # ABSOLUTE clone path so the value stays correct even if HomeFolder
+                  # is overridden to something other than the login home.
+                  Environment=WORKSHOP_DEV_ROOT=${HomeFolder}/src
+                  # Cognito OAuth2 is the DEFAULT login: COGNITO_USER_POOL_ID/CLIENT_ID/
+                  # CLIENT_SECRET/DOMAIN/REGION/CALLBACK_PATH all come from the 0600
+                  # /etc/stage2-console.env above. With them set, the console redirects
+                  # to the Cognito Hosted UI; the password gate is the unset-Cognito
+                  # fallback. Seeded login + password are in the stack Outputs.
+                  ExecStart=$PY3 ${HomeFolder}/src/console/server.py
+                  Restart=on-failure
+                  RestartSec=5
+                  StandardOutput=journal
+                  StandardError=journal
+                  SyslogIdentifier=stage2-console
+
+                  [Install]
+                  WantedBy=multi-user.target
+                  EOF
+                # Preflight BEFORE starting: the unit's ConditionPathExists makes
+                # systemd silently SKIP a missing server.py (enable --now still
+                # exits 0), which then surfaces only as "connection refused" at the
+                # curl below. Catch the real cause here with a named error instead.
+                - !Sub |
+                  test -f ${HomeFolder}/src/console/server.py || { echo "FATAL - ${HomeFolder}/src/console/server.py missing; DownloadWorkshopAssets did not clone the code repo"; exit 1; }
+                - !Sub |
+                  sudo -u ${CodeServerUser} -H $PY3 -c "import sys; sys.path.insert(0,'${HomeFolder}/src/interactive-api'); sys.path.insert(0,'${HomeFolder}/src/orchestrator'); sys.path.insert(0,'${HomeFolder}/src/metrics-api'); import fastapi, uvicorn, multipart, interactive_api, connection_api, metrics_api; print('console imports OK')" || { echo "FATAL - console imports failed (fastapi/uvicorn/python-multipart from src/console/requirements.txt, or an engine module; see traceback above)"; exit 1; }
+                - systemctl daemon-reload
+                - systemctl enable --now stage2-console
+                # Wait for the listener: up to 120s (24 x 5s); first boot on a cold
+                # instance can be slow. On failure, dump the journal so the SSM log
+                # shows the real crash, then fail the step loudly.
+                - |
+                  ok=""
+                  for i in $(seq 1 24); do
+                    if curl -fsS -o /dev/null http://localhost:8081/api/health; then ok=1; break; fi
+                    sleep 5
+                  done
+                  if [ -z "$ok" ]; then
+                    echo "FATAL: stage2-console never answered on :8081 after 120s. Unit state + journal follow:"
+                    systemctl --no-pager status stage2-console || true
+                    journalctl -u stage2-console --no-pager -n 100 || true
+                    exit 1
+                  fi
+                - systemctl --no-pager status stage2-console || true
+                - curl -fsS http://localhost:8081/api/health
+          - name: InstallHealthWatchdog
+            action: aws:runShellScript
+            inputs:
+              runCommand:
+                # Self-healing: Restart=on-failure only covers a CRASH. A wedged
+                # process (port open, requests hang: the "editor stopped
+                # responding" / dead console case) needs an active probe. Every
+                # 60s this probes code-server (:8080/healthz), the console
+                # (:8081/api/health), and nginx (:80) with a 10s timeout, and
+                # restarts a service only after 2 CONSECUTIVE failures (one
+                # slow probe never bounces an editor holding unsaved state).
+                # Every restart lands in the journal under workshop-watchdog.
+                - !Sub |
+                  tee /usr/local/bin/workshop-watchdog.sh <<'EOF'
+                  #!/bin/bash
+                  STATE=/run/workshop-watchdog
+                  mkdir -p "$STATE"
+                  probe() { # name unit url
+                    local name="$1" unit="$2" url="$3" fails=0
+                    if ! curl -fsS -m 10 -o /dev/null "$url"; then
+                      fails=$(( $(cat "$STATE/$name" 2>/dev/null || echo 0) + 1 ))
+                      if [ "$fails" -ge 2 ]; then
+                        echo "watchdog: $name unhealthy ($url) x$fails -> restarting $unit"
+                        systemctl restart "$unit"
+                        fails=0
+                      else
+                        echo "watchdog: $name unhealthy ($url) x$fails (restart at 2)"
+                      fi
+                    fi
+                    echo "$fails" > "$STATE/$name"
+                  }
+                  probe code-server "code-server@CODE_SERVER_USER" "http://localhost:8080/healthz"
+                  probe stage2-console stage2-console "http://localhost:8081/api/health"
+                  # nginx is healthy if it ANSWERS at all (even 502: that means an
+                  # upstream is down, and the upstream's own probe handles that).
+                  nginx_code=$(curl -s -m 10 -o /dev/null -w '%{http_code}' "http://localhost:80/healthz" || echo 000)
+                  if [ "$nginx_code" = "000" ]; then
+                    fails=$(( $(cat "$STATE/nginx" 2>/dev/null || echo 0) + 1 ))
+                    if [ "$fails" -ge 2 ]; then
+                      echo "watchdog: nginx not answering x$fails -> restarting nginx"
+                      systemctl restart nginx
+                      fails=0
+                    else
+                      echo "watchdog: nginx not answering x$fails (restart at 2)"
+                    fi
+                    echo "$fails" > "$STATE/nginx"
+                  else
+                    echo 0 > "$STATE/nginx"
+                  fi
+                  EOF
+                  sed -i "s/CODE_SERVER_USER/${CodeServerUser}/" /usr/local/bin/workshop-watchdog.sh
+                  chmod 0755 /usr/local/bin/workshop-watchdog.sh
+                - |
+                  tee /etc/systemd/system/workshop-watchdog.service <<'EOF'
+                  [Unit]
+                  Description=Workshop health watchdog (probe + restart wedged services)
+
+                  [Service]
+                  Type=oneshot
+                  ExecStart=/usr/local/bin/workshop-watchdog.sh
+                  SyslogIdentifier=workshop-watchdog
+                  EOF
+                - |
+                  tee /etc/systemd/system/workshop-watchdog.timer <<'EOF'
+                  [Unit]
+                  Description=Run the workshop health watchdog every minute
+
+                  [Timer]
+                  OnBootSec=2min
+                  OnUnitActiveSec=1min
+                  AccuracySec=10s
+
+                  [Install]
+                  WantedBy=timers.target
+                  EOF
+                - systemctl daemon-reload
+                - systemctl enable --now workshop-watchdog.timer
+                # Prove the probe path works right now (all three healthy post-boot).
+                - /usr/local/bin/workshop-watchdog.sh
+                - systemctl list-timers workshop-watchdog.timer --no-pager || true
+
+  ##### Custom Resources for SSM Execution
+  RunSsmDocCustom:
+    Type: Custom::RunSsmDoc
+    Properties:
+      ServiceToken: !GetAtt RunSsmDocLambda.Arn
+      InstanceId: !Ref WorkshopInstance
+      DocName: !Ref WorkshopSsmDoc
+      CwLogGroup: !Ref WorkshopSsmDocLogGroup
+      CodeServerPassword: !If
+        - VscsPasswordOutput
+        - !GetAtt VscsPasswordCustom.Password
+        - !Ref AWS::StackId
+      KiroApiKey: !Ref KiroApiKey
+      # Cognito login wiring for the console unit (the seeded Hosted-UI login).
+      CognitoUserPoolId: !Ref ConsoleUserPool
+      CognitoClientId: !Ref ConsoleUserPoolClient
+      CognitoClientSecret: !GetAtt ConsoleCognitoSetupCustom.ClientSecret
+      CognitoDomain: !Sub ${ConsoleUserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
+      Wait: True
+
+  ##### Health Check for Workshop Services
+  WorkshopHealthCheckLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  WorkshopHealthCheckLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Health check for workshop services
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 600
+      Environment:
+        Variables:
+          RetrySleep: 2900
+          AbortTimeRemaining: 5000
+      Architectures:
+        - arm64
+      Role: !GetAtt WorkshopHealthCheckLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import cfnresponse
+          import logging
+          import time
+          import os
+          import http.client
+          from urllib.parse import urlparse
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def healthURLOk(url):
+              try:
+                  logger.debug(f'url: {url}')
+                  parsed_url = urlparse(url)
+                  if parsed_url.scheme == 'https':
+                      logger.debug(f'Trying https: {parsed_url.netloc}')
+                      conn = http.client.HTTPSConnection(parsed_url.netloc)
+                  else:
+                      logger.debug(f'Trying http: {parsed_url.netloc}')
+                      conn = http.client.HTTPConnection(parsed_url.netloc)
+                  conn.request("GET", parsed_url.path or "/")
+                  response = conn.getresponse()
+                  logger.debug(f'response.status: {response.status}')
+                  if 200 <= response.status < 400:
+                      logger.info(f'Health check OK. Status: {response.status}')
+                      return True
+                  else:
+                      logger.info(f'Health check failed. Status: {response.status}')
+                      return False
+              except Exception as e:
+                  logger.error(e, exc_info=True)
+                  return False
+              finally:
+                  if 'conn' in locals():
+                      conn.close()
+
+          def lambda_handler(event, context):
+              logger.debug(f'event: {event}')
+              try:
+                  if event['RequestType'] != 'Create':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='No action to take')
+                  else:
+                      sleep_ms = int(os.environ.get('RetrySleep'))
+                      abort_time_remaining_ms = int(os.environ.get('AbortTimeRemaining'))
+                      resource_properties = event['ResourceProperties']
+                      url = resource_properties['Url']
+
+                      logger.info(f'Testing url: {url}')
+
+                      time_remaining_ms = context.get_remaining_time_in_millis()
+                      attempt_no = 0
+                      health_check = False
+                      while (attempt_no == 0 or (time_remaining_ms > abort_time_remaining_ms and not health_check)):
+                          attempt_no += 1
+                          logger.info(f'Attempt: {attempt_no}. Time Remaining: {time_remaining_ms/1000}s')
+                          health_check = healthURLOk(url)
+                          if not health_check:
+                              logger.debug(f'Health check failed. Sleeping: {sleep_ms/1000}s')
+                              time.sleep(sleep_ms/1000)
+                          time_remaining_ms = context.get_remaining_time_in_millis()
+                      if health_check:
+                          logger.info(f'Health check successful. Attempts: {attempt_no}')
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='Workshop healthcheck successful')
+                      else:
+                          logger.info(f'Health check failed. Timed out after {attempt_no} attempts')
+                          cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason='Workshop healthcheck failed')
+              except Exception as e:
+                  logger.error(e, exc_info=True)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason=str(e))
+
+  WorkshopHealthCheck:
+    Type: Custom::WorkshopHealthCheckLambda
+    DependsOn: CheckSsmDocCustom
+    Properties:
+      ServiceToken: !GetAtt WorkshopHealthCheckLambda.Arn
+      ServiceTimeout: 610
+      Url: !Sub https://${CloudFrontDistribution.DomainName}/
+
+  # Probe the Stage 2 console's health endpoint through CloudFront/nginx so a
+  # console that failed to start fails the stack-create LOUDLY rather than leaving
+  # attendees with a dead URL. /api/health is served by the console on :8081 and
+  # is the cheapest 200 that proves the service is up end-to-end.
+  ConsoleHealthCheck:
+    Type: Custom::WorkshopHealthCheckLambda
+    DependsOn: CheckSsmDocCustom
+    Properties:
+      ServiceToken: !GetAtt WorkshopHealthCheckLambda.Arn
+      ServiceTimeout: 610
+      Url: !Sub https://${CloudFrontDistribution.DomainName}/api/health
+
+  RunSsmDocLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /${AWS::StackName}/RunSsmDocLambda
+      RetentionInDays: 90
+
+  RunSsmDocLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AmazonEC2AndSSM
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:document/${WorkshopSsmDoc}
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:document/AmazonCloudWatch-ManageAgent
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/${WorkshopInstance}
+              - Effect: Allow
+                Action:
+                  - ssm:GetCommandInvocation
+                  - ssm:ListCommandInvocations
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:*
+
+  RunSsmDocLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Run SSM document on workshop instance
+      Handler: index.lambda_handler
+      Role: !GetAtt RunSsmDocLambdaRole.Arn
+      Architectures:
+        - arm64
+      Runtime: python3.11
+      MemorySize: 128
+      Timeout: 600
+      Environment:
+        Variables:
+          RetrySleep: 2900
+          AbortTimeRemaining: 3200
+      LoggingConfig:
+        LogGroup: !Ref RunSsmDocLambdaLogGroup
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import logging
+          import time
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              logger.debug(f'event: {event}')
+              logger.debug(f'context: {context}')
+
+              if event['RequestType'] != 'Create':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='No action to take')
+              else:
+                  sleep_ms = int(os.environ.get('RetrySleep'))
+                  abort_time_remaining_ms = int(os.environ.get('AbortTimeRemaining'))
+                  resource_properties = event['ResourceProperties']
+                  instance_id = resource_properties['InstanceId']
+                  document_name = resource_properties['DocName']
+                  cloudwatch_log_group_name = resource_properties['CwLogGroup']
+                  code_server_password = resource_properties['CodeServerPassword']
+                  kiro_api_key = resource_properties.get('KiroApiKey', '')
+                  cognito_pool_id = resource_properties.get('CognitoUserPoolId', '')
+                  cognito_client_id = resource_properties.get('CognitoClientId', '')
+                  cognito_client_secret = resource_properties.get('CognitoClientSecret', '')
+                  cognito_domain = resource_properties.get('CognitoDomain', '')
+
+                  logger.info(f'Running SSM Document {document_name} on EC2 instance {instance_id}. Logging to {cloudwatch_log_group_name}')
+
+                  # NOTE: do NOT log `parameters`; it carries the Kiro vendor key AND the
+                  # Cognito client secret. They transit SSM send_command parameters (same
+                  # path as CodeServerPassword); on the box they land only in the 0600
+                  # /etc/stage2-console.env, never in the world-readable unit or on stdout.
+                  parameters = {'CodeServerPassword': [code_server_password],
+                                'KiroApiKey': [kiro_api_key],
+                                'CognitoUserPoolId': [cognito_pool_id],
+                                'CognitoClientId': [cognito_client_id],
+                                'CognitoClientSecret': [cognito_client_secret],
+                                'CognitoDomain': [cognito_domain]}
+
+                  retry = True
+                  attempt_no = 0
+                  time_remaining_ms = context.get_remaining_time_in_millis()
+
+                  ssm = boto3.client('ssm')
+
+                  while (retry == True):
+                      attempt_no += 1
+                      logger.info(f'Attempt: {attempt_no}. Time Remaining: {time_remaining_ms/1000}s')
+                      try:
+                          response = ssm.send_command(
+                              InstanceIds = [instance_id],
+                              DocumentName = document_name,
+                              CloudWatchOutputConfig = {'CloudWatchLogGroupName': cloudwatch_log_group_name, 'CloudWatchOutputEnabled': True},
+                              Parameters = parameters
+                          )
+                          logger.debug(f'response: {response}')
+                          command_id = response['Command']['CommandId']
+                          responseData = {'CommandId': command_id}
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, reason='OK')
+                          retry = False
+
+                      except ssm.exceptions.InvalidInstanceId as e:
+                          time_remaining_ms = context.get_remaining_time_in_millis()
+                          if (time_remaining_ms > abort_time_remaining_ms):
+                              logger.info(f'Instance {instance_id} not ready. Sleeping: {sleep_ms/1000}s')
+                              time.sleep(sleep_ms/1000)
+                              retry = True
+                          else:
+                              logger.info(f'Instance {instance_id} not ready, timed out. Time remaining {time_remaining_ms/1000}s < Abort time remaining {abort_time_remaining_ms/1000}s')
+                              logger.error(e, exc_info=True)
+                              cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason='Timed out. Time remaining: ' + str(time_remaining_ms/1000) + 's < Abort time remaining: ' + str(abort_time_remaining_ms/1000) + 's')
+                              retry = False
+
+                      except Exception as e:
+                          logger.error(e, exc_info=True)
+                          # Same 1024-byte Reason cap as above (full trace is in CloudWatch).
+                          cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason=str(e)[:960])
+                          retry = False
+
+  ##### SSM Document Status Check
+  CheckSsmDocLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Check SSM document completion status
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      MemorySize: 128
+      # Bootstrap now takes ~740s end to end (InstallEfsUtils alone is ~5.4min:
+      # it builds amazon-efs-utils from source with a pinned Rust toolchain).
+      # This poller must outlast the full bootstrap, so use Lambda's 900s max.
+      # A 600s timeout aborted ~145s BEFORE bootstrap finished and reported a
+      # false CREATE_FAILED even though every SSM step succeeded.
+      Timeout: 900
+      Environment:
+        Variables:
+          RetrySleep: 2900
+          AbortTimeRemaining: 5000
+      Architectures:
+        - arm64
+      Role: !GetAtt RunSsmDocLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import logging
+          import time
+          import os
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              logger.debug(f'event: {event}')
+              logger.debug(f'context: {context}')
+
+              if event['RequestType'] != 'Create':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='No action to take')
+              else:
+                  sleep_ms = int(os.environ.get('RetrySleep'))
+                  abort_time_remaining_ms = int(os.environ.get('AbortTimeRemaining'))
+                  resource_properties = event['ResourceProperties']
+                  instance_id = resource_properties['InstanceId']
+                  document_name = resource_properties['DocName']
+
+                  logger.info(f'Checking SSM Document {document_name} on EC2 instance {instance_id}')
+
+                  retry = True
+                  attempt_no = 0
+                  time_remaining_ms = context.get_remaining_time_in_millis()
+
+                  ssm = boto3.client('ssm')
+
+                  while (retry == True):
+                      attempt_no += 1
+                      logger.info(f'Attempt: {attempt_no}. Time Remaining: {time_remaining_ms/1000}s')
+                      try:
+                          # check to see if document has completed running on instance
+                          response = ssm.list_command_invocations(
+                              InstanceId=instance_id,
+                              Details=True
+                          )
+                          logger.debug(f'Response: {response}')
+                          for invocation in response['CommandInvocations']:
+                              if invocation['DocumentName'] == document_name:
+                                  invocation_status = invocation['Status']
+                                  if invocation_status == 'Success':
+                                      logger.info(f'SSM Document {document_name} on EC2 instance {instance_id} complete. Status: {invocation_status}')
+                                      cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData={}, reason='OK')
+                                      retry = False
+                                  elif invocation_status == 'Failed' or invocation_status == 'Cancelled' or invocation_status == 'TimedOut':
+                                      logger.info(f'SSM Document {document_name} on EC2 instance {instance_id} failed. Status: {invocation_status}')
+                                      reason = ''
+                                      # Get information on step that failed, otherwise it's cancelled or timeout
+                                      for step in invocation['CommandPlugins']:
+                                          step_name = step['Name']
+                                          step_status = step['Status']
+                                          step_output = step['Output']
+                                          logger.debug(f'Step {step_name} {step_status}: {step_output}')
+                                          if step_status != 'Success':
+                                              try:
+                                                  response_step = ssm.get_command_invocation(
+                                                      CommandId=invocation['CommandId'],
+                                                      InstanceId=instance_id,
+                                                      PluginName=step_name
+                                                  )
+                                                  logger.debug(f'Step details: {response_step}')
+                                                  step_output = response_step['StandardErrorContent']
+                                              except Exception as e:
+                                                  logger.error(e, exc_info=True)
+                                              # FULL output goes to CloudWatch; the cfnresponse Reason field
+                                              # has a HARD 1024-byte limit, so keep only the TAIL of this
+                                              # step's stderr (the real error is at the end of a traceback).
+                                              logger.info(f'Step {step_name} {step_status}: {step_output}')
+                                              step_tail = str(step_output)[-700:]
+                                              if reason == '':
+                                                  reason = f'Step {step_name} {step_status}: {step_tail}'
+                                              else:
+                                                  reason += f'\nStep {step_name} {step_status}: {step_tail}'
+                                      if reason == '':
+                                          reason = f'SSM Document {document_name} on EC2 instance {instance_id} failed. Status: {invocation_status}'
+                                      logger.info(f'{reason}')
+                                      # CloudFormation rejects a custom-resource response whose Reason
+                                      # exceeds 1024 bytes ("Response object is too long"), which would
+                                      # MASK the real failure. Cap it well under that; full detail is in
+                                      # the CheckSsmDocLambda CloudWatch log group.
+                                      reason = (reason[:900] + ' ...[truncated; see CloudWatch /<stack>/RunSsmDocLambda]') if len(reason) > 960 else reason
+                                      cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason=reason)
+                                      retry = False
+                                  else:
+                                      logger.info(f'SSM Document {document_name} on EC2 instance {instance_id} not yet complete. Status: {invocation_status}')
+                                      retry = True
+                          if retry == True:
+                              if (time_remaining_ms > abort_time_remaining_ms):
+                                  logger.info(f'Sleeping: {sleep_ms/1000}s')
+                                  time.sleep(sleep_ms/1000)
+                                  time_remaining_ms = context.get_remaining_time_in_millis()
+                              else:
+                                  logger.info(f'Time remaining {time_remaining_ms/1000}s < Abort time remaining {abort_time_remaining_ms/1000}s')
+                                  logger.info(f'Aborting check as time remaining {time_remaining_ms/1000}s < Abort time remaining {abort_time_remaining_ms/1000}s')
+                                  cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason='Timed out. Time remaining: ' + str(time_remaining_ms/1000) + 's < Abort time remaining: ' + str(abort_time_remaining_ms/1000) + 's')
+                                  retry = False
+                      except Exception as e:
+                          logger.error(e, exc_info=True)
+                          # Same 1024-byte Reason cap as above (full trace is in CloudWatch).
+                          cfnresponse.send(event, context, cfnresponse.FAILED, responseData={}, reason=str(e)[:960])
+                          retry = False
+
+  CheckSsmDocCustom:
+    Type: Custom::CheckSsmDocLambda
+    DependsOn: RunSsmDocCustom
+    Properties:
+      ServiceToken: !GetAtt CheckSsmDocLambda.Arn
+      # Must exceed the poller Lambda's 900s timeout so CloudFormation waits for
+      # the Lambda's own SUCCESS/FAILED response instead of timing out the
+      # custom resource first.
+      ServiceTimeout: 910
+      InstanceId: !Ref WorkshopInstance
+      DocName: !Ref WorkshopSsmDoc
+
+Outputs:
+  WorkshopUrl:
+    Description: Workshop VS Code Server URL
+    Value: !Sub https://${CloudFrontDistribution.DomainName}/?folder=${HomeFolder}
+    Export:
+      Name: !Sub ${AWS::StackName}-WorkshopUrl
+  ConsoleUrl:
+    Description: Stage 2 routed console URL (the orchestrator chat / unified console)
+    Value: !Sub https://${CloudFrontDistribution.DomainName}/console/
+    Export:
+      Name: !Sub ${AWS::StackName}-ConsoleUrl
+  PerUserRoleArn:
+    Description: Stage 3 per-user attribution role (agents assume it with the user as the role-session-name)
+    Value: !GetAtt PerUserAttributionRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-PerUserRoleArn
+
+  OrchestratorRuntimeRoleArn:
+    Description: Execution role used by the Stage 2 orchestrator AgentCore Runtime
+    Value: !GetAtt OrchestratorRuntimeRole.Arn
+    Export:
+      Name: !Sub ${AWS::StackName}-OrchestratorRuntimeRoleArn
+  ConsoleLoginUsername:
+    Description: Username (email) for the console Cognito login
+    Value: !Ref ConsoleLoginEmail
+    Export:
+      Name: !Sub ${AWS::StackName}-ConsoleLoginUsername
+  ConsoleLoginPassword:
+    Description: Password for the console Cognito login (seeded attendee user)
+    # Must use the custom resource's returned attribute, NOT a Secrets Manager
+    # dynamic reference: dynamic references are not resolved in the Outputs section
+    # and would ship as the literal string.
+    Value: !GetAtt ConsoleCognitoSetupCustom.Password
+    Export:
+      Name: !Sub ${AWS::StackName}-ConsoleLoginPassword
+  Password:
+    Condition: VscsPasswordOutput
+    Description: VS Code Server password
+    Value: !GetAtt VscsPasswordCustom.Password
+    Export:
+      Name: !Sub ${AWS::StackName}-Password
+  PasswordSecret:
+    Description: AWS SecretsManager secret for VS Code Server password
+    Value: !Ref VscsPassword
+    Export:
+      Name: !Sub ${AWS::StackName}-PasswordSecret
+  InstanceId:
+    Description: Workshop EC2 instance ID
+    Value: !Ref WorkshopInstance
+  AgentVpcId:
+    Description: Pre-provisioned VPC for the agent runtimes (Stage 1 S3 Files mount)
+    Value: !Ref WorkshopVpc
+  AgentPrivateSubnet1Id:
+    Description: Private subnet 1 for the agent runtime / S3 Files mount targets
+    Value: !Ref AgentPrivateSubnet1
+  AgentPrivateSubnet2Id:
+    Description: Private subnet 2 for the agent runtime / S3 Files mount targets
+    Value: !Ref AgentPrivateSubnet2
+  AgentSecurityGroupId:
+    Description: Security group (NFS 2049) for the agent runtime / S3 Files mount
+    Value: !Ref AgentSecurityGroup

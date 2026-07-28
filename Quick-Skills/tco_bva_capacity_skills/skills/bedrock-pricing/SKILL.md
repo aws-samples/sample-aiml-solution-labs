@@ -3,199 +3,212 @@ name: bedrock-pricing
 description: >
   Use when calculating Amazon Bedrock foundation model inference costs, comparing
   model pricing across tiers/regions, or estimating monthly spend for agentic workloads.
-  Handles Standard/Priority/Flex/Batch tiers, Global/Regional variants, prompt caching
-  savings, multimodal pricing, and multi-turn agent cost modeling.
-  Do NOT use for AgentCore infrastructure pricing (load agentcore-pricing),
-  RPM/TPM capacity planning (load bedrock-capacity), or business value ROI (load agent-business-value).
+  Do NOT use for AgentCore infrastructure (load agentcore-pricing),
+  RPM/TPM capacity (load bedrock-capacity), or business value ROI (load agent-business-value).
 ---
 
 # Bedrock Model Pricing
 
 ## Critical Rules
 
-- **NEVER use training data for prices.** All prices must come from cached JSON files at runtime.
-- **NEVER implement cost formulas manually.** Always use `calculate_agent_cost_with_incremental_caching()`.
-- **If the user describes an agentic workload** (signals: "agent", "multi-agent", "sub-agent", "orchestrator", "agentic"), load `agentcore-pricing` automatically and present combined model + infrastructure costs.
+- **ALWAYS ask for region first.** No default region — never assume one.
+- **ALWAYS ask for model family.** If user hasn't specified (e.g., "Sonnet", "Opus", "Haiku"), ask.
+- **ALWAYS use `list_models()` before `get_model_prices()`.** Present versions to user, let them pick. Never guess "latest."
+- **NEVER use training data for prices.** All prices must come from the local pricing cache files at runtime via `query_model_pricing()`.
+- **NEVER implement cost formulas manually.** Always use `estimate_cost()` or `calculate_agent_session_compounded_cost()`.
+- **NEVER implement token formulas manually.** Always use `calculate_compounded_tokens_for_agent()`, `calculate_rag_subagent_tokens()`, or `calculate_research_subagent_tokens()` for token calculations — if the user is only asking about token usage, not pricing.
+- **NEVER generate your own calculations.** Present function output verbatim — it handles all token math internally.
+- **If user asks for detailed explanation**, read the report file at `result["file_path"]`. Present the information as-is, then explain as needed. Do NOT recompute or manually derive calculations.
+- **ALWAYS run capacity fit check** after calculating pricing using `get_tier_limits_for_model()` and `check_capacity_fit()`. This is not optional — every pricing result must include a capacity verdict for each model in the workload.
+- **All values in code examples are illustrative only.** Always use user-specified values when provided. Prices must always come from the pricing cache, never from examples in this document.
+- **If user describes an agentic workload** ("agent", "multi-agent", "sub-agent"), load `agentcore-pricing` and present combined costs.
 
-## Prerequisites
-
-- Cache files must exist in `~/` (see Cache Files section)
-- If cache is missing or stale (>7 days), instruct user to refresh:
-  ```bash
-  # If USE_IN_KIRO or USE_IN_CLAUDE_CODE is set:
-  python3 tco_bva_capacity_skills/skills/bedrock-pricing/scripts/bedrock_pricing.py --refresh
-  # Otherwise (Quick):
-  python3 ~/.quickwork/skills/bedrock-pricing/scripts/bedrock_pricing.py --refresh
-  ```
-
-## Workflow
-
-### 1. Load the Pricing Script
+## Quick Reference
 
 ```python
+# §Load Script
 import sys, os
 sys.argv = ['bedrock_pricing.py']
-
-if os.environ.get("USE_IN_KIRO") or os.environ.get("USE_IN_CLAUDE_CODE"):
-    script = "tco_bva_capacity_skills/skills/bedrock-pricing/scripts/bedrock_pricing.py"
-else:
-    script = os.path.expanduser("~/.quickwork/skills/bedrock-pricing/scripts/bedrock_pricing.py")
-
-if not os.path.exists(script):
-    raise RuntimeError(
-        f"bedrock_pricing.py not found at: {script}\n"
-        f"If using Kiro/Claude Code, set USE_IN_KIRO=1 or USE_IN_CLAUDE_CODE=1.\n"
-        f"If using Quick, ensure the script is installed at the expected path."
-    )
-
+script = ("tco_bva_capacity_skills/skills/bedrock-pricing/scripts/bedrock_pricing.py"
+          if os.environ.get("USE_IN_KIRO") or os.environ.get("USE_IN_CLAUDE_CODE")
+          else os.path.expanduser("~/.quickwork/skills/bedrock-pricing/scripts/bedrock_pricing.py"))
 exec(open(script).read())
-```
+home = os.path.expanduser("~/bedrock_cache")
 
-This makes all functions available: `query_model_pricing()`, `extract_bedrock_model_prices()`, `calculate_agent_cost_with_incremental_caching()`, and others.
+# 1. Check freshness
+cache_status = check_pricing_data_status()  # handle "missing" → tell user to --refresh
 
-### 2. Look Up Model Prices
+# 2. Resolve model
+models = list_models(home, "us-west-2", "Sonnet")  # → present to user, let them pick
 
-```python
-home = os.path.expanduser("~")
-results = query_model_pricing(home, region_filter="us-east-1", provider_filter="Anthropic", model_filter="Sonnet 4.6")
-prices = extract_bedrock_model_prices(results)
-# Returns: {"input": 3.0, "output": 15.0, "cache_read": 0.3, "cache_write": 3.75}
-```
+# 3. Create session directory (all reports go here)
+session_dir = create_report_session(model_name="Claude Sonnet 4.6", volume=10000)
 
-- If the user does not specify a region, ask which region(s) they want
-- If the user does not specify a tier, use `all_tiers=True` and present a comparison table
-- Default to **Standard Global** for cost calculations unless user picks otherwise
+# 4a. FAST PATH (single agent ONLY — raises error if subagents passed):
+result = estimate_cost(home, "us-west-2", "Claude Sonnet 4.6", 10000, output_dir=session_dir)
 
-### 3. Detect Caching Support
+# 4b. FULL PATH (multi-agent or custom params — REQUIRED for sub-agents):
+prices = get_model_prices(home, "us-west-2", "Claude Sonnet 4.6")
+result = calculate_agent_session_compounded_cost(
+    main_agent_config={**prices, "agent_sessions_per_month": 10000, ...},
+    subagents=[...],
+    output_dir=session_dir,
+)
 
-A model supports prompt caching if `cache_read` and `cache_write` keys exist and are non-None in the extracted prices. Some models (e.g., Amazon Nova) have $0.00 cache write — caching is free for writes.
-
-### 4. Present Assumptions
-
-Show all parameters and their values. Ask the user to confirm before calculating. Key parameters to surface:
-- Sessions per month
-- Questions per session
-- Input/output tokens per question
-- System prompt tokens
-- Number of tools passed and invoked
-- RAG chunks and tokens per chunk
-- Whether prompt caching is enabled (and supported)
-- Tier and variant being used
-
-Only proceed to calculation after user confirms or adjusts values.
-
-### 5. Calculate Cost
-
-```python
-result = calculate_agent_cost_with_incremental_caching(
-    input_price=prices["input"],
-    output_price=prices["output"],
-    cache_read_price=prices["cache_read"],
-    cache_write_price=prices["cache_write"],
-    sessions_per_month=100_000,
-    questions_per_session=5,
-    input_tokens=100,
-    output_tokens=100,
-    system_prompt_tokens=1000,
-    tools_passed_to_agent=10,
-    tool_spec_tokens=100,
-    rag_chunks=10,
-    rag_tokens_per_chunk=300,
-    tools_invoked=5,
-    tool_call_tokens=100,
-    tool_result_tokens=100,
+# 5. Capacity (ALWAYS — not optional)
+tier_limits = get_tier_limits_for_model(home, "Claude Sonnet 4.6", "us-west-2")
+cap = check_capacity_fit(
+    capacity_profile=result["capacity_profile"]["main_agent"],
+    questions_per_month=50000, tier_limits=tier_limits, output_dir=session_dir,
 )
 ```
 
-Pass all workload-specific values as arguments. The function handles incremental prefix caching, multi-turn compounding, and session-aware Q1/Q2+ logic internally.
+## Workflow
+
+### 1. Check Pricing Data Freshness (once per session)
+
+```python
+cache_status = check_pricing_data_status()
+```
+
+- `"ok"` — proceed.
+- `"stale"` — warn user, suggest refresh, proceed with available data.
+- `"missing"` — **stop.** Tell user to run the refresh command from `cache_status["refresh_command"]`.
+
+### 2. Resolve Model
+
+```python
+models = list_models(home, "us-west-2", "Sonnet")
+# → ["Claude 3 Sonnet", "Claude 3.5 Sonnet", ..., "Claude Sonnet 4.6"]
+```
+
+- Present the list to user, ask which version.
+- Empty list → no models for that family/region.
+- User provides exact model name upfront → skip to Step 3.
+
+### 3. Present Assumptions
+
+Before calculating, confirm parameters with the user:
+- Sessions per month
+- Questions per session (default: 5)
+- Tools passed / invoked per question
+- System prompt tokens
+- Input/output tokens per question
+- For multi-agent: which sub-agents, their models, invocation pattern
+
+Only proceed after user confirms or adjusts values.
+
+### 4. Calculate Cost
+
+**Always create a session directory first** — all reports (pricing, capacity, agentcore, BVA) go here:
+
+```python
+session_dir = create_report_session(model_name="Claude Sonnet 4.6", volume=10000)
+```
+
+**Fast path** — **single agent ONLY.** For multi-agent, you MUST use the full path below:
+
+```python
+result = estimate_cost(home, "us-west-2", "Claude Sonnet 4.6", 10000, output_dir=session_dir)
+# Pass any override as keyword: questions_per_agent_session=3, system_prompt_tokens=4000
+```
+
+**Full path** — multi-agent or custom sub-agents:
+
+```python
+
+main_prices = get_model_prices(home, "us-west-2", "Claude Sonnet 4.6")
+rag_prices = get_model_prices(home, "us-west-2", "Nova 2.0 Lite")
+
+result = calculate_agent_session_compounded_cost(
+    main_agent_config={
+        **main_prices,
+        "agent_sessions_per_month": 10000,
+        "questions_per_agent_session": 5,
+        "tools_passed_to_agent": 10,
+        "tools_invoked": 5,
+    },
+    subagents=[
+        {
+            "type": "rag",
+            "token_params": {"rag_n_chunks": 10, "rag_chunk_size": 300, "output_tokens": 300},
+            "model_prices": rag_prices,
+            "questions_invoked": 3,
+        },
+        {
+            "type": "research",
+            "token_params": {"n_research_iterations": 4, "output_tokens": 1000},
+            "model_prices": research_prices,
+            "questions_invoked": 0,  # 0 = pre-session (output cached in system prompt)
+        },
+    ],
+    output_dir=session_dir,
+)
+```
+
+**Key rules for sub-agents:**
+- `questions_invoked=0` → pre-session (output added to system_prompt, cached)
+- `questions_invoked=N` → invoked as tool in the first N questions
+- `tools_invoked` must be >= number of sub-agents with `questions_invoked > 0`
+- Sub-agent models that support caching (non-None `cache_read_price`) get caching automatically
+
+### 5. Detect Prompt Caching Support
+
+A model supports caching if `cache_read_price` and `cache_write_price` are non-None in `get_model_prices()` output. Some models (Nova) have `cache_write_price=0.0` — caching is free for writes.
 
 ### 6. Present Results
 
-1. Show a summary markdown table with: monthly cost (cached), no-cache baseline, savings %, per-session and per-question costs
-2. Include cache file timestamps to show data freshness
-3. Offer: *"Want to see the step-by-step breakdown?"*
-
-- If user asks for the breakdown, read `result["explanation"]` (already computed — no re-run needed) and format as markdown headers + bullet lists
-
-### 7. Detect Agentic Workloads
-
-- If the user's request involves agents, multi-agent architectures, or orchestrators:
-  1. Load `agentcore-pricing` skill
-  2. Calculate AgentCore infrastructure costs (Runtime, Gateway, Memory)
-  3. Present **combined total** (model + infrastructure) — never model-only for agentic workloads
-
-## Tier and Variant Options
+The function writes a full report and returns a compact summary:
 
 ```python
-# All tiers comparison (when user doesn't specify)
-all_prices = extract_bedrock_model_prices(results, all_tiers=True)
-
-# Specific tier/variant combinations
-prices = extract_bedrock_model_prices(results, variant="Regional")
-prices = extract_bedrock_model_prices(results, tier="Priority")
-prices = extract_bedrock_model_prices(results, tier="Batch")
-prices = extract_bedrock_model_prices(results, tier="Flex", variant="Regional")
-
-# Multimodal models (Nova — includes image/audio/video pricing)
-prices = extract_bedrock_model_prices(results, include_multimodal=True)
+{
+    "file_path": "~/bedrock_reports/...",
+    "monthly_total": 3247.48,
+    "annual_total": 38969.70,
+    "session_total": 0.324748,
+    "savings_pct": 60.9,
+    "recommended_ttl": "5min",
+    "capacity_profile": {...},  # pass to check_capacity_fit()
+}
 ```
 
-Only show tiers that exist for the model — not all models have all tiers.
+- Present as markdown table. Include `file_path` for the user.
+- If `_file_write_failed: True` → full result is inline; render `token_table` verbatim.
 
-## Cache Files
+### 7. Capacity Fit Check (MANDATORY — run for every pricing result)
 
-| File | Contents |
-|------|----------|
-| `~/bedrock_pricing.json` | 1P Amazon models + newer 3P models |
-| `~/bedrock_pricing_3p.json` | 3P Marketplace models (Anthropic, etc.) |
-| `~/bedrock_pricing_service.json` | Very new models |
+Run `check_capacity_fit()` for **each model** in the workload. Do not skip this step.
 
-## Model Defaults
+```python
+tier_limits = get_tier_limits_for_model(home, "Claude Sonnet 4.6", "us-west-2")
+cap_result = check_capacity_fit(
+    capacity_profile=result["capacity_profile"]["main_agent"],
+    questions_per_month=50000,
+    tier_limits=tier_limits,
+    output_dir=session_dir,
+)
+# Returns compact: fits, utilization %, recommendations, report_file
+```
 
-| Parameter | Default | Notes |
-|-----------|---------|-------|
-| Region | (ask user) | No default — always confirm |
-| Service tier | Standard | Standard/Priority/Flex/Batch |
-| Inference variant | Global (cross-region) | Global or Regional |
-| Input tokens/question | 100 | User's question text |
-| Output tokens/question | 100 | Model's response text |
-| System prompt tokens | 1,000 | Sent with every LLM call |
-| Tools passed to agent | 10 | Number of tools in schema |
-| Tool spec tokens | 100 | Tokens per tool specification |
-| Tools invoked/question | 5 | Tool calls per question |
-| Tool result tokens | 100 | Tokens per tool result |
-| Prompt caching | Enabled | Default ON for supported models |
-| RAG chunks | 10 | Per question |
-| Tokens per RAG chunk | 300 | |
+- If `tier_limits` is None → warn user quota data is missing, suggest `--refresh`
+- If workload doesn't fit → present recommendations from the result
+- For multi-agent: check each distinct model separately
 
-## Explanation Rendering
+### 8. Completeness Check (MANDATORY)
 
-Every cost function returns `result["explanation"]` with structured breakdown sections:
+| # | Check | Condition | Action if not done |
+|---|-------|-----------|-------------------|
+| 1 | **Capacity fit for EVERY model** | Always (every pricing result) | Run `check_capacity_fit()` per distinct model — this is NOT optional |
+| 2 | AgentCore costs included | Agentic workload | Load `agentcore-pricing` skill, present combined total |
+| 3 | Reports grouped in one folder | Always | Call `create_report_session()` once at the start, pass `output_dir=session_dir` to every function that writes a report |
+| 4 | Multiple scenarios stay separate | User asks for comparisons | Create a separate session directory per scenario |
 
-| Section | What it shows |
-|---------|---------------|
-| `token_profile` | Token counts per turn |
-| `turn_by_turn_q1` | Q1 cache split per turn |
-| `cross_question_caching` | Q2+ cache behavior |
-| `cache_math` | Monthly cache read/write/regular totals |
-| `no_cache_baseline` | Cost without caching |
-| `monthly_rollup` | Final monthly/annual totals |
-| `prices_used` | Prices from cache (for auditability) |
+## Token-Only Calculations
 
-### Rules for rendering explanations:
-- Default: show summary only, offer breakdown on demand
-- Always use markdown — never HTML artifacts or `<details>` tags
-- Never re-compute — the explanation dict is already in memory
-- For multi-agent estimates, show all agents' breakdowns
-
-## Output Format
-
-All outputs must include:
-- Cache file timestamps (data freshness indicator)
-- Markdown tables grouped by Region → Provider → Model → Tier
-- Both monthly and annual totals
-- Savings % vs no-caching baseline
-- All prices sourced from cache — never from training data
+If user asks about token usage (not pricing), no cache files needed:
+- `calculate_compounded_tokens_for_agent()` — main agent session tokens
+- `calculate_rag_subagent_tokens()` — RAG sub-agent tokens
+- `calculate_research_subagent_tokens()` — research sub-agent tokens
 
 ## Related Skills
 

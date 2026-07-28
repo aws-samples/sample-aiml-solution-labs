@@ -2,54 +2,62 @@
 name: agent-business-value
 description: >
   Use when calculating business value, ROI, or cost justification for AI agents.
-  Handles three dimensions: (1) Time Savings as productivity increase or cost reduction,
-  (2) Customer Churn Reduction from better CX, (3) Sales Increase from better CX.
+  Three dimensions: (1) Time Savings, (2) Customer Churn Reduction, (3) Sales Increase.
   Works standalone or alongside bedrock-pricing/agentcore-pricing estimates.
   Do NOT use for model pricing (load bedrock-pricing),
-  AgentCore infrastructure costs (load agentcore-pricing), or capacity planning (load bedrock-capacity).
+  AgentCore costs (load agentcore-pricing), or capacity planning (load bedrock-capacity).
 ---
 
 # Agent Business Value
 
 ## Critical Rules
 
-- **ALWAYS use `calculate_business_value()` to produce estimates.** Never implement business value formulas manually.
-- **Dimensions 1a and 1b are mutually exclusive** — same time savings, different framing (revenue uplift vs. labor cost reduction). Never add them together.
-- **Dimensions 2 and 3 are optional add-ons** — additive with Dim 1 (different value streams). Only apply to customer-facing agents.
-- **Agent cost is deducted once from grand total**, not per dimension.
-- **Never fabricate customer data** — if web lookup fails, say so and ask the user.
+- **ALWAYS use `calculate_business_value()`.** Never implement business value formulas manually.
+- **ALWAYS present assumptions to user and confirm** before running the calculation.
+- **Agent cost is deducted once** from grand total, not per dimension.
+- **Never fabricate customer data.** If lookup fails, say so and ask the user.
+- **All values in code examples are illustrative only.** Always use user-specified values when provided.
+- **If user asks for detailed explanation**, read the report file at `result["file_path"]`. Present the information as-is, then explain as needed. Do NOT recompute or manually derive calculations.
 
-## Prerequisites
+## Business Value Facts (always apply)
 
-- The pricing script must be loaded (provides `calculate_business_value()`)
-- If combining with a pricing estimate, `bedrock-pricing` or `agentcore-pricing` should have already run in the conversation (to provide `agent_cost_monthly`)
+- **Dim 1a (Productivity Increase)** frames time savings as revenue uplift — how much more revenue can employees generate with freed time.
+- **Dim 1b (Cost Savings)** frames the same time savings as labor cost reduction — how many FTE-equivalents are freed.
+- **Dims 1a and 1b are mutually exclusive.** Same time savings, different framing. NEVER add them together.
+- **Dims 2 and 3 are optional add-ons.** Additive with Dim 1 (different value streams). Only for customer-facing agents.
+- **Three tiers** (Conservative/Moderate/Optimistic) are always computed for Dim 1 — present all three to give stakeholders a range.
+
+## Quick Reference
+
+```python
+# §Load Script
+import sys, os
+sys.argv = ['bedrock_pricing.py']
+script = ("tco_bva_capacity_skills/skills/bedrock-pricing/scripts/bedrock_pricing.py"
+          if os.environ.get("USE_IN_KIRO") or os.environ.get("USE_IN_CLAUDE_CODE")
+          else os.path.expanduser("~/.quickwork/skills/bedrock-pricing/scripts/bedrock_pricing.py"))
+exec(open(script).read())
+
+# 1. Create session directory
+session_dir = create_report_session(label="roi-analysis", volume=10000)
+
+# 2. Get agent cost (from prior pricing run or user-provided)
+agent_cost_monthly = bedrock_cost["monthly_total"] + agentcore_cost["total_monthly"]
+
+# 3. Calculate business value
+result = calculate_business_value(
+    sessions_per_month=10000,
+    agent_cost_monthly=agent_cost_monthly,
+    output_dir=session_dir,
+)
+# Returns: grand_total_annual, roi_pct, payback_days, net_value_annual
+```
 
 ## Workflow
 
-### 1. Load the Pricing Script
+### 1. Present Dimension Menu
 
-```python
-import sys, os
-sys.argv = ['bedrock_pricing.py']
-
-if os.environ.get("USE_IN_KIRO") or os.environ.get("USE_IN_CLAUDE_CODE"):
-    script = "tco_bva_capacity_skills/skills/bedrock-pricing/scripts/bedrock_pricing.py"
-else:
-    script = os.path.expanduser("~/.quickwork/skills/bedrock-pricing/scripts/bedrock_pricing.py")
-
-if not os.path.exists(script):
-    raise RuntimeError(
-        f"bedrock_pricing.py not found at: {script}\n"
-        f"If using Kiro/Claude Code, set USE_IN_KIRO=1 or USE_IN_CLAUDE_CODE=1.\n"
-        f"If using Quick, ensure the script is installed at the expected path."
-    )
-
-exec(open(script).read())
-```
-
-### 2. Present Dimension Menu
-
-Show the user which dimensions are available and ask which apply:
+Ask user which dimensions apply:
 
 | # | Dimension | Default | Notes |
 |---|-----------|---------|-------|
@@ -58,10 +66,10 @@ Show the user which dimensions are available and ask which apply:
 | **2** | Customer Churn Reduction | Unselected | Customer-facing agents only |
 | **3** | Sales Increase from Better CX | Unselected | Customer-facing agents only |
 
-- If user asks for Dims 2 or 3 without a customer name, prompt for it
-- Do NOT auto-include Dims 2/3 — only for customer-facing agents
+- If user asks for Dims 2 or 3 without a customer name, ask for it.
+- Do NOT auto-include Dims 2/3.
 
-### 3. Customer Data Lookup (if customer name provided)
+### 2. Customer Data Lookup (if customer name provided)
 
 Search for: annual revenue, employees, customer base, churn rate, industry.
 
@@ -70,23 +78,26 @@ Search: "{customer_name} annual revenue employees headcount 2024 2025"
 revenue_per_hour = annual_revenue / employees / 2000
 ```
 
-- Be transparent — share what you found, note gaps, let user decide
-- For Dims 2/3: also search for total customers, churn rate, annual sales revenue
+- Be transparent — share what you found, note gaps, let user decide.
+- For Dims 2/3: also search for total customers, churn rate, annual sales revenue.
 
-### 4. Present Assumptions
+### 3. Present Assumptions
 
-Show all parameters and their values. Ask user to confirm before calculating:
-- Sessions per month
-- Agent cost (from prior pricing run or user-provided)
-- Time without AI vs. time with AI
+Show all parameters and values. Ask user to confirm before calculating:
+- Sessions per month, agent cost
+- Time without AI vs. with AI
 - Agent effectiveness % and efficiency factor %
 - Human cost/hr and revenue/hr
-- For Dim 2: total customers, churn rates, revenue per customer
-- For Dim 3: annual sales revenue, sales increase %
+- Dim 2: total customers, churn rates, revenue per customer
+- Dim 3: annual sales revenue, sales increase %
 
-### 5. Calculate Business Value
+Only proceed after user confirms or adjusts values.
+
+### 4. Calculate
 
 ```python
+session_dir = create_report_session(label="roi-analysis", volume=1000000)
+
 result = calculate_business_value(
     sessions_per_month=1_000_000,
     agent_cost_monthly=44497,
@@ -103,79 +114,58 @@ result = calculate_business_value(
     # Dim 3 (set annual_sales_revenue=0 to skip)
     annual_sales_revenue=100_000_000,
     sales_increase_pct=10.0,
+    # Report
+    output_dir=session_dir,
 )
 ```
 
-### 6. Present Results
+### 5. Present Results
 
-Structure the output as:
-1. **Selected dimensions** — which ones were calculated
-2. **Assumptions table** — all inputs with sources
-3. **Per-dimension results** — show all 3 tiers (conservative/moderate/aggressive) for Dim 1
-4. **Grand total** — combined value, net of agent cost, ROI %, payback days
-5. **Research citations** — BCG, Harvard, Gartner references that support defaults
-6. **Sensitivity note** — which parameters have the biggest impact
+The function writes a detailed report and returns:
 
-- Show annual projections — monthly looks small to stakeholders
-- Auto-detect agent cost from prior pricing runs in the conversation
+```python
+{
+    "file_path": "~/bedrock_reports/.../business-value.md",
+    "grand_total_annual": 5400000.00,
+    "net_value_annual": 4866000.00,
+    "roi_pct": 912,
+    "payback_days": 36,
+    "dim1_moderate_annual": 4680000.00,
+    "dim2_annual": 500000.00,
+    "dim3_annual": 220000.00,
+    "agent_cost_annual": 534000.00,
+}
+```
+
+Present:
+1. **Key metrics** — ROI, payback, net value
+2. **Grand total** — combined annual value, net of agent cost
+3. **File reference** — point user to report for detailed breakdown
+
+- Show annual projections (monthly looks small to stakeholders)
+- Always show all 3 tiers for Dim 1 (Conservative/Moderate/Optimistic)
+- If `_file_write_failed: True` → full result is inline, format all dimensions
+
+### 6. Completeness Check (MANDATORY)
+
+| # | Check | Condition | Action |
+|---|-------|-----------|--------|
+| 1 | Assumptions confirmed | Always | Present all parameters to user before calculating |
+| 2 | Agent cost sourced correctly | Always | From pricing result or user-provided — never guessed |
+| 3 | Reports in session directory | Multiple calculations | Use `create_report_session()` + `output_dir` |
+| 4 | All 3 tiers shown for Dim 1 | Always | Conservative/Moderate/Optimistic range |
 
 ### 7. Offer Follow-ups
 
-- Add more dimensions
+- Add/change dimensions
 - Adjust assumptions
 - Different customer
 - Switch between 1a and 1b
-
-## Defaults & Sources
-
-### Dimension 1: Time Savings
-
-| Parameter | Default | Source |
-|-----------|---------|--------|
-| Time without AI | 20 min | BCG: 30–50% acceleration |
-| Time with AI | 10 min | 50% reduction |
-| Agent effectiveness | 65% (moderate) | Harvard/BCG: 40% quality lift |
-| Efficiency factor | 60% (moderate) | Gartner: reclaimed time utilization |
-| Human cost/hr | $75 | McKinsey/BCG fully-loaded range |
-| Revenue/hr | $300 | ~$600K rev/employee fallback |
-
-### Dimension 2: Churn Reduction
-
-| Parameter | Default | Source |
-|-----------|---------|--------|
-| Churn without AI | 2% monthly | SaaS/enterprise typical |
-| Churn with AI | 1% monthly | AI churn prediction 82% accuracy |
-| Total customers | 100,000 | Ask user / web lookup |
-| Revenue/customer/yr | $1,000 | Ask user / web lookup |
-
-### Dimension 3: Sales Increase
-
-| Parameter | Default | Source |
-|-----------|---------|--------|
-| Sales increase % | 10% | BCG: 15–20% in general trade |
-| Annual sales revenue | $100M | Ask user / web lookup |
-
-## Explanation Rendering
-
-`result["explanation"]` contains:
-
-| Section | What it shows |
-|---------|---------------|
-| `dim1_time_savings` | Hours saved, productive hours, value calculation |
-| `dim2_churn_reduction` | Customers retained, revenue preserved (if Dim 2 selected) |
-| `dim3_sales_increase` | Revenue uplift from better CX (if Dim 3 selected) |
-| `summary` | Grand total, net value, ROI, payback period |
-
-### Rules for rendering:
-- Default: show summary with per-dimension totals and ROI
-- On demand: format full explanation as markdown
-- Always use markdown — never HTML artifacts or `<details>` tags
-- Always show all 3 tiers for Dim 1 — gives stakeholders a range
 
 ## Related Skills
 
 | Skill | When to load |
 |-------|-------------|
-| `bedrock-pricing` | Need model cost to feed into `agent_cost_monthly` |
-| `agentcore-pricing` | Need infrastructure cost to feed into `agent_cost_monthly` |
+| `bedrock-pricing` | Need model cost to feed `agent_cost_monthly` |
+| `agentcore-pricing` | Need infrastructure cost to feed `agent_cost_monthly` |
 | `bedrock-capacity` | Verify workload fits before building business case |

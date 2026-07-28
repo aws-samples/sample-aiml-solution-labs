@@ -1,7 +1,16 @@
+# Kiro workspace files
+.kiro/
+
+# Tests (local only)
+tests/
+
 # Internal skills — not published to GitHub
 skills/bedrock-cost-qa/
 skills/bedrock-cost-test-generator/
 skills/bedrock-pricing/pricing_spec_v1.1.md
+
+# Claude Code
+CLAUDE.md
 
 # OS files
 .DS_Store
