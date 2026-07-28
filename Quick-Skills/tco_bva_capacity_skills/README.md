@@ -1,4 +1,4 @@
-# Bedrock Agent Pricing & Business Value Skills
+# Bedrock and AgentCore Pricing & Business Value Skills
 
 A 4-skill toolkit for estimating costs, planning capacity, and calculating business value for Amazon Bedrock agent workloads. Works with **Quick Desktop**, **Kiro**, and **Claude Code**. All pricing data comes from live AWS Pricing API — never from model training data.
 
