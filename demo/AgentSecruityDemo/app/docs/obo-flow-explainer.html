@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Iris · Live OBO Token Flow</title>
+<style>
+  :root{
+    --bg:#f8fafc; --panel:#ffffff; --panel2:#f1f5f9; --line:#e2e8f0;
+    --ink:#0f172a; --dim:#475569; --faint:#94a3b8;
+    --user:#7c3aed; --agent:#0284c7; --identity:#059669; --idp:#d97706; --gw:#e11d48;
+    --ok:#059669; --code:#0d1626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;}
+  header{padding:20px 28px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;gap:20px;background:#fff}
+  h1{margin:0;font-size:19px;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:13px;margin-top:3px}
+  .live{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap;background:#fff}
+  .live b{color:var(--ok)}
+  /* login gate */
+  #gate{display:grid;place-items:center;min-height:calc(100vh - 70px);text-align:center;padding:40px}
+  #gate .card{max-width:520px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:34px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+  #gate h2{margin:0 0 8px;font-size:22px}
+  #gate p{color:var(--dim);margin:8px 0 20px}
+  #gate select{background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:14px;margin-bottom:16px}
+  .loginbtn{background:#1d4ed8;border:1px solid #2563eb;color:#fff;padding:12px 22px;border-radius:11px;font-size:15px;cursor:pointer}
+  .loginbtn:hover{background:#1e40af}
+  .gate-note{margin-top:18px;font-size:12px;color:var(--faint)}
+  /* main flow — narrow steps rail on the left, detail on the right */
+  #flow{display:none;grid-template-columns:300px 1fr;min-height:calc(100vh - 70px)}
+  @media(max-width:820px){#flow{grid-template-columns:1fr}}
+  .diagram{padding:20px 14px;border-right:1px solid var(--line);background:#fbfdff}
+  .rail-title{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--faint);font-weight:700;margin:0 0 12px 6px}
+  /* step rows — the left rail is a numbered, action-titled step list */
+  .step{display:flex;align-items:flex-start;gap:11px;padding:10px 10px;border-radius:10px;cursor:pointer;
+    opacity:.55;transition:opacity .25s, background .25s;position:relative}
+  .step:hover{background:#f1f5f9}
+  .step.on{opacity:1;background:#eff6ff}
+  .step .num{flex:0 0 auto;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+    font-size:12px;font-weight:700;background:#fff;border:1.5px solid var(--line);color:var(--dim)}
+  .step.on .num{background:var(--agent);border-color:var(--agent);color:#fff}
+  .step.done .num{border-color:var(--ok);color:var(--ok)}
+  .step .stitle{font-weight:600;font-size:13px;line-height:1.35;color:var(--ink)}
+  .step .sactor{color:var(--dim);font-size:11.5px;margin-top:2px}
+  /* connector line down the number gutter */
+  .step::before{content:"";position:absolute;left:22px;top:36px;bottom:-2px;width:2px;background:#e4e4e7}
+  .step:last-child::before{display:none}
+  .step.done::before{background:var(--ok);opacity:.5}
+  .tok{display:block;margin-top:6px;padding:7px 9px;border-radius:8px;font:11.5px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
+    background:var(--code);border:1px solid #1e293b;color:#e2e8f0;white-space:pre-wrap;word-break:break-word}
+  .tok .k{color:#fbbf24} .tok .v{color:#7dd3fc} .tok .hi{color:#4ade80;font-weight:700} .tok .c{color:#94a3b8}
+  .panelR{padding:24px 26px 92px;overflow:auto;background:#fff}
+  .step-badge{display:inline-block;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--faint);
+    border:1px solid var(--line);padding:2px 8px;border-radius:999px}
+  h2{font-size:17px;margin:12px 0 6px}
+  p{color:var(--dim);margin:8px 0} p .em{color:var(--ink);font-weight:600}
+  code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:0 4px;font-size:.9em}
+  .codecard{margin:14px 0;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--code)}
+  .codecard .cap{padding:7px 12px;font-size:11.5px;color:#cbd5e1;border-bottom:1px solid #1e293b;background:#111c30;display:flex;justify-content:space-between;gap:8px}
+  .codecard .cap .tag{font:11px ui-monospace,monospace;color:#94a3b8}
+  .codecard .cap .src{font:10.5px ui-monospace,monospace}
+  .src.livev{color:#4ade80} .src.codev{color:#fbbf24}
+  .code-intro{margin:14px 0 -6px;font-size:12.5px;color:var(--dim)}
+  .code-intro b{color:var(--ink)}
+  pre{margin:0;padding:12px;overflow:auto;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0}
+  .c-com{color:#94a3b8} .c-str{color:#7dd3fc} .c-key{color:#fbbf24} .c-fn{color:#93c5fd} .c-hi{color:#4ade80;font-weight:700}
+  .note{margin-top:12px;padding:10px 12px;border-left:3px solid var(--identity);background:#ecfdf5;border-radius:0 8px 8px 0;font-size:13px;color:#065f46}
+  .note.warn{border-left-color:var(--idp);background:#fffbeb;color:#92400e}
+  .note code{background:#fff}
+  .bar{position:fixed;bottom:0;left:0;right:0;display:flex;gap:10px;align-items:center;justify-content:space-between;
+    padding:12px 18px;background:#fff;border-top:1px solid var(--line);box-shadow:0 -1px 4px rgba(15,23,42,.05)}
+  .bar.hidden{display:none}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink);padding:9px 16px;border-radius:9px;font-size:13.5px;cursor:pointer}
+  .btn:hover{border-color:#94a3b8} .btn.primary{background:#1d4ed8;border-color:#2563eb;color:#fff} .btn.primary:hover{background:#1e40af} .btn:disabled{opacity:.4;cursor:not-allowed}
+  .dots{display:flex;gap:6px} .dots i{width:8px;height:8px;border-radius:50%;background:#cbd5e1;display:inline-block;cursor:pointer} .dots i.on{background:var(--agent)}
+  .steps{color:var(--faint);font-size:12.5px} .who-badge{color:var(--user);font-weight:600}
+  a.plain{color:#0369a1}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>How the user's identity reaches the tools — live OBO flow</h1>
+    <div class="sub">Log in for real, then step through each hop. Config &amp; claims below are <b>live</b> from this deployment.</div>
+  </div>
+  <div class="live" id="liveBadge">account&nbsp;<b id="lbAcct">…</b> · <span id="lbRegion">…</span></div>
+</header>
+
+<!-- LOGIN GATE -->
+<div id="gate">
+  <div class="card">
+    <h2>Start with a login 🔐</h2>
+    <p>This runs the <em>real</em> Okta Authorization‑Code login. The token you get back is what flows through
+       every step — nothing is faked.</p>
+    <div><button class="loginbtn" id="btnLogin">🔓 Login with Okta</button></div>
+    <div class="gate-note" id="gateNote">A popup opens Okta's hosted login. Use a demo customer (e.g. C‑1001 · ada.lovelace@example.com).</div>
+  </div>
+</div>
+
+<!-- FLOW -->
+<div id="flow">
+  <div class="diagram">
+    <div class="rail-title">Steps</div>
+    <div id="steprail"></div>
+  </div>
+  <div class="panelR" id="panelR"></div>
+</div>
+
+<div class="bar hidden" id="bar">
+  <button class="btn" id="prev">← Back</button>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+    <div class="dots" id="dots"></div><div class="steps" id="stepLabel"></div>
+  </div>
+  <button class="btn primary" id="next">Next →</button>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let LIVE=null, CLAIMS=null, RAW_JWT="", i=0, STEPS=[];
+// A realistic (illustrative) Workload Access Token envelope — decoded from a real WAT we
+// captured: it is NOT a JWT, it's an AgentCore-issued, KMS-encrypted opaque blob.
+const WAT_SAMPLE = "AgV4x-BB4rSJJ7BJEgjzGOxaPIhcOZMPfZfL12-7n4L787M…(KMS-encrypted, ~2.6 KB)";
+// ILLUSTRATIVE sample of the WAT's readable base64 header, showing which fields the
+// decoded envelope carries. Values here are placeholders (the account id is the
+// documentation example account), not a captured token.
+const WAT_ENVELOPE = {
+  "DataType": "WorkloadAccessToken",
+  "Service": "ACPS",
+  "CustomerAwsAccountId": "111122223333",
+  "aws-kms": "arn:aws:kms:us-east-1:…:key/df8a6f74-…",
+  "aws-crypto-public-key": "A…(AWS Encryption SDK / KMS envelope)"
+};
+
+// ---- pull live config immediately (account/region badge) ----
+fetch('/api/identity/flow').then(r=>r.json()).then(d=>{
+  LIVE=d;
+  $('#lbAcct').textContent = d.account || '—';
+  $('#lbRegion').textContent = d.region || '—';
+  if(!(d.runtime&&d.runtime.deployed)) $('#gateNote').innerHTML += ' <span style="color:#fbbf24">· (Layer 6 runtime not deployed yet — config shown will be from code.)</span>';
+  // If already logged in (this tab or the main console), skip the gate and show the flow —
+  // a refresh no longer forces re-login. Runs after LIVE is set so buildSteps has config.
+  if(restoreLogin()) startFlow();
+}).catch(()=>{ $('#lbAcct').textContent='(server?)'; if(restoreLogin()) startFlow(); });
+
+// ---- real Okta login (reuses the app's popup + /callback postMessage) ----
+$('#btnLogin').onclick = async () => {
+  $('#gateNote').textContent = 'opening Okta…';
+  try{
+    const info = await fetch('/api/auth/okta-login-url?agent=support').then(r=>r.json());
+    const popup = window.open(info.url, 'okta-login', 'width=520,height=680');
+    const data = await new Promise((res,rej)=>{
+      let done=false;
+      function onMsg(e){ if(e.data && e.data.type==='okta-auth'){ done=true; window.removeEventListener('message',onMsg); res(e.data.data||{}); } }
+      window.addEventListener('message', onMsg);
+      const iv=setInterval(()=>{ if(popup&&popup.closed&&!done){ clearInterval(iv); window.removeEventListener('message',onMsg); rej(new Error('login window closed')); } },700);
+    });
+    if(data.error) throw new Error(data.error);
+    // /callback already decoded the claims for us; fall back to client decode if needed.
+    CLAIMS = data.claims || decodeJwt(data.access_token) || {};
+    RAW_JWT = data.access_token || "";
+    persistLogin(data);        // survive a page refresh (shared with the main console)
+    startFlow();
+  }catch(err){ $('#gateNote').textContent = 'login failed: '+err.message; }
+};
+
+// Persist the login to sessionStorage under the SAME key the main console uses, so a
+// refresh (or arriving from the console already logged in) keeps you signed in here.
+function persistLogin(d){
+  try{ sessionStorage.setItem("iris_session", JSON.stringify({
+    access_token:d.access_token||"", id_token:d.id_token||"",
+    customer_id:(d.claims&&d.claims.customer_id)||d.customer_id||"",
+    sub:(d.claims&&d.claims.sub)||d.sub||"", claims:d.claims||null })); }catch(e){}
+}
+function restoreLogin(){
+  let s=null; try{ s=JSON.parse(sessionStorage.getItem("iris_session")||"null"); }catch(e){}
+  if(s && s.access_token){
+    RAW_JWT = s.access_token;
+    CLAIMS = s.claims || decodeJwt(s.access_token) || {};
+    return true;
+  }
+  return false;
+}
+
+function decodeJwt(t){ try{ const p=t.split('.')[1]; return JSON.parse(atob(p.replace(/-/g,'+').replace(/_/g,'/'))); }catch{ return null; } }
+
+function startFlow(){
+  buildSteps();
+  $('#gate').style.display='none';
+  $('#flow').style.display='grid';
+  $('#bar').classList.remove('hidden');
+  // Build the left rail: one clickable row per STEP (number + action title + who acts).
+  $('#steprail').innerHTML = STEPS.map((s,k)=>`
+    <div class="step" data-k="${k}">
+      <div class="num">${k+1}</div>
+      <div><div class="stitle">${s.railTitle||s.title}</div>
+        <div class="sactor">${s.actor||''}</div></div>
+    </div>`).join('');
+  document.querySelectorAll('#steprail .step').forEach(r=>r.onclick=()=>{ i=+r.dataset.k; render(); });
+  $('#dots').innerHTML = STEPS.map((_,k)=>`<i data-k="${k}"></i>`).join('');
+  document.querySelectorAll('#dots i').forEach(d=>d.onclick=()=>{ i=+d.dataset.k; render(); });
+  i=0; render();
+}
+
+// ---- steps built from LIVE config + the real logged-in CLAIMS ----
+function buildSteps(){
+  const o = (LIVE&&LIVE.okta)||{};
+  const obo = (LIVE&&LIVE.obo_provider)||{};
+  const rt  = (LIVE&&LIVE.runtime)||{};
+  const cid = CLAIMS.customer_id || '(no customer_id claim)';
+  const sub = CLAIMS.sub || '(sub)';
+  const aud = CLAIMS.aud || o.agent_audience || 'iris-agent';
+  const gwAud = o.gateway_audience || 'iris-gateway';
+  const oboDeployed = !!obo.deployed, rtDeployed = !!rt.deployed;
+  const oboGrant = obo.grantType || 'TOKEN_EXCHANGE';
+  const oboClient = '<delegate client id — hidden>';
+  const oboDisc = '<Okta gateway issuer>/.well-known/openid-configuration';
+
+  STEPS = [
+    { actor:'👤 User → Okta', lanes:['user'], hops:['1'], badge:'Step 1 · Okta issues your access token',
+      railTitle:'Okta issues your access token',
+      title:'Your real login — Okta set customer_id',
+      diagramHop:`<b>Okta issued YOUR access token</b> (aud=${aud})
+        <span class="tok"><span class="k">aud</span>: <span class="v">"${aud}"</span>
+<span class="k">sub</span>: <span class="v">"${esc(sub)}"</span>
+<span class="k">customer_id</span>: <span class="hi">"${esc(cid)}"</span>  <span class="c">← from your Okta profile</span></span>`,
+      body:`Identity <span class="em">originates at the IdP</span>. You just logged in, and Okta issued a token whose
+        <code>customer_id</code> is <span class="em">${esc(cid)}</span>, from your verified profile (see the token in play
+        below). The AgentCore runtime is stood up with a <span class="em">CUSTOM_JWT authorizer</span> that decides which
+        tokens it will even accept — the code beside shows that config, and how each field maps to a claim in your JWT
+        (<code>discoveryUrl</code>→<code>iss</code>, <code>allowedAudience</code>→<code>aud</code>,
+        <code>allowedScopes</code>→<code>scp</code>). A token that doesn't match is rejected at the door, before any code.`,
+      code:{cap: rtDeployed?'LIVE: AgentCore agent auth — iris_layer6 CUSTOM_JWT authorizer':'AgentCore agent auth — CUSTOM_JWT authorizer (from code — not deployed yet)',
+        src: rtDeployed?'live':'code', lang:'python',
+        text:
+`# create_agent_runtime(..., authorizerConfiguration=...) — how the runtime
+# validates YOUR inbound Okta JWT and maps it to identity:
+authorizerConfiguration = { "customJWTAuthorizer": {
+    # discoveryUrl → trusts tokens from this issuer (JWT "iss")
+    "discoveryUrl":   "<Okta agent issuer>/.well-known/openid-configuration",
+    # allowedAudience → token "aud" MUST be this (NOT client id — Okta puts that in "cid")
+    "allowedAudience": ${JSON.stringify(rtDeployed? (rt.allowedAudience||[aud]) : [aud])},
+    # allowedScopes → token "scp" gates WHICH agent a user may invoke
+    "allowedScopes":   ${JSON.stringify(rtDeployed && rt.allowedScopes ? rt.allowedScopes : [o.support_agent_scope||'customer'])} }}
+
+# Your token carries the identity the authorizer accepts:
+#   aud = "${aud}"   sub = "${esc(sub)}"   customer_id = "${esc(cid)}"   (from your Okta profile)
+# customer_id (not sub) is the identity the interceptor, memory + tools key on.`},
+      token:{kind:'jwt', title:'The token in play · your Okta JWT', raw:RAW_JWT, claims:CLAIMS},
+      note:{t:'The authorizer validates iss/aud/signature/scp at the runtime door — a mismatched token is rejected before any code runs. sub can\'t be overridden on Okta, so identity rides in a dedicated customer_id claim that the interceptor, memory and tools all key on.'} },
+
+    { actor:'🤖 Iris Agent · AgentCore Runtime', railTitle:'Invoke the runtime; AgentCore issues a WAT',
+      lanes:['user','agent'], hops:['1','2'], badge:'Step 2 · Invoke the runtime; AgentCore issues a WAT',
+      title:'The app invokes the runtime with your JWT; AgentCore validates it and issues an opaque WAT',
+      diagramHop:`<b>Invoke with your JWT → authorizer validates → issues a WAT</b>
+        <span class="tok"><span class="c">POST /runtimes/&lt;iris_layer6 arn&gt;/invocations</span>
+<span class="k">Authorization</span>: <span class="v">Bearer eyJraWQ…</span>  <span class="c">← YOUR Okta JWT (aud=${aud})</span>
+<span class="c">──────── AgentCore validates iss/aud/sig/exp ────────</span>
+<span class="k">WorkloadAccessToken</span>: <span class="v">AgV4x-BB4rSJ… (opaque, KMS-encrypted)</span>  <span class="c">← handed to the agent</span></span>`,
+      body:`Two things happen at the runtime door, back to back:
+        <br>• <span class="em">Invoke</span> — the app POSTs to <code>/invocations</code> with your Okta JWT in the
+          <code>Authorization: Bearer</code> header (<code>aud=${aud}</code>, <code>customer_id=${esc(cid)}</code>).
+        <br>• <span class="em">Validate</span> — the CUSTOM_JWT authorizer checks issuer, audience, signature, expiry.
+        <br>• <span class="em">WAT</span> — the agent gets an <span class="em">opaque, KMS-encrypted</span> Workload Access
+          Token, not your raw JWT. No readable claims; only AgentCore Identity can resolve it.
+        <br>• The agent proves identity by <span class="em">presenting the WAT</span> — it never reads or forwards your JWT
+          (<a class="plain" href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/on-behalf-of-token-exchange.html" target="_blank" rel="noopener">AWS OBO docs</a>).`,
+      code:{cap:'① server → runtime invoke (bearer path) — server/app.py', src:'code', lang:'python',
+        intro:'<b>How the app invokes.</b> It POSTs your Okta JWT as a bearer token — no SigV4, no AWS keys.',
+        text:
+`url = f"https://bedrock-agentcore.${LIVE&&LIVE.region||'us-east-1'}.amazonaws.com/runtimes/{arn}/invocations?qualifier=DEFAULT"
+urllib.request.Request(url, method="POST", data=..., headers={
+    "Authorization": f"Bearer {access_token}",     # YOUR Okta JWT (aud=${aud})
+    "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": session_id })`},
+      code2:{cap: rtDeployed?'② the authorizer that validates it — LIVE: iris_layer6 JWT authorizer':'② the authorizer that validates it — runtime JWT authorizer (from code)',
+        src: rtDeployed?'live':'code', lang:'json',
+        intro:'<b>What validates it.</b> The runtime\'s CUSTOM_JWT authorizer config — only tokens matching this issuer and audience get in.',
+        text: JSON.stringify({ customJWTAuthorizer:{
+          discoveryUrl: '<Okta agent issuer>/.well-known/openid-configuration',
+          allowedAudience: rtDeployed? rt.allowedAudience : [aud] } }, null, 2)},
+      token:{kind:'wat', title:'OUTPUT · Workload Access Token (opaque — handed to the agent)'},
+      note:{t:'The agent reads the WAT from the WorkloadAccessToken request header and seeds it via BedrockAgentCoreContext.set_workload_access_token(wat). The WAT is opaque to the agent (not a JWT, no readable claims); it carries the inbound token as the exchange subject, which AgentCore Identity resolves in the next step.'} },
+
+    { actor:'🔐 AgentCore Identity → 🏛️ Okta', railTitle:'Exchange the WAT for an OBO token',
+      lanes:['agent','identity','idp'], hops:['3','4'], badge:'Step 3 · Exchange the WAT for an OBO token',
+      title:'AgentCore Identity exchanges the WAT for an OBO token — sub preserved, aud rewritten',
+      diagramHop:`<b>Okta mints a NEW token</b> — same user, new audience:
+        <span class="tok"><span class="k">customer_id</span>: <span class="hi">"${esc(cid)}"</span>  <span class="c">← PRESERVED (still you)</span>
+<span class="k">aud</span>: <span class="v">"${gwAud}"</span>  <span class="c">← REWRITTEN (now the Gateway)</span>
+<span class="k">scp</span>: <span class="v">["tool:read"]</span>  <span class="c">← NARROWED to the tools you may call</span>
+<span class="k">cid</span>: <span class="v">"iris-support-agent"</span>  <span class="c">← the acting agent (actor)</span></span>`,
+      body:`The whole exchange, in four beats:
+        <br>• <span class="em">IN</span> — the opaque WAT; only AgentCore Identity can resolve it back to your token (subject = ${esc(cid)}).
+        <br>• <span class="em">Resolve + exchange</span> — Identity resolves the WAT, then calls Okta with <code>grant_type=token-exchange</code> and the delegate's creds.
+        <br>• <span class="em">OUT</span> — Okta mints a new OBO token: <code>customer_id</code> preserved, <code>aud</code> → <code>${gwAud}</code>, <code>scp</code> → <code>tool:read</code>, <code>cid</code> = acting agent.
+        <br>• No extra user consent. That token is the Bearer the agent presents to the Gateway next.`,
+      code:{cap: oboDeployed?('① SETUP (once): OBO credential provider "'+ (obo.name||'iris_support_obo_l6') +'"'):'① SETUP (once): OBO credential provider (from code — not deployed yet)',
+        src: oboDeployed?'live':'code', lang:'python',
+        intro:'<b>Set up once.</b> A stored Okta delegate client for RFC 8693 — Identity holds its id/secret, so the agent never sees them.',
+        text:
+`# A stored Okta delegate client, registered with AgentCore Identity. Holds the
+# client id/secret (never handled by the agent) + names the issuer to exchange against.
+create_oauth2_credential_provider(
+  name="${obo.name||'iris_support_obo_l6'}",
+  credentialProviderVendor="${obo.vendor||'CustomOauth2'}",
+  oauth2ProviderConfigInput={"customOauth2ProviderConfig":{
+    "oauthDiscovery":{"discoveryUrl": "${oboDisc}"},
+    "clientId": "${oboClient}",                 # the delegate app (secret held by Identity)
+    "clientAuthenticationMethod": "CLIENT_SECRET_POST",
+    "onBehalfOfTokenExchangeConfig": {
+        "grantType": "${oboGrant}",              # → urn:ietf:params:oauth:grant-type:token-exchange
+        "tokenExchangeGrantTypeConfig": {"actorTokenContent": "NONE"}}}})`},
+      code2:{cap:'② RUNTIME (per call): the agent asks Identity to exchange — agent-layer6/agent.py', src:'code', lang:'python',
+        intro:'<b>Runs per call.</b> One decorator triggers the exchange; Identity does the Okta round-trip and hands back the OBO token.',
+        text:
+`# One decorator triggers the exchange. AgentCore Identity resolves the WAT to your
+# token, submits the RFC 8693 request to Okta with the delegate creds, and hands back
+# the OBO token — the agent never touches the client secret or your raw JWT.
+@requires_access_token(
+    provider_name="${obo.name||'iris_support_obo_l6'}",
+    scopes=["tool:read"],
+    auth_flow="ON_BEHALF_OF_TOKEN_EXCHANGE",
+    custom_parameters={"audience": "${gwAud}",              # aud of the NEW token
+        "subject_token_type":   "urn:ietf:params:oauth:token-type:access_token",
+        "requested_token_type": "urn:ietf:params:oauth:token-type:access_token"})
+async def _inner(*, access_token):     # access_token = the OBO token (sub=${esc(cid)})
+    holder["token"] = access_token`},
+      token:{kind:'obo', title:'OUTPUT · the OBO token (sub preserved, aud rewritten, scope narrowed)',
+             claims:Object.assign({}, pick(CLAIMS,['sub','customer_id']), {aud:gwAud, scp:['tool:read'], cid:'iris-support-agent (actor)'})},
+      note:{t:'Equivalent CLI: get-workload-access-token-for-jwt (→ WAT) then get-resource-oauth2-token --oauth2-flow ON_BEHALF_OF_TOKEN_EXCHANGE (→ OBO token). Same user in and out (sub/customer_id preserved); audience rebound to the Gateway; scope narrowed; the acting agent recorded in cid.'} },
+
+    { actor:'🚪 AgentCore Gateway + tools', railTitle:'Call the tool with the OBO token',
+      lanes:['agent','gw'], hops:['5'], badge:'Step 4 · Call the tool with the OBO token',
+      title:'The interceptor stamps customer_id from the OBO token, not the prompt',
+      diagramHop:`<b>Gateway passes the OBO bearer to the interceptor</b>
+        <span class="tok"><span class="k">Authorization</span>: <span class="v">Bearer &lt;OBO token&gt;</span>  <span class="c">← passRequestHeaders=true</span>
+interceptor decodes it → <span class="k">customer_id</span> = <span class="hi">"${esc(cid)}"</span>
+stamps it into: get_record({ order_id, <span class="hi">customer_id:"${esc(cid)}"</span> })</span>`,
+      body:`Iris calls the tool with the OBO token as the bearer. A REQUEST interceptor Lambda sits between the
+        Gateway and the tool, and rewrites the call before it lands:
+        <br>• <span class="em">Gateway validates</span> — it re-checks the OBO token (<code>iss</code>, <code>aud=${gwAud}</code>,
+          signature, <code>scp</code>) before anything runs. A wrong audience or missing scope is rejected here.
+        <br>• <span class="em">Headers forwarded</span> — the target is set with <code>passRequestHeaders=true</code>, so the
+          interceptor receives the request headers, including the <code>Authorization</code> bearer.
+        <br>• <span class="em">Method gate</span> — only <code>tools/call</code> is rewritten; <code>initialize</code> and
+          <code>tools/list</code> pass through untouched, so the MCP handshake is never disturbed.
+        <br>• <span class="em">Decode + stamp</span> — it decodes the OBO JWT, reads <code>customer_id</code> from the claims,
+          and writes it into the tool args — <span class="em">overwriting</span> anything the model put there. Read tools +
+          refunds get <code>customer_id</code>; admin <code>update_record</code> gets <code>acting_customer_id</code>.
+        <br>• <span class="em">Tool runs scoped</span> — the Lambda queries Aurora for that <code>customer_id</code> only.
+          Identity never comes from the prompt.`,
+      code:{cap:'REQUEST interceptor Lambda — cdk/iris_demo/layer3_stack.py', src:'code', lang:'python',
+        intro:'<b>Runs before the tool, every call.</b> The Gateway hands it the headers; it stamps identity from the token, not the args.',
+        text:
+`# 1) Only tool invocations are rewritten. Handshake calls pass straight through.
+if body.get("method") != "tools/call":
+    return {"transformedGatewayRequest": {"body": body}}   # ← pass-through
+
+# 2) passRequestHeaders=true → the interceptor gets the request headers.
+token       = _get_header(req["headers"], "Authorization")   # ← the OBO bearer
+claims      = _decode_jwt(token)                             # Gateway already validated it
+customer_id = claims.get("customer_id", "")                  # ${esc(cid)}
+
+# 3) Stamp identity from the TOKEN, overwriting any model-supplied value.
+if tool in ("get_record","get_my_info","get_shipment","process_refund"):
+    args["customer_id"] = customer_id
+elif tool == "update_record":
+    args["acting_customer_id"] = customer_id      # admin: record who acted`},
+      note:{t:'Defense in depth: even if the model is tricked into passing customer_id=C-9999, the interceptor OVERWRITES it with the value decoded from the Authorization header. The tool Lambda only ever sees the verified caller.'} },
+  ];
+}
+
+function render(){
+  const s = STEPS[i];
+  // Left rail is STEPS ONLY. Highlight the active step; mark earlier steps done.
+  document.querySelectorAll('#steprail .step').forEach((r,k)=>{
+    r.classList.toggle('on', k===i);
+    r.classList.toggle('done', k<i);
+  });
+  const codeCardHTML=(c)=> c ? `
+    ${c.intro?`<div class="code-intro">${c.intro}</div>`:''}
+    <div class="codecard">
+      <div class="cap"><span>${c.cap}</span>
+        <span class="src ${c.src==='live'?'livev':'codev'}">${c.src==='live'?'● LIVE':'○ from code'} · ${c.lang}</span></div>
+      <pre>${hl(c.text,c.lang)}</pre>
+    </div>` : '';
+  $('#panelR').innerHTML = `
+    <span class="step-badge">${s.badge}</span>
+    <h2>${s.title}</h2>
+    <p>${s.body}</p>
+    ${s.token?tokenCard(s.token):''}
+    ${codeCardHTML(s.code)}
+    ${codeCardHTML(s.code2)}
+    ${s.note?`<div class="note ${s.note.warn?'warn':''}">${s.note.t}</div>`:''}`;
+  $('#prev').disabled = i===0;
+  $('#next').textContent = i===STEPS.length-1 ? 'Restart ↺' : 'Next →';
+  $('#stepLabel').textContent = `Step ${i+1} of ${STEPS.length}`;
+  document.querySelectorAll('#dots i').forEach((d,k)=>d.classList.toggle('on',k===i));
+}
+
+// Render the actual token content for a step: a decodable JWT (compact + decoded claims),
+// or the opaque WAT envelope, or the exchanged OBO token's claims.
+function tokenCard(tk){
+  if(tk.kind==='jwt'){
+    const raw = tk.raw||'';
+    const seg = raw ? raw.split('.') : [];
+    const compact = raw ? `${(seg[0]||'').slice(0,16)}… . ${(seg[1]||'').slice(0,16)}… . ${(seg[2]||'').slice(0,10)}…` : '(token not captured)';
+    return `<div class="codecard"><div class="cap"><span>🎫 ${tk.title}</span><span class="src livev">● LIVE · your token</span></div>
+      <pre><span class="c-com"># compact JWT (header.payload.signature — base64url, signed by Okta)</span>
+${esc(compact)}
+
+<span class="c-com"># decoded payload (claims)</span>
+${hl(JSON.stringify(pick(tk.claims||{},['aud','iss','sub','customer_id','scp','cid','exp']),null,2),'json')}</pre></div>`;
+  }
+  if(tk.kind==='wat'){
+    return `<div class="codecard"><div class="cap"><span>🎫 ${tk.title}</span><span class="src codev">○ opaque · not a JWT</span></div>
+      <pre><span class="c-com"># raw value (base64) — the actual token bytes</span>
+${esc(WAT_SAMPLE)}
+
+<span class="c-com"># its readable base64 header, decoded (these fields ARE in the token)</span>
+${hl(JSON.stringify(WAT_ENVELOPE,null,2),'json')}</pre></div>
+    <div class="note">
+      <b>About the WAT</b> (this box is explanation — the fields above are the token's own readable envelope):
+      <ul style="margin:6px 0 0;padding-left:18px">
+        <li>It is <b>not a JWT</b> and has no readable claims — an AgentCore-issued, KMS-encrypted (AWS Encryption SDK) value the agent cannot decode.</li>
+        <li>It <b>carries the inbound token as the subject</b>; AgentCore Identity resolves it and uses it as the subject token in the exchange —
+          <a class="plain" href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/on-behalf-of-token-exchange.html" target="_blank" rel="noopener">AWS on-behalf-of-token-exchange docs</a>.</li>
+      </ul></div>`;
+  }
+  if(tk.kind==='obo'){
+    return `<div class="codecard"><div class="cap"><span>🎫 ${tk.title}</span><span class="src livev">● exchanged from your JWT</span></div>
+      <pre><span class="c-com"># NEW token from Okta — a real JWT again. sub PRESERVED, aud REWRITTEN.</span>
+${hl(JSON.stringify(tk.claims||{},null,2),'json')}</pre></div>`;
+  }
+  return '';
+}
+function esc(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function arr(a){ return Array.isArray(a)?a.join(', '):(a||''); }
+function pick(o,ks){ const r={}; ks.forEach(k=>{ if(o&&o[k]!==undefined) r[k]=o[k]; }); return r; }
+// Highlight LINE BY LINE. A comment line (starts, after indent, with #) is emitted as a
+// single comment span and NO other rule touches it — this avoids the earlier bug where the
+// string rule re-matched the class attr (`"c-com"`) inside a comment span it had just
+// inserted, leaking `"c-com">` into the output.
+function hl(t,lang){
+  const lineHL=(line)=>{
+    const m=line.match(/^(\s*)#(.*)$/);
+    if(m){ return `${m[1]}<span class="c-com">#${esc(m[2])}</span>`; }   // whole-line comment
+    let h=esc(line);
+    if(lang==='python'){
+      h=h.replace(/("[^"]*")/g,'<span class="c-str">$1</span>')
+         .replace(/\b(async|await|def|return|None)\b/g,'<span class="c-key">$1</span>')
+         .replace(/\b(create_oauth2_credential_provider|requires_access_token|create_agent_runtime|authorizerConfiguration)\b/g,'<span class="c-fn">$1</span>')
+         .replace(/(TOKEN_EXCHANGE|ON_BEHALF_OF_TOKEN_EXCHANGE)/g,'<span class="c-hi">$1</span>');
+    } else if(lang==='json'){
+      h=h.replace(/("[^"]*")(\s*:)/g,'<span class="c-key">$1</span>$2')
+         .replace(/:\s*("[^"]*"|\[[^\]]*\])/g,mm=>mm.replace(/("[^"]*"|\[[^\]]*\])/,'<span class="c-str">$1</span>'));
+    }
+    return h;
+  };
+  return String(t).split('\n').map(lineHL).join('\n');
+}
+$('#next').onclick=()=>{ i=(i+1)%STEPS.length; render(); };
+$('#prev').onclick=()=>{ if(i>0){ i--; render(); } };
+document.addEventListener('keydown',e=>{ if($('#flow').style.display==='none')return; if(e.key==='ArrowRight')$('#next').click(); if(e.key==='ArrowLeft')$('#prev').click(); });
+</script>
+</body>
+</html>

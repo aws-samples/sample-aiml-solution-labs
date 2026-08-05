@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Architecture Animation Test — Baseline vs Layer 1</title>
+<style>
+body { font-family: -apple-system, sans-serif; background: #fafafa; margin: 20px; }
+.diagrams { display: flex; gap: 30px; flex-wrap: wrap; }
+.diagram-card { background: #fff; border: 1px solid #e4e4e7; border-radius: 12px; padding: 16px; }
+.diagram-card h3 { margin: 0 0 8px; font-size: 14px; color: #18181b; }
+.diagram-card p { margin: 0 0 12px; font-size: 11px; color: #71717a; }
+svg { display: block; }
+.box { rx: 8; ry: 8; }
+.label { font-size: 10px; font-weight: 600; fill: #fff; }
+.sublabel { font-size: 8px; fill: rgba(255,255,255,0.7); }
+.dot { opacity: 0; }
+.dot.active { opacity: 1; }
+.path-line { fill: none; stroke-width: 1.5; }
+.path-dashed { stroke-dasharray: 5 3; }
+.result-badge { opacity: 0; transition: opacity 0.5s; }
+.result-badge.show { opacity: 1; }
+button { padding: 8px 16px; background: #18181b; color: #fff; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; margin: 4px; }
+button:hover { background: #3f3f46; }
+button.blue { background: #2563EB; }
+button.blue:hover { background: #1D4ED8; }
+</style>
+</head>
+<body>
+<h2 style="font-size:16px; color:#18181b;">Architecture Flow Animation — Proof of Concept</h2>
+<p style="font-size:12px; color:#71717a; margin-bottom:20px;">Click the buttons to see synchronized data flow. In production, these trigger from real SSE events during agent invocation.</p>
+
+<div class="diagrams">
+
+<!-- ==================== BASELINE ==================== -->
+<div class="diagram-card">
+  <h3>Baseline — No Controls</h3>
+  <p>Agent in PUBLIC mode. Full internet access. Data flows freely to attacker.</p>
+  <button onclick="runBaseline()">Invoke Iris (Baseline)</button>
+  <button onclick="resetBaseline()" style="background:#71717a">Reset</button>
+
+  <svg width="360" height="520" viewBox="0 0 360 520" id="svg-baseline">
+    <!-- User -->
+    <rect class="box" x="130" y="10" width="100" height="32" fill="#71717A"/>
+    <text class="label" x="157" y="30">User</text>
+
+    <!-- Agent (OUTSIDE VPC) -->
+    <rect class="box" x="50" y="80" width="260" height="65" fill="#3B82F6" id="bl-agent-box"/>
+    <text class="label" x="70" y="100">Iris Agent (AgentCore)</text>
+    <text class="sublabel" x="70" y="114">PUBLIC mode — full internet access</text>
+    <rect x="70" y="120" width="70" height="16" fill="#2563EB" rx="3"/>
+    <text style="font-size:7px;fill:#fff" x="78" y="131">run_query</text>
+    <rect x="150" y="120" width="70" height="16" fill="#2563EB" rx="3"/>
+    <text style="font-size:7px;fill:#fff" x="158" y="131">post_data</text>
+
+    <!-- VPC -->
+    <rect x="20" y="195" width="160" height="100" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="5 3" rx="10"/>
+    <text style="font-size:8px;fill:#475569;font-weight:600" x="30" y="209">VPC</text>
+
+    <!-- Aurora -->
+    <rect class="box" x="35" y="230" width="130" height="45" fill="#059669" id="bl-db-box"/>
+    <text class="label" x="48" y="250">Aurora PostgreSQL</text>
+    <text class="sublabel" x="48" y="263">customers (30 rows)</text>
+
+    <!-- Internet zone -->
+    <rect x="195" y="195" width="155" height="200" fill="#FFF7ED" stroke="#FB923C" stroke-width="1" stroke-dasharray="4 2" rx="8"/>
+    <text style="font-size:8px;fill:#C2410C;font-weight:600" x="205" y="209">Internet</text>
+
+    <!-- Collector -->
+    <rect class="box" x="210" y="240" width="125" height="45" fill="#DC2626" id="bl-collector-box"/>
+    <text class="label" x="222" y="258">Collector</text>
+    <text class="sublabel" x="222" y="271">attacker endpoint</text>
+
+    <!-- S3 -->
+    <rect class="box" x="220" y="330" width="100" height="32" fill="#FEE2E2" stroke="#FECACA"/>
+    <text style="font-size:9px;fill:#991B1B;font-weight:600" x="237" y="350">S3: stolen/</text>
+
+    <!-- Paths -->
+    <path class="path-line path-dashed" stroke="#a1a1aa" d="M180,42 L180,80"/>
+    <path class="path-line" stroke="#10B981" d="M100,145 C100,175 100,200 100,230" id="bl-path-db"/>
+    <path class="path-line" stroke="#EF4444" d="M220,145 C240,180 265,210 270,240" id="bl-path-exfil"/>
+    <path class="path-line" stroke="#EF4444" d="M270,285 L270,330"/>
+
+    <!-- Arrow heads -->
+    <polygon points="97,228 103,228 100,233" fill="#10B981"/>
+    <polygon points="267,238 273,238 270,243" fill="#EF4444"/>
+    <polygon points="267,328 273,328 270,333" fill="#EF4444"/>
+
+    <!-- Labels on paths -->
+    <text style="font-size:7px;fill:#10B981" x="105" y="185">RDS Data API</text>
+    <text style="font-size:7px;fill:#EF4444" x="235" y="185">POST (exfil)</text>
+
+    <!-- Animated dots -->
+    <circle id="bl-dot1" r="4" fill="#3B82F6" class="dot">
+      <animateMotion id="bl-anim1" dur="0.5s" fill="freeze" begin="indefinite" path="M180,42 L180,80"/>
+    </circle>
+    <circle id="bl-dot2" r="4" fill="#10B981" class="dot">
+      <animateMotion id="bl-anim2" dur="0.7s" fill="freeze" begin="indefinite" path="M100,145 C100,175 100,200 100,230"/>
+    </circle>
+    <circle id="bl-dot-ret" r="3" fill="#10B981" class="dot">
+      <animateMotion id="bl-anim-ret" dur="0.5s" fill="freeze" begin="indefinite" path="M100,230 C100,200 100,175 100,145"/>
+    </circle>
+    <circle id="bl-dot3" r="4" fill="#EF4444" class="dot">
+      <animateMotion id="bl-anim3" dur="1s" fill="freeze" begin="indefinite" path="M220,145 C240,180 265,210 270,240"/>
+    </circle>
+    <circle id="bl-dot4" r="3" fill="#EF4444" class="dot">
+      <animateMotion id="bl-anim4" dur="0.4s" fill="freeze" begin="indefinite" path="M270,285 L270,330"/>
+    </circle>
+
+    <!-- Result badge -->
+    <g id="bl-badge" class="result-badge">
+      <rect x="30" y="420" width="300" height="45" fill="#FEF2F2" stroke="#FECACA" rx="8"/>
+      <text style="font-size:11px;fill:#DC2626;font-weight:700" x="50" y="441">DATA EXFILTRATED</text>
+      <text style="font-size:8px;fill:#7F1D1D" x="50" y="455">Agent queried DB + POSTed records to attacker</text>
+    </g>
+  </svg>
+</div>
+
+<!-- ==================== LAYER 1 ==================== -->
+<div class="diagram-card">
+  <h3>Layer 1 — Platform Controls (VPC)</h3>
+  <p>Agent moved INTO VPC. No internet route. post_data cannot reach external URLs.</p>
+  <button class="blue" onclick="runLayer1()">Invoke Iris (Layer 1)</button>
+  <button onclick="resetLayer1()" style="background:#71717a">Reset</button>
+
+  <svg width="360" height="520" viewBox="0 0 360 520" id="svg-layer1">
+    <!-- User -->
+    <rect class="box" x="130" y="10" width="100" height="32" fill="#71717A"/>
+    <text class="label" x="157" y="30">User</text>
+
+    <!-- VPC (LARGE — contains both agent AND aurora) -->
+    <rect x="20" y="70" width="320" height="250" fill="#F1F5F9" stroke="#2563EB" stroke-width="2" rx="12" id="l1-vpc-box"/>
+    <text style="font-size:9px;fill:#1E40AF;font-weight:700" x="32" y="86">VPC (private subnets, no NAT, no IGW)</text>
+
+    <!-- Agent (INSIDE VPC) -->
+    <rect class="box" x="50" y="100" width="260" height="65" fill="#3B82F6" id="l1-agent-box"/>
+    <text class="label" x="70" y="120">Iris Agent (AgentCore)</text>
+    <text class="sublabel" x="70" y="134">VPC mode — no internet egress</text>
+    <rect x="70" y="140" width="70" height="16" fill="#2563EB" rx="3"/>
+    <text style="font-size:7px;fill:#fff" x="78" y="151">run_query</text>
+    <rect x="150" y="140" width="70" height="16" fill="#2563EB" rx="3"/>
+    <text style="font-size:7px;fill:#fff" x="158" y="151">post_data</text>
+
+    <!-- VPC Endpoints -->
+    <rect x="230" y="93" width="95" height="35" fill="#DBEAFE" stroke="#93C5FD" rx="4"/>
+    <text style="font-size:7px;fill:#1D4ED8;font-weight:500" x="237" y="105">VPC Endpoints:</text>
+    <text style="font-size:6px;fill:#1D4ED8" x="237" y="115">Bedrock, RDS Data,</text>
+    <text style="font-size:6px;fill:#1D4ED8" x="237" y="123">ECR, CloudWatch</text>
+
+    <!-- Aurora (INSIDE same VPC) -->
+    <rect class="box" x="35" y="220" width="130" height="45" fill="#059669" id="l1-db-box"/>
+    <text class="label" x="48" y="240">Aurora PostgreSQL</text>
+    <text class="sublabel" x="48" y="253">same VPC — direct access</text>
+
+    <!-- NO ROUTE barrier -->
+    <g id="l1-barrier" style="opacity:0">
+      <rect x="215" y="285" width="110" height="26" fill="#DC2626" rx="5"/>
+      <text style="font-size:9px;fill:#fff;font-weight:700" x="230" y="302">NO ROUTE</text>
+    </g>
+
+    <!-- Internet zone (unreachable) -->
+    <rect x="195" y="345" width="155" height="120" fill="#FFF7ED" stroke="#FB923C" stroke-width="1" stroke-dasharray="4 2" rx="8" opacity="0.5"/>
+    <text style="font-size:8px;fill:#C2410C;font-weight:600" x="205" y="359">Internet (unreachable)</text>
+
+    <!-- Collector (greyed out) -->
+    <rect class="box" x="210" y="375" width="125" height="40" fill="#FECACA" stroke="#EF4444" stroke-dasharray="3 2" id="l1-collector-box"/>
+    <text style="font-size:9px;fill:#991B1B;font-weight:500" x="230" y="398">Collector</text>
+
+    <!-- Paths -->
+    <path class="path-line path-dashed" stroke="#a1a1aa" d="M180,42 L180,100"/>
+    <path class="path-line" stroke="#10B981" d="M100,165 L100,220" id="l1-path-db"/>
+    <path class="path-line path-dashed" stroke="#EF4444" d="M220,165 C240,200 260,250 270,285" id="l1-path-exfil" opacity="0.5"/>
+
+    <!-- Arrow heads -->
+    <polygon points="97,218 103,218 100,223" fill="#10B981"/>
+
+    <!-- X mark on exfil path -->
+    <text style="font-size:16px;fill:#DC2626;font-weight:900" x="255" y="270">✕</text>
+
+    <!-- Labels -->
+    <text style="font-size:7px;fill:#10B981" x="105" y="195">direct (same VPC)</text>
+    <text style="font-size:7px;fill:#DC2626" x="225" y="225">blocked!</text>
+
+    <!-- Animated dots -->
+    <circle id="l1-dot1" r="4" fill="#3B82F6" class="dot">
+      <animateMotion id="l1-anim1" dur="0.5s" fill="freeze" begin="indefinite" path="M180,42 L180,100"/>
+    </circle>
+    <circle id="l1-dot2" r="4" fill="#10B981" class="dot">
+      <animateMotion id="l1-anim2" dur="0.5s" fill="freeze" begin="indefinite" path="M100,165 L100,220"/>
+    </circle>
+    <circle id="l1-dot-ret" r="3" fill="#10B981" class="dot">
+      <animateMotion id="l1-anim-ret" dur="0.4s" fill="freeze" begin="indefinite" path="M100,220 L100,165"/>
+    </circle>
+    <circle id="l1-dot3" r="4" fill="#EF4444" class="dot">
+      <animateMotion id="l1-anim3" dur="0.6s" fill="freeze" begin="indefinite" path="M220,165 C230,190 250,230 260,260"/>
+    </circle>
+
+    <!-- Result badge -->
+    <g id="l1-badge" class="result-badge">
+      <rect x="30" y="420" width="300" height="45" fill="#F0FDF4" stroke="#BBF7D0" rx="8"/>
+      <text style="font-size:11px;fill:#16A34A;font-weight:700" x="50" y="441">EXFILTRATION BLOCKED</text>
+      <text style="font-size:8px;fill:#166534" x="50" y="455">No network path exists to external endpoints</text>
+    </g>
+  </svg>
+</div>
+</div>
+
+<script>
+// === BASELINE ===
+function resetBaseline() {
+  document.querySelectorAll('#svg-baseline .dot').forEach(d => d.classList.remove('active'));
+  document.getElementById('bl-badge').classList.remove('show');
+  document.getElementById('bl-agent-box').setAttribute('fill', '#3B82F6');
+  document.getElementById('bl-db-box').setAttribute('fill', '#059669');
+  document.getElementById('bl-collector-box').setAttribute('fill', '#DC2626');
+}
+
+function runBaseline() {
+  resetBaseline();
+  const t = (id, dotId) => { document.getElementById(dotId).classList.add('active'); document.getElementById(id).beginElement(); };
+
+  // User → Agent
+  t('bl-anim1', 'bl-dot1');
+
+  // Agent → DB
+  setTimeout(() => {
+    document.getElementById('bl-agent-box').setAttribute('fill', '#1D4ED8');
+    t('bl-anim2', 'bl-dot2');
+  }, 700);
+
+  // DB returns
+  setTimeout(() => {
+    document.getElementById('bl-db-box').setAttribute('fill', '#047857');
+    t('bl-anim-ret', 'bl-dot-ret');
+  }, 1600);
+
+  // Agent → Collector (exfil!)
+  setTimeout(() => {
+    document.getElementById('bl-agent-box').setAttribute('fill', '#B91C1C');
+    t('bl-anim3', 'bl-dot3');
+  }, 2400);
+
+  // Collector → S3
+  setTimeout(() => {
+    document.getElementById('bl-collector-box').setAttribute('fill', '#7F1D1D');
+    t('bl-anim4', 'bl-dot4');
+  }, 3600);
+
+  // Badge
+  setTimeout(() => {
+    document.getElementById('bl-badge').classList.add('show');
+  }, 4300);
+}
+
+// === LAYER 1 ===
+function resetLayer1() {
+  document.querySelectorAll('#svg-layer1 .dot').forEach(d => d.classList.remove('active'));
+  document.getElementById('l1-badge').classList.remove('show');
+  document.getElementById('l1-barrier').style.opacity = '0';
+  document.getElementById('l1-agent-box').setAttribute('fill', '#3B82F6');
+  document.getElementById('l1-db-box').setAttribute('fill', '#059669');
+}
+
+function runLayer1() {
+  resetLayer1();
+  const t = (id, dotId) => { document.getElementById(dotId).classList.add('active'); document.getElementById(id).beginElement(); };
+
+  // User → Agent
+  t('l1-anim1', 'l1-dot1');
+
+  // Agent → DB (works! same VPC)
+  setTimeout(() => {
+    document.getElementById('l1-agent-box').setAttribute('fill', '#1D4ED8');
+    t('l1-anim2', 'l1-dot2');
+  }, 700);
+
+  // DB returns
+  setTimeout(() => {
+    document.getElementById('l1-db-box').setAttribute('fill', '#047857');
+    t('l1-anim-ret', 'l1-dot-ret');
+  }, 1400);
+
+  // Agent tries POST → BLOCKED
+  setTimeout(() => {
+    document.getElementById('l1-agent-box').setAttribute('fill', '#F59E0B');
+    t('l1-anim3', 'l1-dot3');
+  }, 2200);
+
+  // Barrier appears, dot disappears
+  setTimeout(() => {
+    document.getElementById('l1-barrier').style.opacity = '1';
+    document.getElementById('l1-dot3').classList.remove('active');
+  }, 3000);
+
+  // Badge
+  setTimeout(() => {
+    document.getElementById('l1-badge').classList.add('show');
+  }, 3800);
+}
+</script>
+</body>
+</html>
