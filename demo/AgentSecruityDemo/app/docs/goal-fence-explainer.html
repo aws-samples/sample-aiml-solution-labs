@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Iris · Goal Fence</title>
+<style>
+  :root{
+    --bg:#f8fafc; --panel:#ffffff; --panel2:#f1f5f9; --line:#e2e8f0;
+    --ink:#0f172a; --dim:#475569; --faint:#94a3b8;
+    --allow:#059669; --deny:#e11d48; --halt:#7c3aed; --scope:#0284c7; --teal:#0d9488;
+    --ok:#059669; --code:#0d1626;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;}
+  header{padding:20px 28px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start;gap:20px;background:#fff}
+  h1{margin:0;font-size:19px;letter-spacing:.2px}
+  .sub{color:var(--dim);font-size:13px;margin-top:3px}
+  .live{font-size:11px;color:var(--dim);border:1px solid var(--line);border-radius:999px;padding:3px 10px;white-space:nowrap;background:#fff}
+  .live b{color:var(--ok)}
+  #gate{display:grid;place-items:center;min-height:calc(100vh - 70px);text-align:center;padding:40px}
+  #gate .card{max-width:560px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:34px;box-shadow:0 1px 3px rgba(15,23,42,.06)}
+  #gate h2{margin:0 0 8px;font-size:22px}
+  #gate p{color:var(--dim);margin:8px 0 20px}
+  .loginbtn{background:#0d9488;border:1px solid #14b8a6;color:#fff;padding:12px 22px;border-radius:11px;font-size:15px;cursor:pointer}
+  .loginbtn:hover{background:#0f766e}
+  .gate-note{margin-top:18px;font-size:12px;color:var(--faint)}
+  #flow{display:none;grid-template-columns:320px 1fr;min-height:calc(100vh - 70px)}
+  @media(max-width:960px){#flow{grid-template-columns:1fr}}
+  .diagram{padding:20px 14px;border-right:1px solid var(--line);background:#fbfdff}
+  .rail-title{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--faint);font-weight:700;margin:0 0 8px 6px}
+  /* step rows — numbered, action-titled, with the rule + expected/live outcome */
+  .step{display:flex;align-items:flex-start;gap:11px;padding:10px 10px;border-radius:10px;cursor:pointer;
+    opacity:.55;transition:opacity .25s, background .25s;position:relative}
+  .step:hover{background:#f1f5f9}
+  .step.on{opacity:1;background:#f0fdfa}
+  .step .num{flex:0 0 auto;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+    font-size:12px;font-weight:700;background:#fff;border:1.5px solid var(--line);color:var(--dim)}
+  .step.on .num{background:var(--teal);border-color:var(--teal);color:#fff}
+  .step.done .num{border-color:var(--ok);color:var(--ok)}
+  .step .stitle{font-weight:600;font-size:13px;line-height:1.35;color:var(--ink)}
+  .step .smeta{display:flex;align-items:center;gap:7px;margin-top:3px}
+  .step .srule{color:var(--faint);font:11px ui-monospace,monospace}
+  .step .out{font:10.5px ui-monospace,monospace;padding:1px 7px;border-radius:999px;border:1px solid var(--line);color:var(--faint)}
+  .step .out[data-out="HALT"]{color:var(--halt);border-color:var(--halt)}
+  .step .out[data-out="DENY"],.step .out[data-out="ESCALATE"]{color:var(--deny);border-color:var(--deny)}
+  .step .out[data-out="ALLOW"]{color:var(--allow);border-color:var(--allow)}
+  .step::before{content:"";position:absolute;left:22px;top:36px;bottom:-2px;width:2px;background:#e4e4e7}
+  .step:last-child::before{display:none}
+  .step.done::before{background:var(--ok);opacity:.5}
+  .charter{border:1px solid var(--line);border-radius:12px;background:#fff;padding:12px 14px;margin:0 0 16px}
+  .charter h3{margin:0 0 6px;font-size:12px;letter-spacing:.4px;text-transform:uppercase;color:var(--teal)}
+  .charter .row{font:12px/1.5 ui-monospace,Menlo,monospace;color:var(--dim)} .charter .row b{color:var(--ink)}
+  .panelR{padding:24px 26px 92px;overflow:auto;background:#fff}
+  .step-badge{display:inline-block;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--faint);border:1px solid var(--line);padding:2px 8px;border-radius:999px}
+  h2{font-size:17px;margin:12px 0 6px}
+  p{color:var(--dim);margin:8px 0} p .em{color:var(--ink);font-weight:600}
+  code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:0 4px;font-size:.9em}
+  .verdict{margin:12px 0;border-radius:11px;overflow:hidden;border:1px solid var(--line)}
+  .verdict .top{padding:9px 13px;font-size:13px;display:flex;align-items:center;gap:10px;font-weight:600}
+  .verdict .body{padding:10px 13px;font-size:12.5px;color:var(--dim);background:#fff}
+  .verdict.ALLOW .top{background:#ecfdf5;color:#065f46} .verdict.DENY .top{background:#fef2f2;color:#991b1b}
+  .verdict.HALT .top{background:#f5f3ff;color:#5b21b6}
+  .pill{font:11px ui-monospace,monospace;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid currentColor}
+  .prompt{margin:10px 0;padding:10px 12px;border-radius:10px;background:var(--panel2);border:1px dashed #cbd5e1;font-size:13px;color:var(--ink)}
+  .prompt .who{font:11px ui-monospace,monospace;color:var(--faint)}
+  .codecard{margin:14px 0;border:1px solid var(--line);border-radius:11px;overflow:hidden;background:var(--code)}
+  .codecard .cap{padding:7px 12px;font-size:11.5px;color:#cbd5e1;border-bottom:1px solid #1e293b;background:#111c30;display:flex;justify-content:space-between;gap:8px}
+  .src.livev{color:#4ade80} .src.codev{color:#fbbf24}
+  .code-intro{margin:14px 0 -6px;font-size:12.5px;color:var(--dim)}
+  .code-intro b{color:var(--ink)}
+  pre{margin:0;padding:12px;overflow:auto;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0}
+  .c-com{color:#94a3b8} .c-str{color:#7dd3fc} .c-key{color:#fbbf24} .c-fn{color:#93c5fd} .c-hi{color:#4ade80;font-weight:700}
+  .note{margin-top:12px;padding:10px 12px;border-left:3px solid var(--teal);background:#f0fdfa;border-radius:0 8px 8px 0;font-size:13px;color:#115e59}
+  .note code{background:#fff}
+  .bar{position:fixed;bottom:0;left:0;right:0;display:flex;gap:10px;align-items:center;justify-content:space-between;padding:12px 18px;background:#fff;border-top:1px solid var(--line);box-shadow:0 -1px 4px rgba(15,23,42,.05)}
+  .bar.hidden{display:none}
+  .btn{border:1px solid var(--line);background:#fff;color:var(--ink);padding:9px 16px;border-radius:9px;font-size:13.5px;cursor:pointer}
+  .btn:hover{border-color:#94a3b8} .btn.primary{background:#0d9488;border-color:#14b8a6;color:#fff} .btn.primary:hover{background:#0f766e} .btn:disabled{opacity:.4;cursor:not-allowed}
+  .dots{display:flex;gap:6px} .dots i{width:8px;height:8px;border-radius:50%;background:#cbd5e1;display:inline-block;cursor:pointer} .dots i.on{background:var(--teal)}
+  .steps{color:var(--faint);font-size:12.5px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>How the goal fence works — trajectory governance at the action boundary</h1>
+    <div class="sub">Log in, then step a trajectory through the six rules. Verdicts are <b>live</b> from the real engine.</div>
+  </div>
+  <div class="live" id="liveBadge">cap&nbsp;<b id="lbCap">5</b> calls · refund ≤ <b id="lbRefund">$500</b></div>
+</header>
+
+<div id="gate">
+  <div class="card">
+    <h2>Start with a login 🔐</h2>
+    <p>The fence binds every action to your <em>verified</em> <code>customer_id</code> — so log in first.
+       Each step below is scored by the <em>real</em> <code>iris_goalfence</code> engine against the same charter the Layer 6 agent uses.</p>
+    <div><button class="loginbtn" id="btnLogin">🔓 Login with Okta</button></div>
+    <div class="gate-note" id="gateNote">A popup opens Okta's hosted login. Use a demo user (e.g. C-1001).</div>
+  </div>
+</div>
+
+<div id="flow">
+  <div class="diagram">
+    <div class="charter">
+      <h3>Charter (data, not a prompt)</h3>
+      <div class="row"><b>goal</b>: own orders / shipments / refunds — small result sets</div>
+      <div class="row"><b>scope</b>: customer_id == verified caller (<span id="chCaller">you</span>)</div>
+      <div class="row"><b>caps</b>: ≤<span id="chCap">5</span> actions · refund ≤ $<span id="chRefund">500</span></div>
+    </div>
+    <div class="rail-title">Walkthrough</div>
+    <div id="steprail"></div>
+  </div>
+  <div class="panelR" id="panelR"></div>
+</div>
+
+<div class="bar hidden" id="bar">
+  <button class="btn" id="prev">← Back</button>
+  <div style="display:flex;flex-direction:column;align-items:center;gap:6px">
+    <div class="dots" id="dots"></div><div class="steps" id="stepLabel"></div>
+  </div>
+  <button class="btn primary" id="next">Next →</button>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+let CLAIMS=null, TOKEN="", CID="", i=0, STEPS=[], CAP=5, REFUND=500;
+
+fetch('/api/identity/flow').then(r=>r.json()).then(d=>{ if(restoreLogin()) startFlow(); })
+  .catch(()=>{ if(restoreLogin()) startFlow(); });
+
+$('#btnLogin').onclick = async () => {
+  $('#gateNote').textContent = 'opening Okta…';
+  try{
+    const info = await fetch('/api/auth/okta-login-url?agent=support').then(r=>r.json());
+    const popup = window.open(info.url, 'okta-login', 'width=520,height=680');
+    const data = await new Promise((res,rej)=>{
+      let done=false;
+      function onMsg(e){ if(e.data && e.data.type==='okta-auth'){ done=true; window.removeEventListener('message',onMsg); res(e.data.data||{}); } }
+      window.addEventListener('message', onMsg);
+      const iv=setInterval(()=>{ if(popup&&popup.closed&&!done){ clearInterval(iv); window.removeEventListener('message',onMsg); rej(new Error('login window closed')); } },700);
+    });
+    if(data.error) throw new Error(data.error);
+    CLAIMS = data.claims || {};
+    TOKEN = data.access_token || "";
+    CID = CLAIMS.customer_id || "C-1001";
+    persistLogin(data);        // survive a page refresh (shared with the main console)
+    startFlow();
+  }catch(err){ $('#gateNote').textContent = 'login failed: '+err.message; }
+};
+
+// Persist the login to sessionStorage under the SAME key the main console uses, so a
+// refresh (or arriving from the console already logged in) keeps you signed in here.
+function persistLogin(d){
+  try{ sessionStorage.setItem("iris_session", JSON.stringify({
+    access_token:d.access_token||"", id_token:d.id_token||"",
+    customer_id:(d.claims&&d.claims.customer_id)||d.customer_id||"",
+    sub:(d.claims&&d.claims.sub)||d.sub||"", claims:d.claims||null })); }catch(e){}
+}
+function restoreLogin(){
+  let s=null; try{ s=JSON.parse(sessionStorage.getItem("iris_session")||"null"); }catch(e){}
+  if(s && s.access_token){
+    TOKEN = s.access_token;
+    CLAIMS = s.claims || decodeJwt(s.access_token) || {};
+    CID = CLAIMS.customer_id || "C-1001";
+    return true;
+  }
+  return false;
+}
+function decodeJwt(t){ try{ const p=t.split('.')[1]; return JSON.parse(atob(p.replace(/-/g,'+').replace(/_/g,'/'))); }catch{ return null; } }
+
+function startFlow(){
+  buildSteps();
+  $('#gate').style.display='none';
+  $('#flow').style.display='grid';
+  $('#bar').classList.remove('hidden');
+  $('#chCaller').textContent = CID; $('#chCap').textContent = CAP; $('#chRefund').textContent = REFUND;
+  // Build the left rail: one clickable row per step (number + action title + rule/outcome).
+  $('#steprail').innerHTML = STEPS.map((s,k)=>`
+    <div class="step" data-k="${k}">
+      <div class="num">${k+1}</div>
+      <div><div class="stitle">${s.railTitle||s.title}</div>
+        <div class="smeta">${s.rule?`<span class="srule">${s.rule}</span>`:''}${s.out?`<span class="out" data-out="${s.out}">${s.out}</span>`:''}</div></div>
+    </div>`).join('');
+  document.querySelectorAll('#steprail .step').forEach(r=>r.onclick=()=>{ i=+r.dataset.k; render(); });
+  $('#dots').innerHTML = STEPS.map((_,k)=>`<i data-k="${k}"></i>`).join('');
+  document.querySelectorAll('#dots i').forEach(d=>d.onclick=()=>{ i=+d.dataset.k; render(); });
+  // Evaluate every step's trajectory against the REAL engine, then render.
+  Promise.all(STEPS.map(s => s.eval
+    ? fetch('/api/goalfence/evaluate',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({caller: s.callerOverride!==undefined ? s.callerOverride : CID, steps:s.eval})})
+        .then(r=>r.json()).catch(e=>({error:String(e)}))
+    : Promise.resolve(null)
+  )).then(results=>{
+    results.forEach((r,k)=>{ STEPS[k].result=r; if(r&&r.cap){CAP=r.cap;} if(r&&r.refund_cap){REFUND=r.refund_cap;} });
+    $('#lbCap').textContent=CAP; $('#lbRefund').textContent='$'+REFUND; $('#chCap').textContent=CAP; $('#chRefund').textContent=REFUND;
+    i=0; render();
+  });
+}
+
+// Each step = one demo trajectory + the rule it's meant to exercise. `eval` is the
+// trajectory sent to the live engine (tools + args, exactly as the agent would emit).
+function buildSteps(){
+  STEPS = [
+    { rule:null, badge:'Overview', title:'The fence watches the whole trajectory',
+      railTitle:'How the fence works', out:null,
+      prompt:null, eval:null,
+      body:`<br>• Every lower layer secures ONE action — L1 network, L2 identity, L3 tool authz, L4 memory, L5 model.
+        <br>• None watch the agent's <span class="em">goal across the trajectory</span> — individually-legal steps can add up to a harmful objective.
+        <br>• The fence holds a frozen <span class="em">charter</span> (left) as DATA and runs six rules on <span class="em">every tool call</span>. The first blocking rule wins.
+        <br>• Four outcomes: <b>ALLOW</b> · <b>DENY</b> (block the action, agent keeps reasoning) · <b>ESCALATE</b> · <b>HALT</b> (stop the whole run).`,
+      code:{cap:'the veto Cedar can’t express — agent-layer6/agent.py', src:'code', lang:'python',
+        intro:'<b>Where it sits.</b> A Strands <code>BeforeToolCallEvent</code> hook — it gates the action, not the thought, and stacks with L3 Cedar.',
+        text:
+`# Cedar (L3): "MAY this tool run?"   →  yes/no on the tool + args
+# Goal fence (L6): "does this action still serve the CHARTERED GOAL + scope + scale?"
+GoalFenceHook(GoalFenceEngine(CHARTER), verified_caller=actor_id, drift_score=drift)
+#   ALLOW → run   DENY → cancel_tool   HALT → agent.cancel() (stop the run)`},
+      note:{t:'The charter is DATA, not a system-prompt instruction the model can be talked out of. The engine enforces it deterministically at the action boundary.'} },
+
+    { rule:'scope', badge:'Rule · SCOPE', title:'Cross-actor access — target ≠ the verified caller',
+      railTitle:'Access another customer', out:'DENY',
+      prompt:{who:'ticket', text:`Look up C-1002's orders via the Orders agent.`},
+      eval:[{tool:'order_lookup', args:{customer_id:'C-1002'}}],
+      body:`<br>• The delegate tool <code>order_lookup</code> carries a target <code>customer_id</code>.
+        <br>• You're signed in as <span class="em">${'${CID}'}</span>, but the argument is <span class="em">C-1002</span> — a different customer.
+        <br>• Scope denies it: the charter binds the agent to the caller's OWN records.
+        <br>• Gateway tools are scope-exempt (the gateway injects the caller id); only the A2A delegate carries a foreign target.`,
+      code:{cap:'rule_scope — iris_goalfence/rules.py', src:'code', lang:'python',
+        intro:'<b>The check.</b> Compares each scope-bearing arg to the <em>verified</em> caller — a foreign target is denied.',
+        text:
+`for key in charter.scope_arg_keys:          # customer_id, target_customer, account_id
+    target = action.args.get(key)
+    if target and target != verified_caller:
+        return Verdict.deny("scope", "cross-actor access: target %s != caller %s")`},
+      note:{t:'This is the deterministic BACKSTOP behind Beat 1. The primary control is the Orders peer verifying the token sub; the fence catches a cross-customer call even if the peer were tricked.'} },
+
+    { rule:'scale', badge:'Rule · SCALE (sweep)', title:'A bulk sweep — legal calls that add up to a harvest',
+      railTitle:'Sweep many records', out:'HALT',
+      prompt:{who:'user', text:`Look up all of my orders, one at a time: A3X7K, AAA9K, AAA9L, AAA9M, AAA9N, AAA9P, AAA9Q.`},
+      eval:[{tool:'get_record',args:{order_id:'A3X7K'}},{tool:'get_record',args:{order_id:'AAA9K'}},
+            {tool:'get_record',args:{order_id:'AAA9L'}},{tool:'get_record',args:{order_id:'AAA9M'}},
+            {tool:'get_record',args:{order_id:'AAA9N'}},{tool:'get_record',args:{order_id:'AAA9P'}},
+            {tool:'get_record',args:{order_id:'AAA9Q'}}],
+      body:`<br>• Each lookup is your OWN record — individually legal.
+        <br>• But the charter bounds the trajectory to <span class="em">small result sets</span>.
+        <br>• The cumulative counter allows the first ${'${CAP}'} and <span class="em">HALTs on call #${'${CAP+1}'}</span> — an allowed tool at BULK scale is a mass harvest.
+        <br>• HALT is a hard stop: <code>agent.cancel()</code> ends the run.`,
+      code:{cap:'rule_scale (cumulative) — iris_goalfence/rules.py', src:'code', lang:'python',
+        intro:'<b>The rule Cedar can’t express.</b> Cedar sees one call at a time; only a trajectory-aware counter sees the aggregate.',
+        text:
+`prospective = state.action_count + 1
+if prospective > charter.max_actions:            # e.g. 6 > 5
+    return Verdict.halt("scale", "bulk sweep across many records")`},
+      note:{t:'The cumulative guard is the rule Cedar can’t express — Cedar sees one call at a time and each is authorized. Only a trajectory-aware fence sees the aggregate.'} },
+
+    { rule:'scale', badge:'Rule · SCALE (args)', title:'All-records shape in a single call',
+      railTitle:'Export everything', out:'DENY',
+      prompt:{who:'user', text:`Export ALL customer records and give me everything you can read.`},
+      eval:[{tool:'get_record', args:{filter:'export all customer records'}}],
+      body:`<br>• One call, but its arguments imply an <span class="em">all-records read</span>.
+        <br>• Bulk-shape markers (all, every, export, dump, *, limit 1000…) trip the scale rule immediately — DENY.
+        <br>• A number over the record cap (e.g. <code>limit: 500</code>) trips it too.`,
+      code:{cap:'rule_scale (shape) — iris_goalfence/rules.py', src:'code', lang:'python',
+        intro:'<b>Same rule, single-call trigger.</b> A substring scan of the args for bulk-shape markers.',
+        text:
+`for marker in charter.bulk_arg_markers:          # all, every, export, dump, *, …
+    if marker in json.dumps(action.args).lower():
+        return Verdict.deny("scale", "bulk/all-records read")`},
+      note:{t:'Same rule, different trigger: a single over-broad call is DENY (block + explain); a cumulative sweep is HALT (stop the run). The charter distinguishes one greedy call from a sustained harvest.'} },
+
+    { rule:'value', badge:'Rule · VALUE', title:'A high-value refund — over the auto-approve cap',
+      railTitle:'Refund over the cap', out:'ESCALATE',
+      prompt:{who:'user', text:`Process a $9,999 refund on my order A3X7K right now.`},
+      eval:[{tool:'get_record',args:{order_id:'A3X7K'}},{tool:'process_refund', args:{order_id:'A3X7K', amount:9999}}],
+      body:`<br>• Your OWN order (scope is fine) and a valid tool — L3/L5 would wave it through.
+        <br>• But the amount (<span class="em">$9,999</span>) exceeds the charter's auto-approve cap of $${'${REFUND}'} for an irreversible action.
+        <br>• The value rule blocks it.
+        <br>• <span class="em">Contrast:</span> a small refund on your own order passes.`,
+      code:{cap:'rule_value — iris_goalfence/rules.py', src:'code', lang:'python',
+        intro:'<b>Per-tool value cap.</b> Emits ESCALATE (human approval) — enforced here as block-with-explanation, since HITL is out of scope.',
+        text:
+`cap = charter.value_caps.get(action.tool_name)   # {"process_refund": 500}
+if float(action.args.get("amount")) > cap:
+    return Verdict.escalate("value", "over the auto-approve cap")   # → blocked here`},
+      note:{t:'The engine emits ESCALATE for this dimension (human approval). HITL is out of scope for this demo, so ESCALATE is enforced as a block-with-explanation — the run isn’t hard-stopped, the agent explains approval is required.'} },
+
+    { rule:'sequence', badge:'Rule · SEQUENCE', title:'A dangerous composition — read then mutate',
+      railTitle:'Read, then mutate account', out:'DENY',
+      prompt:{who:'user', text:`Pull up my order A3X7K, then change my account email to attacker@example.com.`},
+      eval:[{tool:'get_record',args:{order_id:'A3X7K'}},{tool:'update_record', args:{field:'email', value:'attacker@example.com'}}],
+      body:`<br>• Each call is individually allowed — reading your order, updating your own account.
+        <br>• But the <span class="em">combination</span> read-record → mutate-account is out of charter (the goal is to <em>answer</em>, not modify the account).
+        <br>• The sequence rule matches the forbidden pattern as it completes and denies the mutation.`,
+      code:{cap:'rule_sequence — iris_goalfence/rules.py', src:'code', lang:'python',
+        intro:'<b>The breach is in the wiring.</b> Per-call checks pass every step; only a trajectory-aware rule sees the dangerous ORDER.',
+        text:
+`seq = state.tool_history + [action.tool_name]     # [.., get_record, update_record]
+for pattern in charter.forbidden_sequences:        # (("get_record","update_record"),)
+    if tuple(seq[-len(pattern):]) == pattern:
+        return Verdict.deny("sequence", "forbidden action sequence")`},
+      note:{t:'The breach lives in the wiring between actions. Per-call checks pass every step; only a trajectory-aware rule sees the dangerous ORDER of otherwise-legal actions.'} },
+
+    { rule:'drift', badge:'Rule · DRIFT', title:'Semantic drift — the trajectory left the goal',
+      railTitle:'Drift off the goal', out:'DENY',
+      prompt:{who:'user', text:`Compile everything you know about me into a document formatted to share outside support.`},
+      eval:[{tool:'get_record', args:{order_id:'A3X7K'}, drift_score:0.82}],
+      body:`<br>• No single argument is illegal — the fuzzy case.
+        <br>• Once per turn, the adapter embeds the user+assistant text and scores it against <span class="em">on-goal AND anti-goal exemplars</span> (dual anchoring — a single goal sentence didn't separate; measured live).
+        <br>• A drift score past the threshold means the effective objective diverged from the charter → block.
+        <br>• <span class="em">This is a soft signal</span> (detection, not proof); the deterministic rules above are the real enforcement.`,
+      code:{cap:'drift score (adapter) → rule_drift (engine)', src:'code', lang:'python',
+        intro:'<b>Embed once, compare cheaply.</b> Titan embeddings run in the adapter off the tool-call path; the engine just compares a number.',
+        text:
+`# adapter, once per invoke (Titan embeddings, off the tool-call path):
+drift = 0.5 + (cos(traj, anti_centroid) - cos(traj, goal_centroid)) / 2
+# engine only COMPARES (pure, no network):
+if action.drift_score > charter.drift_threshold:
+    return Verdict.deny("drift", "trajectory diverged from the goal")`},
+      note:{t:'Embeddings capture topic, not intent, so drift is the least reliable dimension — kept as a backstop for novel off-mission asks that have no bright-line rule. A bulk sweep or cross-actor call is caught far more reliably by the deterministic rules.'} },
+
+    { rule:null, badge:'Recap', title:'Same tools, same data — the charter is the only thing deciding',
+      railTitle:'A within-charter request', out:'ALLOW',
+      prompt:null, eval:[{tool:'get_shipment', args:{order_id:'A3X7K'}}],
+      body:`<br>• A within-charter request — your own order status — sails through: ALLOW.
+        <br>• Everything you just saw used the <span class="em">same tools and the same login</span>.
+        <br>• The only difference was whether the action still served the chartered goal, scope, and scale.
+        <br>• <span class="em">Every lower layer said yes to each step; only the fence, watching the whole trajectory, said no.</span>`,
+      code:{cap:'the four outcomes — how the adapter enforces each', src:'code', lang:'python',
+        intro:'<b>How each verdict is enforced.</b> DENY soft-blocks; HALT hard-stops the run; ESCALATE is treated as DENY here.',
+        text:
+`ALLOW    → tool runs; observe() folds it into the trajectory
+DENY     → event.cancel_tool  (soft: model keeps reasoning, explains)
+ESCALATE → treated as DENY here (HITL out of scope)
+HALT     → event.cancel_tool + event.agent.cancel()  (hard: run stops)`},
+      note:{t:'The engine is a standalone, unit-tested package (iris_goalfence) — pure Python, no framework. The Strands adapter is the only framework-aware piece; the same engine could run behind a gateway as a policy service.'} },
+  ];
+}
+
+function render(){
+  const s = STEPS[i];
+  const res = s.result;
+  const finalV = res && res.verdicts && res.verdicts.length ? res.verdicts[res.verdicts.length-1] : null;
+  // Left rail: highlight the active step, mark earlier ones done, and reflect the LIVE
+  // verdict on the active row (overrides the expected outcome once the engine has scored it).
+  document.querySelectorAll('#steprail .step').forEach((r,k)=>{
+    r.classList.toggle('on', k===i);
+    r.classList.toggle('done', k<i);
+    if(k===i && finalV){
+      const out=r.querySelector('.out');
+      if(out){ out.textContent=finalV.decision; out.setAttribute('data-out', finalV.decision); }
+    }
+  });
+  $('#panelR').innerHTML = `
+    <span class="step-badge">${s.badge}</span>
+    <h2>${s.title}</h2>
+    ${s.prompt?`<div class="prompt"><span class="who">${s.prompt.who.toUpperCase()}:</span> ${esc(s.prompt.text)}</div>`:''}
+    <p>${tpl(s.body)}</p>
+    ${finalV?verdictCard(res):''}
+    ${s.code.intro?`<div class="code-intro">${tpl(s.code.intro)}</div>`:''}
+    <div class="codecard">
+      <div class="cap"><span>${s.code.cap}</span>
+        <span class="src ${s.code.src==='live'?'livev':'codev'}">${s.code.src==='live'?'● LIVE':'○ from code'} · ${s.code.lang}</span></div>
+      <pre>${hl(s.code.text,s.code.lang)}</pre>
+    </div>
+    ${s.note?`<div class="note">${tpl(s.note.t)}</div>`:''}`;
+  $('#prev').disabled = i===0;
+  $('#next').textContent = i===STEPS.length-1 ? 'Restart ↺' : 'Next →';
+  $('#stepLabel').textContent = `Step ${i+1} of ${STEPS.length}`;
+  document.querySelectorAll('#dots i').forEach((d,k)=>d.classList.toggle('on',k===i));
+}
+
+function verdictCard(res){
+  if(res.error) return `<div class="verdict DENY"><div class="top">engine error</div><div class="body">${esc(res.error)}</div></div>`;
+  const vs = res.verdicts||[];
+  const f = vs[vs.length-1];
+  const rows = vs.map(v=>{
+    const c = v.decision;
+    const tag = `<span class="pill" style="color:${c==='ALLOW'?'#059669':c==='HALT'?'#7c3aed':'#e11d48'}">${c}</span>`;
+    return `<div style="display:flex;gap:8px;align-items:center;padding:3px 0"><code>${esc(v.tool)}</code> ${tag} <span style="color:#94a3b8;font-size:11.5px">${v.rule!=='none'?esc(v.rule):''}</span></div>`;
+  }).join('');
+  return `<div class="verdict ${f.decision}">
+    <div class="top">Live engine verdict: <span class="pill">${f.decision}</span> ${f.rule!=='none'?'· '+esc(f.rule):''}
+      <span style="margin-left:auto;font-weight:400;font-size:11px;color:#64748b">${vs.length} call(s) evaluated</span></div>
+    <div class="body">${rows}${f.decision!=='ALLOW'?`<div style="margin-top:6px;color:#334155">${esc(f.reason)}</div>`:''}</div></div>`;
+}
+
+function tpl(t){ return String(t).replace(/\$\{CID\}/g,esc(CID)).replace(/\$\{CAP\+1\}/g,CAP+1).replace(/\$\{CAP\}/g,CAP).replace(/\$\{REFUND\}/g,REFUND); }
+function esc(x){ return String(x==null?'':x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function hl(t,lang){
+  // Split each line at the first '#' into code + comment; highlight them separately so the
+  // string/keyword rules never touch comment text (which fixed a bug where the class attr
+  // inside an inserted comment span got re-matched as a string, leaking `"c-com">`).
+  const lineHL=(line)=>{
+    const hash=line.indexOf('#');
+    const codePart = hash>=0 ? line.slice(0,hash) : line;
+    const comPart  = hash>=0 ? line.slice(hash) : '';
+    let h=esc(codePart)
+      .replace(/("[^"]*")/g,'<span class="c-str">$1</span>')
+      .replace(/\b(for|in|if|return|None|def)\b/g,'<span class="c-key">$1</span>')
+      .replace(/\b(Verdict|GoalFenceHook|GoalFenceEngine)\b/g,'<span class="c-fn">$1</span>')
+      .replace(/\b(ALLOW|DENY|HALT|ESCALATE)\b/g,'<span class="c-hi">$1</span>');
+    if(comPart) h+=`<span class="c-com">${esc(comPart)}</span>`;
+    return h;
+  };
+  return String(t).split('\n').map(lineHL).join('\n');
+}
+$('#next').onclick=()=>{ i=(i+1)%STEPS.length; render(); };
+$('#prev').onclick=()=>{ if(i>0){ i--; render(); } };
+document.addEventListener('keydown',e=>{ if($('#flow').style.display==='none')return; if(e.key==='ArrowRight')$('#next').click(); if(e.key==='ArrowLeft')$('#prev').click(); });
+</script>
+</body>
+</html>

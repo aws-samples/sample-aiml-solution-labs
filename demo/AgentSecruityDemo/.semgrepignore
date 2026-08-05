@@ -1,0 +1,9 @@
+# Third-party vendored libraries (minified, not our source) — pulled locally to avoid
+# an external CDN runtime dependency. Not ours to modify, so exclude from SAST.
+app/web/vendor/
+
+# Build output / deps
+**/cdk.out/
+**/cdk.out.*/
+**/node_modules/
+**/__pycache__/

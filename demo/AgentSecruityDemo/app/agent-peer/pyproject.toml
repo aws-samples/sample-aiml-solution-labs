@@ -1,0 +1,10 @@
+[project]
+name = "iris_peer_agent"
+version = "0.1.0"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "bedrock-agentcore",
+    "strands-agents[a2a]==1.47.0",
+    "boto3>=1.43.51",
+    "aws-opentelemetry-distro>=0.10.1",
+]

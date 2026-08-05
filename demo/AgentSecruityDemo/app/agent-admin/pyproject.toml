@@ -1,0 +1,11 @@
+[project]
+name = "iris_agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "bedrock-agentcore",
+    "strands-agents",
+    "boto3",
+    "aws-opentelemetry-distro>=0.10.1",
+    "mcp",
+]
