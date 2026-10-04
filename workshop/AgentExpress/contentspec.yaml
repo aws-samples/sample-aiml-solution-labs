@@ -1,0 +1,57 @@
+version: 2.0
+
+defaultLocaleCode: en-US
+localeCodes:
+  - en-US
+
+additionalLinks:
+  - title: AgentExpress on GitHub (UI branch)
+    link: https://github.com/praven80/AgentExpress/tree/UI
+  - title: Amazon Bedrock AgentCore
+    link: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/what-is-bedrock-agentcore.html
+  - title: Strands Agents
+    link: https://strandsagents.com
+  - title: LangGraph
+    link: https://langchain-ai.github.io/langgraph/
+
+awsAccountConfig:
+  accountSources:
+    - WorkshopStudio
+    - CustomerProvided
+
+  participantRole:
+    # Participants work in the AgentExpress console only; the template creates their users and
+    # warms up model access. Stacks are deployed by the console's own CodeBuild roles. This role
+    # is for facilitators and troubleshooting.
+    managedPolicies:
+      - "arn:aws:iam::aws:policy/PowerUserAccess"
+
+  ec2KeyPair: false
+
+  regionConfiguration:
+    minAccessibleRegions: 2
+    maxAccessibleRegions: 2
+    accessibleRegions:
+      required:
+        - us-east-1
+        - us-west-2 # Stable Diffusion 3.5 Large (cover images in Lab 2)
+    deployableRegions:
+      required:
+        - us-east-1
+
+infrastructure:
+  cloudformationTemplates:
+    - templateLocation: static/agentexpress-console.yaml
+      label: AgentExpress Builder console
+      parameters:
+        # The framework source is read from the event assets bucket (assets/agentexpress-source.zip),
+        # so a private GitHub repository works.
+        - templateParameter: AssetsBucketName
+          defaultValue: "{{.AssetsBucketName}}"
+        - templateParameter: AssetsBucketPrefix
+          defaultValue: "{{.AssetsBucketPrefix}}"
+      participantVisibleStackOutputs:
+        - ConsoleUrl
+        - UserAlice
+        - UserBob
+        - WorkshopPassword
