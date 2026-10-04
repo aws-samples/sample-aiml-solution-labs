@@ -1,0 +1,70 @@
+{
+  "$comment": "GENERATED from app/keys.json by build_schema.py — do not edit. Every key's default value, projected here because keys.json is 40 KB of prose that deliberately does not ship in the container image while these values are needed at runtime. Read by app/common/defaults.py, cdk/lib/defaults.ts and local.key_defaults in terraform/. `perType` holds the defaults that depend on a tool's `type`, which a caller must ask for by variant.",
+  "agent": {
+    "kind": "sync",
+    "runtime": "main",
+    "temperature": 0,
+    "framework": "plain",
+    "output": "text",
+    "maxTokens": 4000,
+    "skill": "compliance",
+    "auth": "none",
+    "toolMode": "direct",
+    "maxToolCalls": 6
+  },
+  "agentcore": {
+    "memory.scope": "user",
+    "evaluations.evaluators": [
+      "Builtin.Faithfulness"
+    ]
+  },
+  "tool": {
+    "corpusKey": "doc_type",
+    "corpusOperator": "equals",
+    "listingMode": "DEFAULT",
+    "arg": "query",
+    "policy.permit": true
+  },
+  "perType": {
+    "tool": {
+      "maxResults": {
+        "kb": 5,
+        "websearch": 10
+      }
+    }
+  },
+  "orchestrator": {
+    "defaultModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "runtimeInvoke": {
+      "maxAttempts": 1,
+      "readTimeoutSeconds": 120
+    },
+    "a2aInvoke": {
+      "timeoutSeconds": 30,
+      "pollIntervalSeconds": 2,
+      "maxPollSeconds": 300
+    },
+    "insights": {
+      "lookbackHours": 168,
+      "pollTimeoutSeconds": 900,
+      "pollIntervalSeconds": 20
+    },
+    "priceList": true,
+    "policy": {
+      "enabled": true,
+      "mode": "ENFORCE"
+    },
+    "gatewayIdentity": "shared"
+  },
+  "guardrail": {
+    "blockedInputMessage": "This request was blocked by the content guardrail.",
+    "blockedOutputMessage": "The generated content was blocked by the content guardrail."
+  },
+  "authorization": {
+    "groupsClaim": "cognito:groups"
+  },
+  "memory": {
+    "expiryDays": 30,
+    "scope": "user"
+  }
+}

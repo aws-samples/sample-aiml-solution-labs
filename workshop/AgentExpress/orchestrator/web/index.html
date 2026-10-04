@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Replaced at run time from workflow.json `ui.title` (see App.tsx), so a
+         customer's deployment shows their own name rather than this sample's. -->
+    <title>AgentExpress</title>
+    <!-- Rendered at DEPLOY time by the IaC from the `idp` variable. Loaded before the
+         bundle so window.AUTH_CONFIG exists by the time auth.ts reads it, which is
+         what lets one built bundle serve Cognito, Auth0 and no-login. -->
+    <script src="/auth-config.js"></script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

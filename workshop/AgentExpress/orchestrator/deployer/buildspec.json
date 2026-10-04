@@ -1,0 +1,24 @@
+{
+  "version": "0.2",
+  "env": {
+    "shell": "bash"
+  },
+  "phases": {
+    "install": {
+      "commands": [
+        "node --version && python3 --version && docker --version",
+        "python3 -m pip install --quiet --disable-pip-version-check boto3==1.43.108"
+      ],
+      "runtime-versions": {
+        "nodejs": 22
+      }
+    },
+    "build": {
+      "commands": [
+        "aws s3 cp \"$SOURCE_URI\" /tmp/source.zip --only-show-errors",
+        "rm -rf /tmp/src && mkdir -p /tmp/src && cd /tmp/src && unzip -q /tmp/source.zip",
+        "cd /tmp/src && python3 deployer/runner.py"
+      ]
+    }
+  }
+}

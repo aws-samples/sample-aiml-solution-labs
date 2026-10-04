@@ -1,0 +1,20 @@
+# Local development only. Adds the dev web server and the test runner on top of the
+# runtime dependencies; everything the CONTAINER needs is in requirements.txt.
+-r requirements.txt
+# The local dev server (app/orchestrator/server.py), which stands in for the
+# AgentCore Runtime: `uvicorn app.orchestrator.server:app --port 8090`. uvicorn is
+# invoked as a command, not imported, which is why it appears here and nowhere else.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# The config-plane test suite (see tests/README.md). Run it from orchestrator/ with
+# `pytest` — no AWS credentials and no model calls, a few seconds.
+pytest>=8.0
+# Validates app/workflow.json against the GENERATED app/workflow.schema.json — the
+# schema your editor uses for autocomplete, so a test has to prove it agrees with the
+# three validators that actually gate a deploy. Dev-only: nothing in the container
+# reads the schema.
+jsonschema>=4.20
+# The Builder's builds store and deploy runner (tests/test_builds.py) are tested against
+# moto's in-memory DynamoDB and S3, because what they depend on — conditional writes,
+# nested-map updates, a GSI — is exactly what a hand-rolled fake would get wrong.
+moto[dynamodb,s3,cognitoidp]==5.2.3

@@ -1,0 +1,316 @@
+/* The graph canvas. Every colour and radius is a Cloudscape design token
+   (awsui-* custom properties), so this bespoke markup inherits the theme — including
+   dark mode and visual refreshes — instead of hardcoding a palette beside it. */
+
+.sfn-canvas {
+  /* ONE declaration of a state's width, read by both the box and the grid that lays
+     the boxes out. They were declared separately — the grid's columns were 240px while
+     the box was 260px — so every box in a parallel frame overflowed its own column by
+     20px and sat on top of its neighbour. That is the overlap in the screenshot: not a
+     spacing value to tune, two numbers that had to be one. */
+  --sfn-state-w: 300px;
+  position: relative;
+  border: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+  border-radius: var(--awsui-border-radius-item, 8px);
+  background-color: var(--awsui-color-background-layout-main, #f2f3f3);
+  /* The dot grid is what makes this read as a workflow canvas rather than a list. */
+  background-image: radial-gradient(
+    var(--awsui-color-border-divider-default, #d5dbdb) 1px, transparent 1px);
+  background-size: 16px 16px;
+  padding: 20px 0 28px;
+  overflow: auto;
+  max-height: 72vh;
+}
+
+.sfn-toolbar {
+  position: sticky;
+  top: 0;
+  float: right;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 12px;
+  padding: 2px 4px;
+  background: var(--awsui-color-background-container-content, #fff);
+  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
+  border-radius: var(--awsui-border-radius-input, 8px);
+  box-shadow: 0 1px 4px 1px rgba(0, 7, 22, 0.1);
+}
+.sfn-zoom-label {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--awsui-color-text-status-inactive, #656871);
+  font-variant-numeric: tabular-nums;
+}
+
+.sfn-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform-origin: top center;
+  transition: transform 0.12s ease;
+  min-width: max-content;
+  padding: 0 24px;
+}
+.sfn-stage-wrap { display: flex; flex-direction: column; align-items: center; }
+
+/* --- the connector between stages --------------------------------------- */
+.sfn-connector {
+  width: 2px;
+  height: 30px;
+  background: var(--awsui-color-border-control-default, #8c8c94);
+  position: relative;
+}
+.sfn-connector::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -1px;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--awsui-color-border-control-default, #8c8c94);
+}
+
+/* --- a stage ------------------------------------------------------------ */
+.sfn-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 52px;
+}
+.sfn-stage-num {
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--awsui-color-background-container-content, #fff);
+  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
+  color: var(--awsui-color-text-body-secondary, #424650);
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Annotations sit in normal flow above the stage, right-aligned. Absolute
+   positioning put them outside the container and the split panel clipped them. */
+.sfn-annotations {
+  align-self: stretch;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  min-height: 20px;
+}
+.sfn-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 16px;
+  cursor: help;
+  white-space: nowrap;
+}
+.sfn-pill-gate {
+  background: #fbf4e6;
+  color: var(--awsui-color-text-status-warning, #8d6605);
+  border: 1px solid #f0d99a;
+}
+.sfn-pill-branch {
+  background: #f2f8fd;
+  color: var(--awsui-color-text-status-info, #0972d3);
+  border: 1px solid #b8d9f5;
+}
+
+/* --- a Parallel / Sequence frame --------------------------------------- */
+.sfn-frame {
+  position: relative;
+  border: 1px dashed var(--awsui-color-border-input-default, #c6c6cd);
+  border-radius: var(--awsui-border-radius-container, 16px);
+  background: var(--awsui-color-background-container-content, #fff);
+  padding: 26px 20px 20px;
+}
+.sfn-frame-label {
+  position: absolute;
+  top: -11px;
+  left: 16px;
+  background: var(--awsui-color-background-container-content, #fff);
+  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
+  border-radius: 16px;
+  padding: 1px 10px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  color: var(--awsui-color-text-body-secondary, #424650);
+  white-space: nowrap;
+}
+.sfn-frame-grid {
+  display: grid;
+  /* Columns are exactly one state wide, and `--sfn-cols` comes from the component. The
+     previous version set the column width inline in TSX, which is how it drifted from
+     the box's own width. */
+  grid-template-columns: repeat(var(--sfn-cols, 2), var(--sfn-state-w));
+  gap: 16px 24px;
+  justify-content: center;
+}
+.sfn-frame-row { display: flex; align-items: stretch; }
+.sfn-seq-item { display: flex; align-items: center; }
+.sfn-seq-arrow {
+  width: 32px;
+  height: 2px;
+  background: var(--awsui-color-border-control-default, #8c8c94);
+  position: relative;
+  flex: 0 0 auto;
+}
+.sfn-seq-arrow::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -1px;
+  transform: translateY(-50%);
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid var(--awsui-color-border-control-default, #8c8c94);
+}
+
+/* --- a state box ------------------------------------------------------- */
+.sfn-state {
+  position: relative;
+  width: var(--sfn-state-w);
+  box-sizing: border-box;
+  min-height: 62px;
+  background: var(--awsui-color-background-container-content, #fff);
+  border: 1px solid var(--awsui-color-border-control-default, #8c8c94);
+  border-radius: var(--awsui-border-radius-item, 8px);
+  padding: 10px 12px;
+  cursor: pointer;
+  /* A ROW, not a column: icon, text, badge — which is the shape of a Step Functions
+     state and what keeps every box the same height. */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.sfn-state:hover { box-shadow: 0 4px 20px 1px rgba(0, 7, 22, 0.1); }
+.sfn-state:focus-visible {
+  outline: 2px solid var(--awsui-color-text-link-default, #0972d3);
+  outline-offset: 2px;
+}
+
+/* Status on the left edge, as Step Functions colours a state. */
+/* Status is a 4px stripe drawn INSIDE the box with a pseudo-element, not a thick left
+   border. A 6px border changed the box's geometry, so a bordered box and an unbordered
+   one were different widths and the grid could not keep them aligned. */
+.sfn-state::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 4px;
+  background: var(--awsui-color-border-divider-default, #e9ebed);
+}
+.sfn-done::before          { background: var(--awsui-color-text-status-success, #00802f); }
+.sfn-running::before       { background: var(--awsui-color-text-status-info, #0972d3); }
+.sfn-waiting_human::before { background: var(--awsui-color-text-status-warning, #8d6605); }
+.sfn-failed::before,
+.sfn-denied::before        { background: var(--awsui-color-text-status-error, #db0000); }
+.sfn-cancelled::before,
+.sfn-cancelling::before    { background: var(--awsui-color-text-status-inactive, #656871); }
+.sfn-skipped::before       { background: var(--awsui-color-text-status-inactive, #656871); }
+.sfn-skipped               { opacity: 0.6; }
+.sfn-pending               { border-color: var(--awsui-color-border-divider-default, #e9ebed); }
+
+.sfn-selected {
+  border-color: var(--awsui-color-text-link-default, #0972d3);
+  box-shadow: 0 0 0 3px rgba(9, 114, 211, 0.2);
+  background: #f0fbff;
+}
+/* With one state focused the others recede, so the selection is unmistakable. */
+.sfn-has-selection .sfn-state:not(.sfn-selected) { opacity: 0.55; }
+
+/* The state's icon. Its colour carries the status a second time, so the stripe is not
+   the only signal. */
+.sfn-icon {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  background: #f1f3f5;
+  border: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+  color: var(--awsui-color-text-body-secondary, #424650);
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sfn-icon-done      { background: #eef9f1; border-color: #c4e5d0; color: #0a6b30; }
+.sfn-icon-running   { background: #f2f8fd; border-color: #b8d9f5; color: #0959a8; }
+.sfn-icon-waiting_human { background: #fbf4e6; border-color: #f0d99a; color: #8d6605; }
+.sfn-icon-failed,
+.sfn-icon-denied    { background: #fff0f0; border-color: #f5c6c6; color: #db0000; }
+
+.sfn-state-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sfn-state-name {
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 18px;
+  color: var(--awsui-color-text-heading-default, #0f141a);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The second line: subtitle, then the placement badge. The subtitle is the flexible
+   one, so the badge is never clipped and the subtitle ellipsises instead. */
+.sfn-state-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.sfn-state-sub {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--awsui-color-text-status-inactive, #656871);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* The per-state re-run control. Always visible, not hover-only: the whole reason it is
+   here is that a reviewer could not find re-run, and an affordance that appears only on
+   hover is not findable — nor reachable by keyboard-only or touch users. */
+.sfn-state-act { flex: 0 0 auto; }
+
+.sfn-toolbar-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 2px 4px;
+  background: var(--awsui-color-border-divider-default, #e9ebed);
+}
+
+.sfn-bar {
+  position: absolute;
+  left: 4px; right: 0; bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--awsui-color-border-divider-default, #e9ebed);
+  overflow: hidden;
+}
+.sfn-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--awsui-color-text-status-info, #0972d3);
+  transition: width 0.4s ease;
+}

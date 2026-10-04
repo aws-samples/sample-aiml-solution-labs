@@ -1,0 +1,110 @@
+# Example Terraform variables — copy to terraform.tfvars and fill in your values.
+#   cp terraform.tfvars.example terraform.tfvars
+#
+# terraform.tfvars is gitignored (it holds tenant-specific values); THIS example
+# file is safe to commit. No SECRET ever belongs in either file — pass it at
+# apply time:  export TF_VAR_gateway_client_secret=...
+#
+# ===========================================================================
+# IDENTITY PROVIDER — pick ONE of the four blocks below
+# ===========================================================================
+# `idp` drives end-user login on the UI, the JWT authorizer on /api/*, AND the
+# machine-to-machine token agents use to reach the AgentCore Gateway. Everything
+# is derived from it in identity.tf; plan fails with a precise message if a
+# required value for your provider is missing.
+
+# ---------------------------------------------------------------------------
+# OPTION 1 (recommended) — Cognito, fully managed by Terraform
+# ---------------------------------------------------------------------------
+# Nothing to create by hand: the User Pool, Hosted UI domain, SPA client, and
+# (when enable_gateway = true) the M2M client + resource server are all made for
+# you, and the CloudFront callback URLs are wired automatically. Create your
+# first user after apply:
+#   aws cognito-idp admin-create-user --user-pool-id "$(terraform output -raw cognito_user_pool_id)" \
+#     --username you@example.com --user-attributes Name=email,Value=you@example.com Name=email_verified,Value=true
+idp     = "cognito"
+cognito = { create = true }
+
+# ---------------------------------------------------------------------------
+# OPTION 2 — Cognito, bring your own pool
+# ---------------------------------------------------------------------------
+# The App Client must be PUBLIC (no secret) with the authorization-code flow and
+# the openid/email/profile scopes. Add the CloudFront URL (terraform output
+# ui_url) to its Allowed Callback URLs and Allowed Sign-out URLs after the first
+# apply. With enable_gateway = true you also need a Resource Server (defining the
+# scope) plus a CONFIDENTIAL client authorized for it — see gateway_identity.
+# idp = "cognito"
+# cognito = {
+#   create        = false
+#   user_pool_id  = "us-east-1_XXXXXXXXX"
+#   client_id     = "YOUR_SPA_APP_CLIENT_ID"
+#   domain_prefix = "your-app-domain"        # before .auth.<region>.amazoncognito.com
+# }
+
+# ---------------------------------------------------------------------------
+# OPTION 3 — Auth0
+# ---------------------------------------------------------------------------
+# Terraform creates nothing in Auth0; set these up in your tenant first:
+#   1. Application, type "Single Page Application" -> client_id below.
+#      Allowed Callback URLs + Allowed Logout URLs + Allowed Web Origins must
+#      include the CloudFront URL (terraform output ui_url) after first apply.
+#   2. With enable_gateway = true: an API (its Identifier is the audience) and a
+#      "Machine to Machine" application authorized for it -> gateway_identity.
+# idp = "auth0"
+# auth0 = {
+#   domain    = "your-tenant.us.auth0.com"   # no scheme, no trailing slash
+#   client_id = "YOUR_AUTH0_SPA_CLIENT_ID"
+# }
+
+# ---------------------------------------------------------------------------
+# OPTION 4 — No login
+# ---------------------------------------------------------------------------
+# The UI and /api/* deploy OPEN to anyone with the URL. Fine for a quick local
+# trial; never for anything shared. Requires enable_gateway = false, because the
+# Gateway authorizer needs an OIDC provider — so every tool-bound agent (all five
+# research agents) then fails fast with ToolUnavailable. Nothing is simulated.
+# You must also remove authorization.actions from app/workflow.json: with no
+# authorizer there are no claims, so every group check would deny everyone.
+# idp                   = "none"
+# allow_unauthenticated = true   # required with idp = "none": you accept an open console
+# enable_gateway        = false
+
+# ===========================================================================
+# Machine-to-machine identity (agent -> AgentCore Gateway)
+# ===========================================================================
+# Required when enable_gateway = true, EXCEPT with option 1 above (Terraform
+# creates the client and reads the secret from state).
+#   `audience` = the OAuth2 scope for Cognito (e.g. "gateway/invoke"),
+#                or the API Identifier for Auth0 (e.g. "https://gateway.example.com").
+# The SECRET goes in TF_VAR_gateway_client_secret, NOT here.
+# gateway_identity = {
+#   client_id = "YOUR_M2M_CLIENT_ID"
+#   audience  = "gateway/invoke"
+# }
+
+# ---------------------------------------------------------------------------
+# Optional overrides (defaults shown; uncomment to change)
+# ---------------------------------------------------------------------------
+region = "us-east-1"
+# agent_name               = "multiagent_orchestrator"   # prefixes every resource name
+# model_id                 = ""   # empty: workflow.json orchestrator.defaultModel, else Claude Haiku 4.5
+# designer_model           = ""   # the Assistant's models in order, "model[:effort],..."; empty: Sonnet 5.5, then Sonnet 5
+# designer_effort          = ""   # low | medium (default) | high | model
+# container_engine         = "finch"                     # or "docker" / "podman"
+# memory_event_expiry_days = 30
+# log_retention_days       = 30
+# enable_gateway           = true    # false = no tool plane; an agent with a `tool` then fails loudly
+# X-Ray/Transaction Search trace indexing rate. 100 indexes every trace — turn it
+# down to cut cost on a long-running deployment.
+# transaction_search_indexing_percentage = 100
+# BFF API $default stage throttle (requests/s, burst).
+# api_throttle_rate  = 500
+# api_throttle_burst = 1000
+# Further Hosted UI callback/logout URLs, e.g. for local development (none by default).
+# extra_callback_urls = ["https://localhost:5173"]
+
+# Data sources are NOT configured here. Every tool an agent can call is declared
+# in the `tools` block of app/workflow.json (your own MCP server, REST API,
+# Lambda, or the Knowledge Base built from kb_docs/), and this Terraform derives
+# the Gateway targets and Cedar permits from it. See
+# orchestrator/docs/WORKFLOW_REFERENCE.md.

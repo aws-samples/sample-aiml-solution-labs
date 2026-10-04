@@ -1,0 +1,116 @@
+/* The floating assistant. Two bespoke pieces, both built from Cloudscape design tokens
+   so they theme with the rest of the app (see graph.css for the same approach):
+
+     1. the bubble — a circular icon trigger. Cloudscape has no circular button, and
+        forcing one by overriding the internals of `Button` would break on the next
+        component release, so the bubble is its own element;
+     2. the dock — the fixed shell the popup sits in. Everything INSIDE it is
+        Cloudscape: a Container with a header, a footer and Cloudscape form controls.
+
+   `position: fixed` in both cases because AppLayout owns the scroll containers, so a
+   normally-positioned element would scroll away from the corner. */
+
+.asst-bubble {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 1000;
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: var(--awsui-color-background-button-primary-default, #006ce0);
+  box-shadow: 0 4px 20px 1px rgba(0, 7, 22, 0.25);
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.asst-bubble:hover {
+  background: var(--awsui-color-background-button-primary-hover, #004a9e);
+  transform: translateY(-1px);
+}
+.asst-bubble:active {
+  background: var(--awsui-color-background-button-primary-active, #003b80);
+  transform: none;
+}
+.asst-bubble:focus-visible {
+  outline: 2px solid var(--awsui-color-text-link-default, #0972d3);
+  outline-offset: 3px;
+}
+.asst-bubble > svg {
+  width: 24px;
+  height: 24px;
+  stroke: currentcolor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* An unread-ish dot: the assistant replied while the popup was closed. */
+.asst-bubble-dot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--awsui-color-text-status-success, #00802f);
+  border: 2px solid #fff;
+}
+
+.asst-dock {
+  position: fixed;
+  right: 24px;
+  bottom: 92px;
+  z-index: 1000;
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  box-shadow: 0 8px 32px 4px rgba(0, 7, 22, 0.25);
+  border-radius: var(--awsui-border-radius-container, 16px);
+}
+
+/* The transcript scrolls; the header and the composer do not. Without a bounded height
+   a long conversation would push the composer off the bottom of the screen. */
+.asst-log {
+  max-height: min(46vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.asst-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--awsui-border-radius-item, 8px);
+  background: var(--awsui-color-background-layout-main, #f2f3f3);
+}
+.asst-turn-user {
+  background: #f2f8fd;
+  border: 1px solid #b8d9f5;
+}
+.asst-turn-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--awsui-color-text-body-default, #0f141a);
+}
+
+.asst-turn-md {
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--awsui-color-text-body-default, #0f141a);
+}
+@media (max-width: 600px) {
+  .asst-dock {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    bottom: 84px;
+  }
+}

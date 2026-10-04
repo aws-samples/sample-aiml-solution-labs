@@ -1,0 +1,78 @@
+# Lint + test configuration for the orchestrator.
+#
+# PINNED HERE ON PURPOSE. Before this file existed, `ruff check .` resolved its rule
+# set from whatever the installed ruff defaulted to, so the repo's finding count
+# depended on the linter's version rather than on any decision — and a customer
+# running it got a different answer than we did. The framework asks customers to
+# maintain it, so its checks have to be reproducible.
+#
+# THE BAR IS ZERO. Every rule below is expected to pass. A deliberate exception is
+# either in `ignore` with its reason, or a `# noqa` on the line with its reason, so a
+# reader can always tell an intended choice from a stale one.
+
+[tool.ruff]
+target-version = "py312"
+# 120, not 88. The comments in this codebase carry the reasoning behind decisions
+# (what was measured, what broke, why the obvious fix is wrong) and reflowing them to
+# 88 costs readability for nothing. 120 still catches a genuinely runaway line, which
+# is what the rule is worth having for.
+line-length = 120
+extend-exclude = ["cdk/cdk.out", "cdk/node_modules", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "F",      # pyflakes — unused imports and variables, undefined names
+    "E", "W", # pycodestyle
+    "I",      # import sorting
+    "UP",     # pyupgrade — modern syntax for the target version
+    "B",      # bugbear — real bug shapes
+    "S",      # bandit — security
+    "SIM",    # simplify
+    "RUF",    # ruff's own, including RUF100 (a `noqa` that suppresses nothing)
+    "BLE",    # blind except
+    "PIE", "PERF", "FURB", "ISC", "PYI", "EXE",
+]
+ignore = [
+    # Asserting is what a test does.
+    "S101",
+    # "Ambiguous" unicode in comments, docstrings and strings. The prose here uses
+    # real typography (en dashes in ranges, em dashes in asides) and the research
+    # runner's URL regex deliberately includes a fullwidth parenthesis, because a
+    # retrieved CJK page wraps links in one. Replacing them with ASCII would be a
+    # downgrade, not a cleanup. Note this does NOT relax the rule for identifiers —
+    # RUF001's dangerous case, a homoglyph in a NAME, is not something these three
+    # cover.
+    "RUF001", "RUF002", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The tests build workflows, agent packages and model payloads inline. Long string
+# fixtures and sample credentials are the fixtures, not smells.
+"tests/*" = ["S105", "S106"]
+# test_asset_rendering.py runs web/index.html's OWN functions under node, which is the
+# only way to assert what a reader actually sees rather than grepping the file for
+# strings — which is how the sample-contract coupling in the renderer survived so
+# long. The executable is an absolute path from shutil.which (no PATH lookup at call
+# time) and the script is built from fixtures in that file.
+"tests/test_asset_rendering.py" = ["S105", "S106", "S603"]
+
+[tool.pytest.ini_options]
+# Run from orchestrator/ with: pytest
+#
+# tests/ holds the CONFIG-PLANE suite — the code that turns workflow.json into a
+# running system. It calls no AWS APIs and no model, so the whole suite runs in a few
+# seconds and is safe in CI. See tests/README.md.
+#
+# This lived in a separate pytest.ini until the two files disagreed about who owned
+# the config; pytest.ini wins over pyproject.toml, so the settings added here would
+# have been silently ignored. One file now.
+testpaths = ["tests"]
+# Short tracebacks: these are assertions about config, not deep stacks.
+addopts = "-q --tb=short"
+filterwarnings = [
+    # Fail on a DeprecationWarning raised from OUR code, so a pydantic/langgraph
+    # deprecation surfaces here rather than at the next dependency bump.
+    "error::DeprecationWarning:app.*",
+    "error::DeprecationWarning:authz",
+    "error::DeprecationWarning:chatbot",
+]

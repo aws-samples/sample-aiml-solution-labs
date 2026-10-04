@@ -1,0 +1,50 @@
+# checkov for this Terraform: `checkov -d . --config-file .checkov.yaml` (from terraform/).
+# Every check skipped below is a deliberate property of the design or a cost a sample
+# should not impose, with the reason beside it. The CDK path accepts the same things
+# in cdk/lib/nag.ts (cdk-nag). Anything else checkov reports is a finding to fix.
+framework:
+  - terraform
+compact: true
+quiet: true
+skip-check:
+  # --- Customer-managed KMS keys: AWS-managed keys are used throughout --------------
+  # A CMK per table, bucket, log group, secret and repository adds a key policy to run
+  # and a monthly cost per key; data is still encrypted at rest with AWS-managed keys.
+  - CKV_AWS_119   # DynamoDB CMK
+  - CKV_AWS_145   # S3 SSE-KMS (SSE-S3 is on every bucket)
+  - CKV_AWS_158   # CloudWatch Logs KMS
+  - CKV_AWS_149   # Secrets Manager CMK (aws/secretsmanager is used)
+  - CKV_AWS_136   # ECR KMS (AES256 is used)
+  - CKV_AWS_173   # Lambda env vars: no secrets in them (runtime secrets are in Secrets Manager)
+  # --- Lambda: these functions are small request handlers -----------------------------
+  - CKV_AWS_115   # reserved concurrency: account-level limits apply; a cap would 429 a busy console
+  - CKV_AWS_116   # DLQ: invoked synchronously (API Gateway, Gateway, Cognito); no async retries to catch
+  - CKV_AWS_117   # VPC: they call AWS APIs only; a code tool can opt in with grants.vpc
+  - CKV_AWS_272   # code signing: the code is built by this deploy from this checkout
+  - CKV_AWS_50    # X-Ray on Lambda: traces come from AgentCore Observability (ADOT) instead
+  # --- S3 ---------------------------------------------------------------------------
+  - CKV_AWS_18    # server access logs: off for cost; CloudTrail data events cover audit
+  - CKV_AWS_144   # cross-region replication: single-region sample; contents are re-creatable
+  - CKV2_AWS_61   # lifecycle rules: buckets are emptied and deleted with the stack
+  - CKV2_AWS_62   # event notifications: nothing consumes them
+  - CKV_AWS_21    # versioning: on for builds and tool schemas; the UI bucket is re-uploaded each apply
+  - CKV2_AWS_6    # public access block: present on every bucket (checkov misreads count-indexed buckets)
+  # --- CloudFront: default *.cloudfront.net domain ------------------------------------
+  - CKV2_AWS_42   # custom certificate: bring a domain and ACM certificate to use one
+  - CKV_AWS_174   # TLS 1.2 minimum: needs a custom certificate; the default one cannot pin it
+  - CKV_AWS_68    # WAF: optional (per-ACL and per-request cost); the API is authenticated and throttled
+  - CKV2_AWS_47   # WAF Log4j rule: as above
+  - CKV_AWS_86    # standard logs: off for cost; API access logs are on
+  - CKV_AWS_310   # origin failover: single-region origin
+  - CKV_AWS_374   # geo restriction: not every deployment wants one
+  # --- Logs ---------------------------------------------------------------------------
+  - CKV_AWS_338   # 1-year retention: var.log_retention_days (default 30) is the operator's choice
+  # --- Secrets Manager ----------------------------------------------------------------
+  - CKV2_AWS_57   # rotation: Cognito client secrets and third-party tokens rotate at their source
+  # --- CodeBuild ----------------------------------------------------------------------
+  - CKV_AWS_316   # privileged mode: the deploy project builds the runtime container image
+  # --- IAM ----------------------------------------------------------------------------
+  # Batch evaluation and Logs Insights queries have no resource-level form; the role is
+  # the orchestrator runtime's own.
+  - CKV_AWS_290
+  - CKV_AWS_355

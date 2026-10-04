@@ -1,0 +1,81 @@
+/* The left pane, drawn to match Cloudscape's SideNavigation: same type scale and
+   the same palette (visual-refresh values), so replacing the component reads as none. */
+
+/* The AppLayout navigation slot does not set a font — Cloudscape components carry
+   their own — so a hand-built pane has to, or it renders in the browser's serif. */
+.axn {
+  padding: 8px 0 24px;
+  font-family: "Open Sans", "Helvetica Neue", Roboto, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 20px;
+  color: #0f141a;
+}
+/* Low specificity on purpose, so the padding rules below win without !important. */
+:where(.axn) ul { list-style: none; margin: 0; padding: 0; }
+.axn a {
+  color: #0f141a;
+  text-decoration: none;
+}
+.axn a:hover { color: #002b66; text-decoration: underline; }
+
+.axn-header { padding: 12px 28px 16px; border-bottom: 1px solid #c6c6cd; margin-bottom: 12px; }
+.axn-header a { font-size: 18px; font-weight: 700; line-height: 24px; }
+
+.axn-groups { padding: 0 12px 0 8px; }
+.axn-group + .axn-group { margin-top: 4px; }
+
+.axn-head, .axn-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+.axn-caret {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+}
+.axn-caret:focus-visible, .axn a:focus-visible {
+  outline: 2px solid #006ce0;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.axn-head-link { font-weight: 700; }
+
+.axn-entries { padding-left: 28px; }
+.axn-entry-link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.axn-actions { margin-left: auto; display: inline-flex; align-items: center; gap: 2px; flex: none; }
+/* Delete buttons stay out of the way until the row is pointed at or focused, so a
+   list of twenty runs does not read as twenty warnings. Still reachable by keyboard. */
+.axn-entry .axn-actions button { opacity: 0; }
+.axn-entry:hover .axn-actions button, .axn-entry:focus-within .axn-actions button { opacity: 1; }
+
+.axn-active > a, .axn-active > .axn-head-link, .axn-entry.axn-active .axn-entry-link {
+  color: #006ce0;
+  font-weight: 700;
+}
+.axn-empty { padding: 6px 0; font-size: 12px; color: #656871; }
+
+.axn-divider { border: 0; border-top: 1px solid #c6c6cd; margin: 16px 20px; }
+.axn-links { padding: 0 28px; }
+.axn-links li { padding: 4px 0; }
+.axn-ext { margin-left: 4px; }
+
+/* The Runs group's workflow picker: indented to the entries it filters. */
+.axn-extra { padding: 4px 0 6px 28px; }
+/* A divider among the links spans the pane like the one above them: out of the links'
+   padding, so all three line up. */
+.axn-divider-li { list-style: none; margin: 0 -28px; padding: 0 !important; }

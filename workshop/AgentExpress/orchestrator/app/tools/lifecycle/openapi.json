@@ -1,0 +1,82 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Product lifecycle (endoflife.date)",
+    "version": "1.0.0",
+    "description": "THE `type: \"openapi\"` DEMONSTRATION. A public REST API with no authentication, fronted by the AgentCore Gateway so an agent reaches it as an MCP tool. Returns support and end-of-life dates for a product (a language runtime, an OS, a database, a framework).\n\nWHY THIS FILE IS HAND-WRITTEN AND SHORT. The Gateway needs a schema, not the API's whole schema. The upstream service publishes far more than one operation and a far larger response shape; everything omitted here is simply not reachable, which is the point — the schema IS the allow-list of what an agent may call and what it may see back. A customer fronting an internal service does exactly this: describe the one or two operations the agent needs, not the service.\n\nThe `operationId` becomes the MCP tool name, so it is what `call` in workflow.json must match. The path parameter's name becomes the tool's argument name, so it is what `arg` must match."
+  },
+  "servers": [
+    {
+      "url": "https://endoflife.date",
+      "description": "Public, unauthenticated. No credential provider is configured for this target, which is why `auth` is absent from its workflow.json entry."
+    }
+  ],
+  "paths": {
+    "/api/v1/products/{product}/": {
+      "get": {
+        "operationId": "getProductLifecycle",
+        "summary": "Support and end-of-life dates for every release of one product",
+        "description": "Given a product identifier, returns each released version with the date it shipped, the date active support ends, and the date security support ends. Dates are facts published by the vendor, not estimates.",
+        "parameters": [
+          {
+            "name": "product",
+            "in": "path",
+            "required": true,
+            "description": "The product identifier, lowercase and hyphenated, e.g. \"python\", \"nodejs\", \"amazon-linux\", \"postgresql\", \"opensearch\". Not a search term: an unknown identifier is a 404, not an empty result.",
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The product and its releases.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ProductResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such product identifier."
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ProductResponse": {
+        "type": "object",
+        "properties": {
+          "result": { "$ref": "#/components/schemas/Product" }
+        }
+      },
+      "Product": {
+        "type": "object",
+        "description": "Note the nesting: the releases are at `result.releases`, not at the top level. That is what the tool's `rowPath` in workflow.json names, because the framework's default probing looks for a record list at `results`/`result`/`items` and this one is a level deeper.",
+        "properties": {
+          "name": { "type": "string", "description": "The identifier that was requested." },
+          "label": { "type": "string", "description": "Human-readable product name, e.g. \"Amazon Linux\"." },
+          "category": { "type": "string", "description": "e.g. \"lang\", \"os\", \"db\", \"framework\"." },
+          "releases": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Release" }
+          }
+        }
+      },
+      "Release": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "The release identifier, e.g. \"3.12\" or \"2023\"." },
+          "label": { "type": "string", "description": "Human-readable release name." },
+          "releaseDate": { "type": "string", "description": "ISO date this release first shipped." },
+          "isLts": { "type": "boolean", "description": "Whether this release is designated long-term support." },
+          "isEol": { "type": "boolean", "description": "Whether security support has ALREADY ended, as of the API's own generation time." },
+          "eolFrom": { "type": "string", "description": "ISO date security support ends. Null when the vendor has not announced one." },
+          "isEoas": { "type": "boolean", "description": "Whether ACTIVE support has already ended." },
+          "eoasFrom": { "type": "string", "description": "ISO date active support ends." },
+          "isMaintained": { "type": "boolean", "description": "Whether the release is still receiving any support." }
+        }
+      }
+    }
+  }
+}

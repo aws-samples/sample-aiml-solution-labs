@@ -1,0 +1,67 @@
+# The container needs requirements.txt + the app/ package. Nothing else.
+#
+# This list is also what the CDK Docker image asset STAGES, and the staged bytes
+# are what the asset hash is computed from — so anything that leaks in here causes
+# a pointless image rebuild and redeploy every time it changes.
+#
+# Patterns are matched with dockerignore semantics, where a bare `__pycache__/`
+# matches only at the ROOT. Nested caches need `**/` — without it, importing the
+# app or running the test suite writes app/**/__pycache__, those files get staged,
+# and the asset hash changes even though no source did.
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+
+# Secrets, never in an image layer.
+.env
+*.env
+.creds.env
+
+# Documentation.
+*.md
+docs/
+
+# Deployed separately, not needed inside the orchestrator container:
+#   bff/, kb_lambda/, app/tools/    -> their own Lambda zips
+#   web/                            -> static assets on S3/CloudFront
+#   kb_docs/                        -> uploaded to S3 and ingested by the KB
+#
+# app/tools/ is the one that needs saying out loud, because it sits UNDER app/ and it
+# is the only CODE there that does not ship. It holds the source of the functions behind
+# `type: "lambda"` tools, which the IaC zips and deploys on their own — the
+# orchestrator calls them through the Gateway and never imports them.
+terraform/
+cdk/
+cdk.out/
+node_modules/
+bff/
+kb_lambda/
+app/tools/
+web/
+kb_docs/
+
+# Developer tooling. The config-plane test suite runs on a developer machine or in
+# CI, never in the container; excluded so editing a test cannot invalidate the
+# image layer cache and trigger a rebuild + redeploy.
+tests/
+pytest.ini
+.pytest_cache/
+.ruff_cache/
+requirements-dev.txt
+format_workflow.py
+build_schema.py
+# EDITOR-FACING, not runtime. app/keys.json describes which keys workflow.json may
+# contain and app/workflow.schema.json is generated from it for your editor — together
+# ~40 KB of documentation that nothing in the container reads (the runtime reads
+# workflow.json, vocabulary.json and defaults.json, which DO ship). Excluded for the same
+# reason tests/ is: editing a doc string should not invalidate the image layer and trigger
+# a rebuild and redeploy.
+#
+# app/defaults.json exists BECAUSE of this exclusion. keys.json is where every key's
+# default is authored, but the running code needs those values, so build_schema.py
+# projects them into a 1.6 KB file that ships. It changes when a default changes and never
+# when a comment does, so both properties hold: one authored home, and no image churn from
+# editing prose.
+app/keys.json
+app/workflow.schema.json

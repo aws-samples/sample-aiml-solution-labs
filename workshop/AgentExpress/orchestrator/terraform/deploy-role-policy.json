@@ -1,0 +1,786 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Identity",
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CognitoManageUserPool",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:CreateUserPool",
+        "cognito-idp:DeleteUserPool",
+        "cognito-idp:DescribeUserPool",
+        "cognito-idp:UpdateUserPool",
+        "cognito-idp:GetUserPoolMfaConfig",
+        "cognito-idp:SetUserPoolMfaConfig",
+        "cognito-idp:CreateUserPoolDomain",
+        "cognito-idp:DeleteUserPoolDomain",
+        "cognito-idp:DescribeUserPoolDomain",
+        "cognito-idp:UpdateUserPoolDomain",
+        "cognito-idp:CreateUserPoolClient",
+        "cognito-idp:DeleteUserPoolClient",
+        "cognito-idp:DescribeUserPoolClient",
+        "cognito-idp:UpdateUserPoolClient",
+        "cognito-idp:CreateResourceServer",
+        "cognito-idp:DeleteResourceServer",
+        "cognito-idp:DescribeResourceServer",
+        "cognito-idp:UpdateResourceServer",
+        "cognito-idp:CreateGroup",
+        "cognito-idp:DeleteGroup",
+        "cognito-idp:GetGroup",
+        "cognito-idp:UpdateGroup",
+        "cognito-idp:TagResource",
+        "cognito-idp:UntagResource",
+        "cognito-idp:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:cognito-idp:*:*:userpool/*"
+      ]
+    },
+    {
+      "Sid": "CognitoManageUsers",
+      "Effect": "Allow",
+      "Action": [
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminGetUser",
+        "cognito-idp:AdminSetUserPassword",
+        "cognito-idp:AdminAddUserToGroup",
+        "cognito-idp:AdminRemoveUserFromGroup",
+        "cognito-idp:AdminListGroupsForUser"
+      ],
+      "Resource": [
+        "arn:aws:cognito-idp:*:*:userpool/*"
+      ]
+    },
+    {
+      "Sid": "EcrLogin",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EcrManageAndPush",
+      "Effect": "Allow",
+      "Action": [
+        "ecr:CreateRepository",
+        "ecr:DeleteRepository",
+        "ecr:DescribeRepositories",
+        "ecr:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:PutImageScanningConfiguration",
+        "ecr:SetRepositoryPolicy",
+        "ecr:GetRepositoryPolicy",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:BatchGetImage",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:ListImages",
+        "ecr:BatchDeleteImage",
+        "ecr:PutImageTagMutability",
+        "ecr:DescribeImages"
+      ],
+      "Resource": [
+        "arn:aws:ecr:*:*:repository/agentcore-*"
+      ]
+    },
+    {
+      "Sid": "IamManageExecutionRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:UpdateAssumeRolePolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/AgentCoreRuntime-*",
+        "arn:aws:iam::*:role/AgentCoreBFF-*",
+        "arn:aws:iam::*:role/AgentCoreGateway-*",
+        "arn:aws:iam::*:role/AgentCoreKB-*",
+        "arn:aws:iam::*:role/AgentCoreKBLambda-*",
+        "arn:aws:iam::*:role/AgentCoreSubagent-*",
+        "arn:aws:iam::*:role/ToolLambda-*",
+        "arn:aws:iam::*:role/AgentCoreDeploy-*",
+        "arn:aws:iam::*:role/A2AAgent-*",
+        "arn:aws:iam::*:role/AgentCoreSignup-*",
+        "arn:aws:iam::*:role/AgentCoreMemory-*"
+      ]
+    },
+    {
+      "Sid": "IamAttachOnlyKnownPolicies",
+      "Effect": "Allow",
+      "Action": [
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/AgentCoreRuntime-*",
+        "arn:aws:iam::*:role/AgentCoreBFF-*",
+        "arn:aws:iam::*:role/AgentCoreGateway-*",
+        "arn:aws:iam::*:role/AgentCoreKB-*",
+        "arn:aws:iam::*:role/AgentCoreKBLambda-*",
+        "arn:aws:iam::*:role/AgentCoreSubagent-*",
+        "arn:aws:iam::*:role/ToolLambda-*",
+        "arn:aws:iam::*:role/AgentCoreDeploy-*",
+        "arn:aws:iam::*:role/A2AAgent-*",
+        "arn:aws:iam::*:role/AgentCoreSignup-*",
+        "arn:aws:iam::*:role/AgentCoreMemory-*"
+      ],
+      "Condition": {
+        "ArnLike": {
+          "iam:PolicyARN": [
+            "arn:aws:iam::*:policy/AgentExpressDeploy-*",
+            "arn:aws:iam::aws:policy/ReadOnlyAccess"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "IamPassRoleToServices",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:role/AgentCoreRuntime-*",
+        "arn:aws:iam::*:role/AgentCoreBFF-*",
+        "arn:aws:iam::*:role/AgentCoreGateway-*",
+        "arn:aws:iam::*:role/AgentCoreKB-*",
+        "arn:aws:iam::*:role/AgentCoreKBLambda-*",
+        "arn:aws:iam::*:role/AgentCoreSubagent-*",
+        "arn:aws:iam::*:role/ToolLambda-*",
+        "arn:aws:iam::*:role/AgentCoreDeploy-*",
+        "arn:aws:iam::*:role/A2AAgent-*",
+        "arn:aws:iam::*:role/AgentCoreSignup-*",
+        "arn:aws:iam::*:role/AgentCoreMemory-*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "bedrock-agentcore.amazonaws.com",
+            "bedrock.amazonaws.com",
+            "lambda.amazonaws.com",
+            "codebuild.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "IamServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateServiceLinkedRole"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "iam:AWSServiceName": [
+            "*.bedrock-agentcore.amazonaws.com",
+            "bedrock-agentcore.amazonaws.com",
+            "application-signals.cloudwatch.amazonaws.com",
+            "ops.apigateway.amazonaws.com",
+            "vpc-lattice.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "CloudControlApiForAwsccProvider",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateResource",
+        "cloudformation:GetResource",
+        "cloudformation:UpdateResource",
+        "cloudformation:DeleteResource",
+        "cloudformation:ListResources",
+        "cloudformation:GetResourceRequestStatus",
+        "cloudformation:ListResourceRequests",
+        "cloudformation:CancelResourceRequest"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockAgentCoreControlPlane",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateMemory",
+        "bedrock-agentcore:DeleteMemory",
+        "bedrock-agentcore:GetMemory",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:UpdateMemory",
+        "bedrock-agentcore:CreateAgentRuntime",
+        "bedrock-agentcore:UpdateAgentRuntime",
+        "bedrock-agentcore:DeleteAgentRuntime",
+        "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+        "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
+        "bedrock-agentcore:GetAgentRuntimeEndpoint",
+        "bedrock-agentcore:ListAgentRuntimeEndpoints",
+        "bedrock-agentcore:CreateWorkloadIdentity",
+        "bedrock-agentcore:DeleteWorkloadIdentity",
+        "bedrock-agentcore:CreateGateway",
+        "bedrock-agentcore:UpdateGateway",
+        "bedrock-agentcore:DeleteGateway",
+        "bedrock-agentcore:GetGateway",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:CreateGatewayTarget",
+        "bedrock-agentcore:UpdateGatewayTarget",
+        "bedrock-agentcore:DeleteGatewayTarget",
+        "bedrock-agentcore:GetGatewayTarget",
+        "bedrock-agentcore:ListGatewayTargets",
+        "bedrock-agentcore:SynchronizeGatewayTargets",
+        "bedrock-agentcore:CreatePolicyEngine",
+        "bedrock-agentcore:UpdatePolicyEngine",
+        "bedrock-agentcore:DeletePolicyEngine",
+        "bedrock-agentcore:GetPolicyEngine",
+        "bedrock-agentcore:ListPolicyEngines",
+        "bedrock-agentcore:CreatePolicy",
+        "bedrock-agentcore:UpdatePolicy",
+        "bedrock-agentcore:DeletePolicy",
+        "bedrock-agentcore:GetPolicy",
+        "bedrock-agentcore:ListPolicies",
+        "bedrock-agentcore:TagResource",
+        "bedrock-agentcore:UntagResource",
+        "bedrock-agentcore:ListTagsForResource",
+        "bedrock-agentcore:ManageResourceScopedPolicy",
+        "bedrock-agentcore:CreateApiKeyCredentialProvider",
+        "bedrock-agentcore:GetApiKeyCredentialProvider",
+        "bedrock-agentcore:UpdateApiKeyCredentialProvider",
+        "bedrock-agentcore:DeleteApiKeyCredentialProvider",
+        "bedrock-agentcore:CreateEvaluator",
+        "bedrock-agentcore:GetEvaluator",
+        "bedrock-agentcore:UpdateEvaluator",
+        "bedrock-agentcore:DeleteEvaluator",
+        "bedrock-agentcore:ListEvaluators",
+        "bedrock-agentcore:CreateOauth2CredentialProvider",
+        "bedrock-agentcore:GetOauth2CredentialProvider",
+        "bedrock-agentcore:UpdateOauth2CredentialProvider",
+        "bedrock-agentcore:DeleteOauth2CredentialProvider",
+        "bedrock-agentcore:CreateTokenVault",
+        "bedrock-agentcore:GetTokenVault",
+        "bedrock-agentcore:GetWorkloadIdentity",
+        "bedrock-agentcore:UpdateWorkloadIdentity",
+        "bedrock-agentcore:InvokeGateway",
+        "bedrock-agentcore:ManageAdminPolicy",
+        "bedrock-agentcore:ListPolicyEngineSummaries",
+        "bedrock-agentcore:GetPolicyEngineSummary",
+        "bedrock-agentcore:ListPolicySummaries",
+        "bedrock-agentcore:GetPolicySummary",
+        "bedrock-agentcore:ListPolicyGenerationAssets",
+        "bedrock-agentcore:GetPolicyGeneration",
+        "bedrock-agentcore:StartPolicyGeneration"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AgentCoreIdentityReadsAtTargetCreation",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:GetWorkloadAccessToken",
+        "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+        "bedrock-agentcore:GetWorkloadAccessTokenForUserId",
+        "bedrock-agentcore:GetResourceApiKey",
+        "bedrock-agentcore:GetResourceOauth2Token"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:*:*:workload-identity-directory/default",
+        "arn:aws:bedrock-agentcore:*:*:workload-identity-directory/default/workload-identity/*",
+        "arn:aws:bedrock-agentcore:*:*:token-vault/default",
+        "arn:aws:bedrock-agentcore:*:*:token-vault/default/*"
+      ]
+    },
+    {
+      "Sid": "BedrockGuardrailManage",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateGuardrail",
+        "bedrock:UpdateGuardrail",
+        "bedrock:DeleteGuardrail",
+        "bedrock:GetGuardrail",
+        "bedrock:ListGuardrails",
+        "bedrock:ListTagsForResource",
+        "bedrock:TagResource",
+        "bedrock:UntagResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EvaluatorJudgeModel",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:GetInferenceProfile",
+        "bedrock:GetFoundationModel"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*::foundation-model/*",
+        "arn:aws:bedrock:*:*:inference-profile/*"
+      ]
+    },
+    {
+      "Sid": "BedrockKnowledgeBaseAndVectors",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:CreateKnowledgeBase",
+        "bedrock:UpdateKnowledgeBase",
+        "bedrock:DeleteKnowledgeBase",
+        "bedrock:GetKnowledgeBase",
+        "bedrock:ListKnowledgeBases",
+        "bedrock:CreateDataSource",
+        "bedrock:UpdateDataSource",
+        "bedrock:DeleteDataSource",
+        "bedrock:GetDataSource",
+        "bedrock:StartIngestionJob",
+        "bedrock:GetIngestionJob",
+        "bedrock:ListIngestionJobs",
+        "bedrock:TagResource",
+        "bedrock:UntagResource",
+        "s3vectors:CreateVectorBucket",
+        "s3vectors:DeleteVectorBucket",
+        "s3vectors:GetVectorBucket",
+        "s3vectors:CreateIndex",
+        "s3vectors:DeleteIndex",
+        "s3vectors:GetIndex",
+        "s3vectors:ListIndexes",
+        "s3vectors:TagResource",
+        "s3vectors:UntagResource",
+        "bedrock:ListTagsForResource",
+        "s3vectors:ListTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DynamoDbManageTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTable",
+        "dynamodb:UpdateTimeToLive",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:UpdateContinuousBackups"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:*:*:table/*_status",
+        "arn:aws:dynamodb:*:*:table/*_status/index/*"
+      ]
+    },
+    {
+      "Sid": "DynamoDbManageEventsTelemetryInsightsTables",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTable",
+        "dynamodb:UpdateTimeToLive",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource",
+        "dynamodb:ListTagsOfResource",
+        "dynamodb:UpdateContinuousBackups"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:*:*:table/*_events",
+        "arn:aws:dynamodb:*:*:table/*_events/index/*",
+        "arn:aws:dynamodb:*:*:table/*_telemetry",
+        "arn:aws:dynamodb:*:*:table/*_telemetry/index/*",
+        "arn:aws:dynamodb:*:*:table/*_insights",
+        "arn:aws:dynamodb:*:*:table/*_insights/index/*",
+        "arn:aws:dynamodb:*:*:table/*_audit",
+        "arn:aws:dynamodb:*:*:table/*_audit/index/*"
+      ]
+    },
+    {
+      "Sid": "LambdaManage",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:DeleteFunction",
+        "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListVersionsByFunction",
+        "lambda:CreateFunctionUrlConfig",
+        "lambda:DeleteFunctionUrlConfig",
+        "lambda:GetFunctionUrlConfig",
+        "lambda:UpdateFunctionUrlConfig",
+        "lambda:ListTags"
+      ],
+      "Resource": [
+        "arn:aws:lambda:*:*:function:AgentCoreBFF-*",
+        "arn:aws:lambda:*:*:function:AgentCoreKBRetrieve-*",
+        "arn:aws:lambda:*:*:function:ToolLambda-*",
+        "arn:aws:lambda:*:*:function:A2AAgent-*",
+        "arn:aws:lambda:*:*:function:AgentCoreSignup-*"
+      ]
+    },
+    {
+      "Sid": "ToolCodeBoundaries",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "iam:TagPolicy",
+        "iam:UntagPolicy",
+        "iam:PutRolePermissionsBoundary",
+        "iam:DeleteRolePermissionsBoundary"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:policy/ToolLambda-*",
+        "arn:aws:iam::*:role/ToolLambda-*"
+      ]
+    },
+    {
+      "Sid": "ToolCodeTest",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:InvokeFunction"
+      ],
+      "Resource": [
+        "arn:aws:lambda:*:*:function:ToolLambda-*"
+      ]
+    },
+    {
+      "Sid": "ToolCodeVpcLookups",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeSecurityGroups",
+        "ec2:DescribeSubnets",
+        "ec2:DescribeVpcs",
+        "ec2:DescribeNetworkInterfaces"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ApiGatewayV2Manage",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:GET",
+        "apigateway:POST",
+        "apigateway:PUT",
+        "apigateway:PATCH",
+        "apigateway:DELETE"
+      ],
+      "Resource": [
+        "arn:aws:apigateway:*::/apis",
+        "arn:aws:apigateway:*::/apis/*",
+        "arn:aws:apigateway:*::/tags/*"
+      ]
+    },
+    {
+      "Sid": "ApiGatewayRestExport",
+      "Effect": "Allow",
+      "Action": [
+        "apigateway:GET"
+      ],
+      "Resource": [
+        "arn:aws:apigateway:*::/restapis/*/stages/*/exports/*",
+        "arn:aws:apigateway:*::/restapis/*/stages/*"
+      ]
+    },
+    {
+      "Sid": "S3ManageUiBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketCORS",
+        "s3:GetBucketCORS",
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:ListBucket",
+        "s3:GetBucketLocation",
+        "s3:PutBucketTagging",
+        "s3:GetBucketTagging",
+        "s3:PutObjectTagging",
+        "s3:GetObjectTagging",
+        "s3:DeleteObjectTagging",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetEncryptionConfiguration"
+      ],
+      "Resource": [
+        "arn:aws:s3:::agentcore-*-ui-*",
+        "arn:aws:s3:::agentcore-*-ui-*/*",
+        "arn:aws:s3:::agentcore-*-kbdocs-*",
+        "arn:aws:s3:::agentcore-*-kbdocs-*/*",
+        "arn:aws:s3:::agentcore-*-docs-*",
+        "arn:aws:s3:::agentcore-*-docs-*/*"
+      ]
+    },
+    {
+      "Sid": "S3ManageToolSchemasBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketTagging",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:PutObjectTagging",
+        "s3:DeleteObjectTagging",
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPolicy",
+        "s3:DeleteBucketPolicy"
+      ],
+      "Resource": [
+        "arn:aws:s3:::agentcore-*-schemas-*",
+        "arn:aws:s3:::agentcore-*-schemas-*/*",
+        "arn:aws:s3:::agentcore-*-assets-*",
+        "arn:aws:s3:::agentcore-*-assets-*/*"
+      ]
+    },
+    {
+      "Sid": "CloudFrontManage",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateDistribution",
+        "cloudfront:UpdateDistribution",
+        "cloudfront:DeleteDistribution",
+        "cloudfront:GetDistribution",
+        "cloudfront:GetDistributionConfig",
+        "cloudfront:TagResource",
+        "cloudfront:ListTagsForResource",
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:UpdateOriginAccessControl",
+        "cloudfront:DeleteOriginAccessControl",
+        "cloudfront:GetOriginAccessControl",
+        "cloudfront:CreateResponseHeadersPolicy",
+        "cloudfront:UpdateResponseHeadersPolicy",
+        "cloudfront:DeleteResponseHeadersPolicy",
+        "cloudfront:GetResponseHeadersPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ObservabilitySetup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:DescribeLogGroups",
+        "logs:PutRetentionPolicy",
+        "logs:PutResourcePolicy",
+        "logs:DeleteResourcePolicy",
+        "logs:DescribeResourcePolicies",
+        "xray:PutTraceSegments",
+        "xray:GetSamplingRules",
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TransactionSearchEnable",
+      "Effect": "Allow",
+      "Action": [
+        "xray:GetTraceSegmentDestination",
+        "xray:UpdateTraceSegmentDestination",
+        "xray:GetIndexingRules",
+        "xray:UpdateIndexingRule",
+        "application-signals:StartDiscovery",
+        "cloudtrail:CreateServiceLinkedChannel"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "TransactionSearchSpansLogGroup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutRetentionPolicy"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:aws/spans",
+        "arn:aws:logs:*:*:log-group:aws/spans:*",
+        "arn:aws:logs:*:*:log-group:/aws/application-signals/data",
+        "arn:aws:logs:*:*:log-group:/aws/application-signals/data:*"
+      ]
+    },
+    {
+      "Sid": "BuilderPlane",
+      "Effect": "Allow",
+      "Action": [
+        "codebuild:CreateProject",
+        "codebuild:UpdateProject",
+        "codebuild:DeleteProject",
+        "codebuild:BatchGetProjects",
+        "iam:CreatePolicy",
+        "iam:DeletePolicy",
+        "iam:GetPolicy",
+        "iam:GetPolicyVersion",
+        "iam:ListPolicyVersions",
+        "iam:CreatePolicyVersion",
+        "iam:DeletePolicyVersion",
+        "dynamodb:CreateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:DescribeContinuousBackups",
+        "dynamodb:DescribeTimeToLive",
+        "dynamodb:UpdateTable",
+        "dynamodb:ListTagsOfResource",
+        "s3:CreateBucket",
+        "s3:DeleteBucket",
+        "s3:PutBucketPolicy",
+        "s3:GetBucketPolicy",
+        "s3:DeleteBucketPolicy",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:PutBucketVersioning",
+        "s3:GetBucketVersioning",
+        "s3:PutEncryptionConfiguration",
+        "s3:GetEncryptionConfiguration",
+        "s3:PutObject",
+        "s3:GetObject",
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:ListBucket",
+        "s3:ListBucketVersions",
+        "logs:DeleteLogGroup",
+        "s3:PutObjectTagging",
+        "s3:GetObjectTagging",
+        "s3:DeleteObjectTagging",
+        "dynamodb:UpdateContinuousBackups"
+      ],
+      "Resource": [
+        "arn:aws:codebuild:*:*:project/*-deploy",
+        "arn:aws:iam::*:policy/AgentExpressDeploy-*",
+        "arn:aws:dynamodb:*:*:table/*_builds",
+        "arn:aws:dynamodb:*:*:table/*_builds/index/*",
+        "arn:aws:s3:::agentcore-builds-*",
+        "arn:aws:s3:::agentcore-builds-*/*",
+        "arn:aws:logs:*:*:log-group:/aws/codebuild/*-deploy",
+        "arn:aws:logs:*:*:log-group:/aws/codebuild/*-deploy:*"
+      ]
+    },
+    {
+      "Sid": "LogGroupsManage",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DeleteLogGroup",
+        "logs:TagResource",
+        "logs:UntagResource",
+        "logs:ListTagsForResource",
+        "logs:TagLogGroup",
+        "logs:ListTagsLogGroup"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/aws/lambda/AgentCoreBFF-*",
+        "arn:aws:logs:*:*:log-group:/aws/lambda/AgentCoreKBRetrieve-*",
+        "arn:aws:logs:*:*:log-group:/aws/lambda/ToolLambda-*",
+        "arn:aws:logs:*:*:log-group:/aws/lambda/A2AAgent-*",
+        "arn:aws:logs:*:*:log-group:/aws/codebuild/*-deploy",
+        "arn:aws:logs:*:*:log-group:/aws/lambda/AgentCoreSignup-*",
+        "arn:aws:logs:*:*:log-group:/aws/apigateway/AgentCoreBFF-*",
+        "arn:aws:logs:*:*:log-group:/aws/apigateway/AgentCoreBFF-*:*"
+      ]
+    },
+    {
+      "Sid": "AgentCoreIdentitySecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:TagResource",
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:*:secret:bedrock-agentcore-identity*"
+    },
+    {
+      "Sid": "RuntimeSecrets",
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:CreateSecret",
+        "secretsmanager:DeleteSecret",
+        "secretsmanager:DescribeSecret",
+        "secretsmanager:PutSecretValue",
+        "secretsmanager:UpdateSecret",
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:GetResourcePolicy",
+        "secretsmanager:TagResource",
+        "secretsmanager:UntagResource"
+      ],
+      "Resource": "arn:aws:secretsmanager:*:*:secret:agentexpress/*/runtime-*"
+    },
+    {
+      "Sid": "TagResources",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:TagResource",
+        "cloudfront:UntagResource",
+        "cloudfront:ListTagsForResource",
+        "cognito-idp:TagResource",
+        "cognito-idp:UntagResource",
+        "cognito-idp:ListTagsForResource",
+        "ecr:TagResource",
+        "ecr:UntagResource",
+        "ecr:ListTagsForResource",
+        "iam:TagPolicy",
+        "iam:UntagPolicy",
+        "iam:ListPolicyTags",
+        "s3:PutBucketTagging",
+        "s3:GetBucketTagging",
+        "apigateway:TagResource",
+        "apigateway:UntagResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

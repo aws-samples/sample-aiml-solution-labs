@@ -1,0 +1,6760 @@
+{
+ "$comment": "Parity cases for the two workflow validators: web/src/builder/validate.ts (vitest) and bff/validate_build.py (pytest). `base` is a frozen copy of the sample workflow; each case applies `ops` ([\"set\", path, value] or [\"del\", path]) and expects exactly `expect`. Regenerate `expect` from the TypeScript with AX_WRITE_VALIDATION_CASES=1 npx vitest run validate.parity.",
+ "base": {
+  "$schema": "./workflow.schema.json",
+  "$comment": "THIS FILE IS THE WORKFLOW — edit it (plus terraform.tfvars) and you have your own multi-agent system. Both Terraform and CDK read it, so declaring a tool or agent here provisions its infrastructure; there are no IaC edits. BLOCKS: orchestrator (engine settings) · ui (branding) · guardrail (content safety) · authorization (who may approve/re-run/cancel/evaluate/delete) · tools (your data sources) · agents (one per folder under app/subagents/<id>/, except runtime \"a2a\" which has no folder) · steps (topology + review gates + branch conditions). EVERY AGENT reads the same way: name · kind · runtime · produces, then the model group (model · temperature · maxTokens) for a local agent OR the remote group (source|agentCard · skill · auth) for runtime \"a2a\", then what it may read (tool · corpus · access), then agentcore. EVERY TOOL reads: type · description, then where it lives, then how it is called, then filters, auth and policy. That order is not a convention you have to remember — `python3 format_workflow.py` rewrites the file into it, and `--check` fails CI if it drifts. WHICH KEYS ARE LEGAL WHERE is app/keys.json, and the allowed VALUES are app/vocabulary.json; both are framework-owned, and $schema above points your editor at the generated schema so it autocompletes keys, enumerates values and explains each one on hover. Prose reference: orchestrator/docs/WORKFLOW_REFERENCE.md",
+  "orchestrator": {
+   "defaultModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+   "runtimeInvoke": {
+    "maxAttempts": 1,
+    "readTimeoutSeconds": 120
+   },
+   "a2aInvoke": {
+    "timeoutSeconds": 150
+   },
+   "insights": {
+    "lookbackHours": 168,
+    "pollTimeoutSeconds": 900,
+    "pollIntervalSeconds": 20
+   },
+   "policy": {
+    "enabled": true,
+    "mode": "ENFORCE"
+   },
+   "chatbot": {
+    "enabled": true,
+    "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "greeting": "Hi! I can answer questions about your workflow runs — status, cost, latency, outputs, guardrails, evaluations — and take actions like approving a review gate, re-running an agent, or running an evaluation. What would you like to know?",
+    "placeholder": "Ask about a run, or tell me to do something…",
+    "tools": {
+     "status": true,
+     "sessions": true,
+     "outputs": true,
+     "costs": true,
+     "latency": true,
+     "guardrails": true,
+     "evals": true,
+     "runEval": true,
+     "rerun": true,
+     "review": true
+    }
+   }
+  },
+  "ui": {
+   "title": "AgentExpress",
+   "heading": "🧭 AgentExpress",
+   "defaultTopic": "Design a serverless data pipeline on AWS",
+   "topicPlaceholder": "What should the workflow work on?",
+   "subjectPlaceholder": "Subject (optional, for memory)",
+   "assistantTitle": "Run Assistant",
+   "assistantSubtitle": "Ask about status, cost, evals — or run actions"
+  },
+  "guardrail": {
+   "blockedInputMessage": "This request was blocked by the content guardrail.",
+   "blockedOutputMessage": "The generated content was blocked by the content guardrail.",
+   "contentFilters": {
+    "HATE": "MEDIUM",
+    "VIOLENCE": "MEDIUM",
+    "SEXUAL": "HIGH",
+    "INSULTS": "MEDIUM",
+    "MISCONDUCT": "MEDIUM",
+    "PROMPT_ATTACK": "HIGH"
+   },
+   "deniedWords": [
+    "BLOCKED_DEMO_TERM"
+   ],
+   "managedWordLists": [
+    "PROFANITY"
+   ],
+   "deniedTopics": [
+    {
+     "name": "LegalAdvice",
+     "definition": "Statements that give specific legal advice, or assert what a reader is legally obliged or entitled to do.",
+     "examples": [
+      "You are legally required to sign this contract.",
+      "You can ignore that clause — it isn't enforceable."
+     ]
+    }
+   ],
+   "piiEntities": {
+    "US_SOCIAL_SECURITY_NUMBER": "BLOCK",
+    "EMAIL": "ANONYMIZE"
+   }
+  },
+  "authorization": {
+   "groupsClaim": "cognito:groups",
+   "actions": {
+    "decision": [
+     "approvers",
+     "members"
+    ],
+    "rerun": [
+     "approvers",
+     "members"
+    ],
+    "cancel": [
+     "approvers",
+     "operators",
+     "members"
+    ],
+    "evaluate": [
+     "operators",
+     "members"
+    ],
+    "insights": [
+     "operators"
+    ],
+    "delete": [
+     "operators",
+     "members"
+    ],
+    "deploy": [
+     "operators",
+     "members"
+    ],
+    "destroy": [
+     "operators",
+     "members"
+    ]
+   }
+  },
+  "tools": {
+   "kb": {
+    "type": "kb",
+    "description": "Bedrock Knowledge Base over kb_docs/, on S3 Vectors, via a Gateway Lambda target. Each top-level folder under kb_docs/ is a corpus (doc_type) an agent can be scoped to.",
+    "corpora": [
+     "reference"
+    ],
+    "maxResults": 5,
+    "policy": {
+     "tool": "retrieve",
+     "restrictTo": {
+      "filter": [
+       "reference"
+      ]
+     }
+    }
+   },
+   "websearch": {
+    "type": "websearch",
+    "description": "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. us-east-1, eu-west-1, ap-northeast-1 only.",
+    "maxResults": 10
+   },
+   "docs": {
+    "type": "mcp",
+    "description": "AWS Knowledge MCP Server - managed by AWS, fronted by the Gateway over Streamable HTTP. Nothing to deploy, no credentials. Publishes five tools over live AWS content.",
+    "endpoint": "https://knowledge-mcp.global.api.aws",
+    "listingMode": "DYNAMIC",
+    "call": "aws___search_documentation",
+    "arg": "search_phrase",
+    "args": {
+     "limit": 5
+    }
+   },
+   "pricing": {
+    "type": "lambda",
+    "description": "Real AWS on-demand unit prices, via an AWS Lambda target. The type=\"lambda\" demonstration: a Lambda reaches what the Gateway cannot - a warehouse, an RDBMS, a VPC, or here a control-plane API with no MCP server in front of it. Returns RATES, never a total: a total needs usage volumes, which are a property of the workload and not of AWS.",
+    "source": "pricing",
+    "call": "aws_prices",
+    "arg": "services",
+    "rowFields": {
+     "service": "service",
+     "dimension": "dimension",
+     "unit": "unit",
+     "price": "pricePerUnit",
+     "currency": "currency",
+     "region": "region",
+     "requested": "requestedAs"
+    },
+    "toolSchema": [
+     {
+      "name": "aws_prices",
+      "description": "On-demand unit prices for the named AWS services in one region, from the AWS Price List Query API. Unit rates only, never a total.",
+      "properties": {
+       "services": {
+        "type": "string",
+        "required": true,
+        "description": "Comma-separated AWS service names, e.g. \"Amazon Bedrock, AWS Lambda, DynamoDB\"."
+       },
+       "region": {
+        "type": "string",
+        "required": false,
+        "description": "Region code to price for, e.g. \"us-east-1\". Defaults to the deployment's own region."
+       }
+      }
+     }
+    ]
+   },
+   "lifecycle": {
+    "type": "openapi",
+    "description": "Support and end-of-life dates for versioned products, via a REST API described by an OpenAPI schema. The type=\"openapi\" demonstration: a service that already speaks HTTP and already has a contract needs no function and no MCP server - the Gateway loads the schema, publishes each operationId as a tool, and translates the call. Returns DATES as published, never a judgement about them.",
+    "source": "lifecycle",
+    "call": "getProductLifecycle",
+    "arg": "product",
+    "rowPath": "result.releases",
+    "rowFields": {
+     "version": "name",
+     "released": "releaseDate",
+     "activeUntil": "eoasFrom",
+     "supportedUntil": "eolFrom",
+     "isEol": "isEol",
+     "isLts": "isLts"
+    }
+   }
+  },
+  "agents": {
+   "intake": {
+    "name": "Request Intake",
+    "runtime": "main",
+    "produces": "request-brief",
+    "maxTokens": 3000,
+    "access": [
+     "Session input (topic)"
+    ],
+    "agentcore": {
+     "guardrails": {
+      "input": true
+     },
+     "evaluations": {
+      "enabled": true,
+      "auto": true,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.Correctness",
+       "Builtin.InstructionFollowing"
+      ]
+     }
+    }
+   },
+   "knowledge_research": {
+    "name": "Knowledge Base Research",
+    "runtime": "dedicated",
+    "produces": "research-finding",
+    "maxTokens": 4000,
+    "tool": "kb",
+    "corpus": "reference",
+    "agentcore": {
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.ResponseRelevance"
+      ]
+     },
+     "policy": {
+      "enabled": true
+     }
+    }
+   },
+   "web_search": {
+    "name": "Web Search Research",
+    "runtime": "dedicated",
+    "produces": "research-finding",
+    "maxTokens": 4000,
+    "tool": "websearch",
+    "agentcore": {
+     "guardrails": {
+      "output": true
+     },
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.ResponseRelevance"
+      ]
+     },
+     "policy": {
+      "enabled": true
+     }
+    }
+   },
+   "documentation_search": {
+    "name": "MCP Documentation Research",
+    "runtime": "dedicated",
+    "produces": "research-finding",
+    "maxTokens": 4000,
+    "tool": "docs",
+    "agentcore": {
+     "guardrails": {
+      "output": true
+     },
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.ResponseRelevance"
+      ]
+     },
+     "policy": {
+      "enabled": true
+     }
+    }
+   },
+   "cost_research": {
+    "name": "Cost Research",
+    "runtime": "main",
+    "produces": "research-finding",
+    "maxTokens": 1500,
+    "tool": "pricing",
+    "agentcore": {
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.ResponseRelevance"
+      ]
+     },
+     "policy": {
+      "enabled": true
+     }
+    }
+   },
+   "analysis": {
+    "name": "Analysis",
+    "runtime": "a2a",
+    "produces": "analysis",
+    "source": "a2a_lambda",
+    "skill": "analysis",
+    "auth": "sigv4",
+    "agentcore": {
+     "memory": {
+      "longTerm": [
+       "semantic"
+      ]
+     },
+     "guardrails": {
+      "output": true
+     },
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Coherence",
+       "Builtin.InstructionFollowing"
+      ]
+     }
+    }
+   },
+   "recommendation": {
+    "name": "Recommendation",
+    "runtime": "a2a",
+    "produces": "recommendation",
+    "source": "a2a_lambda",
+    "skill": "recommendation",
+    "auth": "sigv4",
+    "agentcore": {
+     "memory": {
+      "longTerm": [
+       "semantic",
+       "summary"
+      ]
+     },
+     "guardrails": {
+      "output": true
+     },
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Helpfulness",
+       "Builtin.InstructionFollowing"
+      ]
+     }
+    }
+   },
+   "report": {
+    "name": "Report",
+    "runtime": "main",
+    "produces": "report",
+    "maxTokens": 8000,
+    "access": [
+     "Upstream assets (orchestrator graph state)"
+    ],
+    "agentcore": {
+     "guardrails": {
+      "input": true,
+      "output": true
+     },
+     "evaluations": {
+      "enabled": true,
+      "auto": true,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.Coherence",
+       "Builtin.Conciseness"
+      ]
+     }
+    }
+   },
+   "lifecycle_research": {
+    "name": "Lifecycle Research",
+    "runtime": "main",
+    "produces": "research-finding",
+    "maxTokens": 1500,
+    "tool": "lifecycle",
+    "agentcore": {
+     "evaluations": {
+      "enabled": true,
+      "auto": false,
+      "evaluators": [
+       "Builtin.Faithfulness",
+       "Builtin.ResponseRelevance"
+      ]
+     },
+     "policy": {
+      "enabled": true
+     }
+    }
+   }
+  },
+  "steps": [
+   {
+    "agent": "intake",
+    "hitl": true,
+    "branch": {
+     "when": [
+      {
+       "field": "objective",
+       "exists": false,
+       "goto": "END"
+      },
+      {
+       "field": "keyQuestions",
+       "lt": 1,
+       "goto": "analysis_reco"
+      }
+     ]
+    }
+   },
+   {
+    "parallel": [
+     "knowledge_research",
+     "web_search",
+     "documentation_search",
+     "cost_research",
+     "lifecycle_research"
+    ],
+    "hitl": true,
+    "gateId": "research",
+    "gateName": "Research"
+   },
+   {
+    "sequence": [
+     "analysis",
+     "recommendation"
+    ],
+    "hitl": true,
+    "gateId": "analysis_reco",
+    "gateName": "Analysis & Recommendation (A2A)"
+   },
+   {
+    "agent": "report"
+   }
+  ]
+ },
+ "cases": [
+  {
+   "name": "the shipped sample is valid",
+   "ops": [],
+   "expect": []
+  },
+  {
+   "name": "an unknown top-level block, and a missing one",
+   "ops": [
+    [
+     "set",
+     [
+      "extra"
+     ],
+     1
+    ],
+    [
+     "del",
+     [
+      "ui"
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "workflow"
+     },
+     "path": "extra",
+     "message": "unknown top-level block `extra`"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "workflow"
+     },
+     "path": "ui",
+     "message": "`ui` is missing — the test suite expects every top-level block to be present"
+    }
+   ]
+  },
+  {
+   "name": "a key outside its runtime",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "maxTokens"
+     ],
+     100
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.maxTokens",
+     "message": "`maxTokens` does not apply to runtime \"a2a\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "illegal tool and agent ids; two websearch tools",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "claims_db"
+     ],
+     {
+      "type": "websearch"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "fraud-check"
+     ],
+     {
+      "name": "x",
+      "maxTokens": 10
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claims_db"
+     },
+     "path": "tools.claims_db",
+     "message": "a tool key must be letters and digits, starting with a letter — it names both the Gateway target (no underscores) and the Cedar policy permit_<key> (no hyphens). Use camelCase, e.g. \"claimsDb\"."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "websearch"
+     },
+     "path": "tools.websearch",
+     "message": "at most one websearch tool per workflow (found websearch, claims_db)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claims_db"
+     },
+     "path": "tools.claims_db",
+     "message": "at most one websearch tool per workflow (found websearch, claims_db)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "fraud-check"
+     },
+     "path": "agents.fraud-check",
+     "message": "an agent id must be letters, digits and underscores, starting with a letter — it becomes part of an AgentCore Runtime name, so no hyphens"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "fraud-check"
+     },
+     "path": "agents.fraud-check",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    }
+   ]
+  },
+  {
+   "name": "a missing tool, a duplicate, and a corpus with no KB",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "tool"
+     ],
+     [
+      "docs",
+      "nope",
+      "docs"
+     ]
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "corpus"
+     ],
+     "reference"
+    ],
+    [
+     "del",
+     [
+      "agents",
+      "intake",
+      "access"
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.tool",
+     "message": "\"nope\" is not a tool. Declare it under Tools, or pick one of: kb, websearch, docs, pricing, lifecycle"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.tool",
+     "message": "\"docs\" is listed twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.corpus",
+     "message": "`corpus` needs a Knowledge Base among this agent's tools"
+    }
+   ]
+  },
+  {
+   "name": "access next to a tool; an empty tool list",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "tool"
+     ],
+     "docs"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "tool"
+     ],
+     []
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.access",
+     "message": "`access` describes what an agent reads when it has NO tool — remove it now that `tool` is set"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.tool",
+     "message": "`tool` must name at least one tool — remove it to have none"
+    }
+   ]
+  },
+  {
+   "name": "a corpus the KB does not have",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "corpus"
+     ],
+     "nope"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.corpus",
+     "message": "\"nope\" is not one of this KB's corpora (reference)"
+    }
+   ]
+  },
+  {
+   "name": "branches: on a parallel stage, backwards, and on the last stage",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      1,
+      "branch"
+     ],
+     {
+      "when": [
+       {
+        "field": "x",
+        "equals": 1,
+        "goto": "report"
+       }
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      2,
+      "branch"
+     ],
+     {
+      "default": "intake"
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3,
+      "branch"
+     ],
+     {
+      "default": "END"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1].branch",
+     "message": "a parallel stage cannot branch — no single agent's output decides. Branch on a stage after it."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2].branch.default",
+     "message": "\"intake\" is not AFTER this stage — a branch may only skip forward, never loop back"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 3
+     },
+     "path": "steps[3].branch",
+     "message": "the last stage cannot branch — there is nowhere left to route."
+    }
+   ]
+  },
+  {
+   "name": "branch grammar",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "branch"
+     ],
+     {
+      "when": [
+       {
+        "field": "x",
+        "bogus": 1
+       },
+       {
+        "field": "x",
+        "in": "a",
+        "goto": "nowhere"
+       },
+       {
+        "exists": "yes",
+        "goto": "END"
+       },
+       {
+        "gt": "abc",
+        "lt": "5",
+        "goto": "report"
+       },
+       {
+        "equals": [
+         1
+        ],
+        "notEquals": {
+         "a": 1
+        },
+        "goto": "END"
+       }
+      ],
+      "default": "",
+      "extra": 1
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch",
+     "message": "unknown key `extra`; a branch takes `when` and `default`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.default",
+     "message": "`default` must name a later stage or END"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[0]",
+     "message": "unknown key `bogus`; operators are equals, notEquals, in, contains, exists, gt, gte, lt, lte"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[0]",
+     "message": "each rule needs a `goto`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[0]",
+     "message": "each rule needs an operator: equals, notEquals, in, contains, exists, gt, gte, lt, lte"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[1].in",
+     "message": "`in` takes a list"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[1].goto",
+     "message": "\"nowhere\" is not a stage. Targets are END or a later stage's name: research, analysis_reco, report"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[2].exists",
+     "message": "`exists` takes true or false"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[3].gt",
+     "message": "`gt` takes a number"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[4].equals",
+     "message": "`equals` takes a single value, not a list or object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[4].notEquals",
+     "message": "`notEquals` takes a single value, not a list or object"
+    }
+   ]
+  },
+  {
+   "name": "an empty when list and a null branch",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "branch"
+     ],
+     {
+      "when": []
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      2,
+      "branch"
+     ],
+     null
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when",
+     "message": "`when` must be a non-empty list of rules"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2].branch",
+     "message": "must be an object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2].branch",
+     "message": "must be an object with `when` and/or `default`"
+    }
+   ]
+  },
+  {
+   "name": "the exactly-one rules",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentCard"
+     ],
+     "https://partner.example.com/card.json"
+    ],
+    [
+     "set",
+     [
+      "steps",
+      1,
+      "agent"
+     ],
+     "intake"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis",
+     "message": "set exactly one of `agentCard` / `source` (found agentCard and source). A remote agent's URL is either a stable value you write down (an external partner's card) or one the deploy generates (the stand-in's Function URL) and therefore cannot be committed. Both set is ambiguous; neither leaves the agent with nowhere to call."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1]",
+     "message": "set exactly one of `agent` / `parallel` / `sequence` (found agent and parallel). A step runs one agent, a concurrent group or a chained group. Anything else has no meaning, and both the graph builder and the topology derivation assume exactly one."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1]",
+     "message": "two stages are both named \"intake\", so a branch target is ambiguous — give one a gateId"
+    }
+   ]
+  },
+  {
+   "name": "an agent that never runs",
+   "ops": [
+    [
+     "del",
+     [
+      "steps",
+      3
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    }
+   ]
+  },
+  {
+   "name": "a Lambda tool's schema rules",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "claimsDb"
+     ],
+     {
+      "type": "lambda",
+      "description": "x",
+      "lambdaArn": "arn:aws:lambda:us-east-1:123:function:x",
+      "toolSchema": [
+       {
+        "name": "a",
+        "properties": {
+         "q": {
+          "type": "string"
+         }
+        }
+       },
+       {
+        "name": "b",
+        "properties": {}
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.lambdaArn",
+     "message": "must be a Lambda function ARN, arn:aws:lambda:<region>:<account>:function:<name>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.toolSchema[1].properties",
+     "message": "each entry needs at least one property"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.call",
+     "message": "with more than one tool in `toolSchema`, say which one agents call"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.arg",
+     "message": "\"query\" is not a property of a (q). Set `arg` to the property the agent's query goes into."
+    }
+   ]
+  },
+  {
+   "name": "a Lambda tool with a bad ARN and a bad property type",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "claimsDb"
+     ],
+     {
+      "type": "lambda",
+      "lambdaArn": "arn:nope",
+      "call": "zz",
+      "toolSchema": [
+       {
+        "name": "a",
+        "properties": {
+         "q": {
+          "type": "date"
+         }
+        }
+       },
+       "x",
+       {
+        "properties": {
+         "r": {}
+        }
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.lambdaArn",
+     "message": "must be a Lambda function ARN, arn:aws:lambda:<region>:<account>:function:<name>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.toolSchema[0].properties.q.type",
+     "message": "\"date\" is not one of: string, number, integer, boolean, array, object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.toolSchema[1]",
+     "message": "each entry must be an object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.toolSchema[2]",
+     "message": "each entry needs a `name`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "claimsDb"
+     },
+     "path": "tools.claimsDb.call",
+     "message": "\"zz\" is not a name in toolSchema (a)"
+    }
+   ]
+  },
+  {
+   "name": "a Lambda tool whose arg is not a property",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "arg"
+     ],
+     "nope"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.arg",
+     "message": "\"nope\" is not a property of aws_prices (services, region). Set `arg` to the property the agent's query goes into."
+    }
+   ]
+  },
+  {
+   "name": "KB dimensions, MCP endpoint and OpenAPI schema location",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dimensions"
+     ],
+     7
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "endpoint"
+     ],
+     "http://x"
+    ],
+    [
+     "del",
+     [
+      "tools",
+      "lifecycle",
+      "source"
+     ]
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "lifecycle",
+      "schemaS3Uri"
+     ],
+     "https://bucket/key"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dimensions",
+     "message": "amazon.titan-embed-text-v2:0 supports 1024, 512, 256"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.endpoint",
+     "message": "must be the server's https:// URL"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lifecycle"
+     },
+     "path": "tools.lifecycle.schemaS3Uri",
+     "message": "must be s3://<bucket>/<key> — the Gateway loads an OpenAPI schema only from S3"
+    }
+   ]
+  },
+  {
+   "name": "a KB with no corpora",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "corpora"
+     ],
+     []
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.corpora",
+     "message": "a Knowledge Base needs at least one corpus — a folder under kb_docs/"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.corpus",
+     "message": "\"reference\" is not one of this KB's corpora ()"
+    }
+   ]
+  },
+  {
+   "name": "an unknown tool type",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "type"
+     ],
+     "bogus"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.type",
+     "message": "\"bogus\" is not one of: kb, websearch, mcp, openapi, lambda, apigateway"
+    }
+   ]
+  },
+  {
+   "name": "A2A rules",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "auth"
+     ],
+     "none"
+    ],
+    [
+     "del",
+     [
+      "agents",
+      "recommendation",
+      "source"
+     ]
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "recommendation",
+      "agentCard"
+     ],
+     "http://x/card.json"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "recommendation",
+      "auth"
+     ],
+     "oauth2"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.auth",
+     "message": "the framework-deployed stand-in (source \"a2a_lambda\") is called with SigV4 — set auth to \"sigv4\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "recommendation"
+     },
+     "path": "agents.recommendation.skill",
+     "message": "`skill` picks a stand-in skill, so it needs `source`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "recommendation"
+     },
+     "path": "agents.recommendation.agentCard",
+     "message": "must be an https:// URL"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "recommendation"
+     },
+     "path": "agents.recommendation.auth",
+     "message": "oauth2 needs a credential provider in agentcore.identity.outbound"
+    }
+   ]
+  },
+  {
+   "name": "agentcore blocks that do nothing",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "agentcore"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.agentcore.memory.enabled",
+     "message": "unknown key; memory takes: longTerm, scope, custom, use"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.agentcore.memory",
+     "message": "`{\"enabled\": false}` is the same as leaving memory out — remove it"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.agentcore",
+     "message": "an empty agentcore block reads like a setting and does nothing — remove it"
+    }
+   ]
+  },
+  {
+   "name": "dotted keys: unknown sub-key, not an object, bad pattern",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "bogus": 1
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "agentcore",
+      "guardrails"
+     ],
+     true
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "agentcore",
+      "evaluations",
+      "evaluators"
+     ],
+     [
+      "Faithfulness",
+      3
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.agentcore.memory.bogus",
+     "message": "unknown key; memory takes: longTerm, scope, custom, use"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.evaluators[0]",
+     "message": "\"Faithfulness\" does not match ^(Builtin|Custom)\\.[A-Za-z][A-Za-z0-9]*$"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.evaluators[1]",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.agentcore.guardrails",
+     "message": "must be an object"
+    }
+   ]
+  },
+  {
+   "name": "no evaluations anywhere",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "web_search",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "documentation_search",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "cost_research",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "recommendation",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "lifecycle_research",
+      "agentcore",
+      "evaluations",
+      "enabled"
+     ],
+     false
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "workflow"
+     },
+     "path": "agents",
+     "message": "no agent has evaluations enabled; the test suite requires at least one (agentcore.evaluations.enabled)"
+    }
+   ]
+  },
+  {
+   "name": "only remote agents",
+   "ops": [
+    [
+     "set",
+     [
+      "agents"
+     ],
+     {
+      "analysis": {
+       "name": "Analysis",
+       "runtime": "a2a",
+       "produces": "analysis",
+       "source": "a2a_lambda",
+       "skill": "analysis",
+       "auth": "sigv4",
+       "agentcore": {
+        "memory": {
+         "longTerm": [
+          "semantic"
+         ]
+        },
+        "guardrails": {
+         "output": true
+        },
+        "evaluations": {
+         "enabled": true,
+         "auto": false,
+         "evaluators": [
+          "Builtin.Coherence",
+          "Builtin.InstructionFollowing"
+         ]
+        }
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps"
+     ],
+     [
+      {
+       "agent": "analysis"
+      }
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "workflow"
+     },
+     "path": "agents",
+     "message": "at least one agent must run here (runtime main or dedicated) — a workflow of only remote agents has nothing to deploy"
+    }
+   ]
+  },
+  {
+   "name": "no steps",
+   "ops": [
+    [
+     "set",
+     [
+      "steps"
+     ],
+     []
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "workflow"
+     },
+     "path": "steps",
+     "message": "a workflow needs at least one stage — drag an agent onto the canvas"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "web_search"
+     },
+     "path": "agents.web_search",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "cost_research"
+     },
+     "path": "agents.cost_research",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "recommendation"
+     },
+     "path": "agents.recommendation",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "lifecycle_research"
+     },
+     "path": "agents.lifecycle_research",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    }
+   ]
+  },
+  {
+   "name": "an empty parallel group, a repeated agent, a gate id that is an agent id",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      1,
+      "parallel"
+     ],
+     []
+    ],
+    [
+     "set",
+     [
+      "steps",
+      2,
+      "sequence"
+     ],
+     [
+      "analysis",
+      "recommendation",
+      "report"
+     ]
+    ],
+    [
+     "set",
+     [
+      "steps",
+      2,
+      "gateId"
+     ],
+     "intake"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[1].goto",
+     "message": "\"analysis_reco\" is not a stage. Targets are END or a later stage's name: research, intake, report"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1]",
+     "message": "set exactly one of `agent` / `parallel` / `sequence`. A step runs one agent, a concurrent group or a chained group. Anything else has no meaning, and both the graph builder and the topology derivation assume exactly one."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1].parallel",
+     "message": "must name at least one agent"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2].gateId",
+     "message": "\"intake\" is also an agent id — pick a different gate id"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 3
+     },
+     "path": "steps[3]",
+     "message": "\"report\" already runs in stage 3 — an agent can appear in one stage only"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2]",
+     "message": "two stages are both named \"intake\", so a branch target is ambiguous — give one a gateId"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "web_search"
+     },
+     "path": "agents.web_search",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "cost_research"
+     },
+     "path": "agents.cost_research",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "lifecycle_research"
+     },
+     "path": "agents.lifecycle_research",
+     "message": "not in any stage — drag it onto the canvas, or delete it. The deploy rejects an agent that never runs."
+    }
+   ]
+  },
+  {
+   "name": "two stages with the same name when something branches",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      2,
+      "gateId"
+     ],
+     "research"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[1].goto",
+     "message": "\"analysis_reco\" is not a stage. Targets are END or a later stage's name: research, research, report"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2]",
+     "message": "two stages are both named \"research\", so a branch target is ambiguous — give one a gateId"
+    }
+   ]
+  },
+  {
+   "name": "a reviewer behind an ungated parallel group",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      1,
+      "hitl"
+     ],
+     false
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2]",
+     "message": "the stage before this is an ungated parallel group, so a reviewer here cannot send work back past it (re-run cannot rewind across it). Gate that group, or accept the limit."
+    }
+   ]
+  },
+  {
+   "name": "types and numbers",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "maxTokens"
+     ],
+     "big"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "maxTokens"
+     ],
+     1.5
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "cost_research",
+      "maxTokens"
+     ],
+     0
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "web_search",
+      "name"
+     ],
+     5
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.maxTokens",
+     "message": "must be a whole number"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "web_search"
+     },
+     "path": "agents.web_search.name",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "cost_research"
+     },
+     "path": "agents.cost_research.maxTokens",
+     "message": "must be greater than 0"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.maxTokens",
+     "message": "must be a whole number"
+    }
+   ]
+  },
+  {
+   "name": "closed value sets",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy",
+      "mode"
+     ],
+     "BAD"
+    ],
+    [
+     "set",
+     [
+      "guardrail",
+      "contentFilters",
+      "HATE"
+     ],
+     "EXTREME"
+    ],
+    [
+     "set",
+     [
+      "guardrail",
+      "contentFilters",
+      "NOPE"
+     ],
+     "LOW"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "runtime"
+     ],
+     "Remote"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "guardrail"
+     },
+     "path": "guardrail.contentFilters.HATE",
+     "message": "\"EXTREME\" is not one of: NONE, LOW, MEDIUM, HIGH"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.mode",
+     "message": "must be one of: ENFORCE, LOG_ONLY"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.runtime",
+     "message": "\"Remote\" is not one of: main, dedicated, a2a"
+    }
+   ]
+  },
+  {
+   "name": "unknown, removed and required keys",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "bogus"
+     ],
+     1
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "websearch",
+      "includeDomains"
+     ],
+     [
+      "a.com"
+     ]
+    ],
+    [
+     "del",
+     [
+      "agents",
+      "report",
+      "name"
+     ]
+    ],
+    [
+     "set",
+     [
+      "ui",
+      "nope"
+     ],
+     1
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "ui"
+     },
+     "path": "ui.nope",
+     "message": "unknown key — nothing in the framework reads `nope`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "websearch"
+     },
+     "path": "tools.websearch.includeDomains",
+     "message": "Use `domains: {\"include\": [...]}`. The old key was applied per REQUEST; `domains` is applied on the Gateway target, which is both enforceable and supported by every connector version."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.bogus",
+     "message": "unknown key — nothing in the framework reads `bogus`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.name",
+     "message": "`name` is required for runtime \"main\""
+    }
+   ]
+  },
+  {
+   "name": "not objects",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report"
+     ],
+     "x"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     []
+    ],
+    [
+     "set",
+     [
+      "orchestrator"
+     ],
+     3
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator",
+     "message": "must be an object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs",
+     "message": "must be an object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report",
+     "message": "must be an object"
+    }
+   ]
+  },
+  {
+   "name": "JavaScript truthiness: an empty list is set",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "access"
+     ],
+     []
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "tool"
+     ],
+     "docs"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "recommendation",
+      "skill"
+     ],
+     []
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "recommendation"
+     },
+     "path": "agents.recommendation.skill",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.access",
+     "message": "`access` describes what an agent reads when it has NO tool — remove it now that `tool` is set"
+    }
+   ]
+  },
+  {
+   "name": "sampling and framework keys",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "topP"
+     ],
+     0.9
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "framework"
+     ],
+     "fortran"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "stopSequences"
+     ],
+     [
+      "END",
+      3
+     ]
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "topP"
+     ],
+     "high"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.framework",
+     "message": "\"fortran\" is not one of: plain, strands, langgraph"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.topP",
+     "message": "`topP` does not apply to runtime \"a2a\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.stopSequences[1]",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.topP",
+     "message": "must be a number"
+    }
+   ]
+  },
+  {
+   "name": "image agents",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "output"
+     ],
+     "image"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "image"
+     ],
+     {
+      "model": "dall-e",
+      "aspectRatio": "7:3",
+      "outputFormat": "gif",
+      "seed": -1
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "image"
+     ],
+     {
+      "aspectRatio": "1:1"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "cost_research",
+      "output"
+     ],
+     "image"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.image",
+     "message": "`image` configures how an image agent renders — set `output` to \"image\", or remove it"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "cost_research"
+     },
+     "path": "agents.cost_research.output",
+     "message": "images are rendered by stability.sd3-5-large-v1:0, which Bedrock serves in us-west-2: a deployment elsewhere sends this agent's image brief there, and one outside that geography is refused unless image.allowCrossRegion is true. Bedrock guardrails and evaluations do not check images"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.image.model",
+     "message": "\"dall-e\" is not one of: stability.sd3-5-large-v1:0, stability.stable-image-ultra-v1:1, stability.stable-image-core-v1:1"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.image.aspectRatio",
+     "message": "\"7:3\" is not one of: 1:1, 16:9, 9:16, 3:2, 2:3, 4:5, 5:4, 21:9, 9:21"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.image.outputFormat",
+     "message": "\"gif\" is not one of: png, jpeg"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.image.seed",
+     "message": "must be between 0 and 4294967294"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.output",
+     "message": "images are rendered by dall-e, which Bedrock serves in its own region: a deployment elsewhere sends this agent's image brief there, and one outside that geography is refused unless image.allowCrossRegion is true. Bedrock guardrails and evaluations do not check images"
+    }
+   ]
+  },
+  {
+   "name": "a kb over your own S3 bucket, encrypted with your key",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "s3Uri"
+     ],
+     "s3://my-docs-bucket/policies/"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "kmsKeyArn"
+     ],
+     "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a kb over an existing Knowledge Base",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "knowledgeBaseId"
+     ],
+     "ABCDEFGH12"
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "an existing Knowledge Base takes no embedding, bucket or key",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "knowledgeBaseId"
+     ],
+     "ABCDEFGH12"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "s3Uri"
+     ],
+     "s3://my-docs-bucket"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "embeddingModel"
+     ],
+     "amazon.titan-embed-text-v2:0"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.s3Uri",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.embeddingModel",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    }
+   ]
+  },
+  {
+   "name": "malformed kb sources, and a key with no bucket",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "knowledgeBaseId"
+     ],
+     "kb-1"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "s3Uri"
+     ],
+     "https://bucket/x"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "kmsKeyArn"
+     ],
+     "alias/mine"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.knowledgeBaseId",
+     "message": "must be a Knowledge Base id: 10 capital letters and digits"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.s3Uri",
+     "message": "must be s3://<bucket> or s3://<bucket>/<prefix>/"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.kmsKeyArn",
+     "message": "must be a KMS key ARN, arn:aws:kms:<region>:<account>:key/<id>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.s3Uri",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.kmsKeyArn",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    }
+   ]
+  },
+  {
+   "name": "a KMS key without s3Uri",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "kmsKeyArn"
+     ],
+     "arn:aws:kms:us-east-1:123456789012:key/abc"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.kmsKeyArn",
+     "message": "only applies with s3Uri: it decrypts that bucket"
+    }
+   ]
+  },
+  {
+   "name": "an API Gateway REST API tool",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "apigateway",
+      "description": "Orders API",
+      "restApiId": "a1b2c3d4e5",
+      "stage": "prod",
+      "toolFilters": [
+       {
+        "path": "/orders/*",
+        "methods": [
+         "GET"
+        ]
+       }
+      ],
+      "toolOverrides": [
+       {
+        "path": "/orders/{id}",
+        "method": "GET",
+        "name": "getOrder",
+        "description": "One order"
+       }
+      ],
+      "auth": "sigv4",
+      "call": "getOrder"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a malformed API Gateway tool",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "apigateway",
+      "description": "Orders API",
+      "restApiId": "ABC",
+      "stage": "prod stage",
+      "toolFilters": [
+       {
+        "path": "orders",
+        "methods": [
+         "GET"
+        ]
+       },
+       {
+        "path": "/x",
+        "methods": [
+         "FETCH"
+        ]
+       }
+      ],
+      "toolOverrides": [
+       {
+        "path": "/orders/*",
+        "method": "GET",
+        "name": "x"
+       },
+       {
+        "path": "/o",
+        "method": "GET",
+        "name": "1bad"
+       }
+      ],
+      "auth": "sigv4",
+      "call": "getOrder"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.restApiId",
+     "message": "must be a REST API id: 10 lowercase letters and digits"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.stage",
+     "message": "must be a stage name: letters, digits, - and _"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.toolFilters[0]",
+     "message": "must be {\"path\": \"/...\", \"methods\": [...]}, the path starting with /"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.toolFilters[1].methods",
+     "message": "must list one or more of: GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.toolOverrides[0]",
+     "message": "needs an explicit path (no *), starting with /"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.toolOverrides[1].name",
+     "message": "must be a tool name: a letter, then letters, digits, - or _ (64 at most)"
+    }
+   ]
+  },
+  {
+   "name": "an API Gateway tool with no filters, and oauth2 it cannot take",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "apigateway",
+      "description": "Orders API",
+      "restApiId": "a1b2c3d4e5",
+      "stage": "prod",
+      "toolFilters": [],
+      "toolOverrides": [
+       {
+        "path": "/orders/{id}",
+        "method": "GET",
+        "name": "getOrder",
+        "description": "One order"
+       }
+      ],
+      "auth": "oauth2",
+      "call": "getOrder",
+      "oauth": {
+       "clientId": "abc",
+       "scopes": [
+        "orders.read"
+       ],
+       "tokenUrl": "https://auth.example.com/oauth2/token"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.oauth",
+     "message": "`oauth` does not apply to type \"apigateway\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.toolFilters",
+     "message": "needs at least one filter, or the target exposes no tool"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.auth",
+     "message": "oauth2 is only for mcp, openapi tools"
+    }
+   ]
+  },
+  {
+   "name": "an inline OpenAPI schema with OAuth client credentials",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersApi"
+     ],
+     {
+      "type": "openapi",
+      "description": "Orders",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "Orders",
+        "version": "1"
+       },
+       "paths": {
+        "/orders/{id}": {
+         "get": {
+          "operationId": "getOrder",
+          "parameters": [
+           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "auth": "oauth2",
+      "oauth": {
+       "clientId": "abc",
+       "scopes": [
+        "orders.read"
+       ],
+       "tokenUrl": "https://auth.example.com/oauth2/token"
+      },
+      "call": "getOrder"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "an inline schema that is not usable, and oauth2 without settings",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersApi"
+     ],
+     {
+      "type": "openapi",
+      "description": "Orders",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {},
+       "paths": {
+        "/a": {
+         "get": {
+          "responses": {}
+         }
+        }
+       },
+       "components": {
+        "securitySchemes": {
+         "k": {
+          "type": "apiKey"
+         }
+        }
+       }
+      },
+      "auth": "oauth2"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.schema.paths./a.get",
+     "message": "needs an operationId: it becomes the tool's name"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.schema.components.securitySchemes",
+     "message": "is not supported by the Gateway: set `auth` on the tool instead"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.oauth",
+     "message": "auth \"oauth2\" needs {\"clientId\", \"scopes\", and \"discoveryUrl\" or \"tokenUrl\"}"
+    }
+   ]
+  },
+  {
+   "name": "oauth settings that are incomplete, and oauth without oauth2",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersApi"
+     ],
+     {
+      "type": "openapi",
+      "description": "Orders",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "Orders",
+        "version": "1"
+       },
+       "paths": {
+        "/orders/{id}": {
+         "get": {
+          "operationId": "getOrder",
+          "parameters": [
+           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "auth": "oauth2",
+      "oauth": {
+       "scopes": "all",
+       "discoveryUrl": "http://x",
+       "tokenUrl": "https://a.b/t"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "mcpx"
+     ],
+     {
+      "type": "mcp",
+      "description": "m",
+      "endpoint": "https://m.example.com/mcp",
+      "oauth": {
+       "clientId": "abc",
+       "scopes": [
+        "orders.read"
+       ],
+       "tokenUrl": "https://auth.example.com/oauth2/token"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.oauth.clientId",
+     "message": "is required: the OAuth client's id"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.oauth.scopes",
+     "message": "must be a list of scope names (it may be empty)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.oauth",
+     "message": "needs exactly one of discoveryUrl (the issuer's .well-known/openid-configuration) or tokenUrl"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.oauth.discoveryUrl",
+     "message": "must be an https:// URL"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "tool",
+      "id": "mcpx"
+     },
+     "path": "tools.mcpx.oauth",
+     "message": "is only used with auth \"oauth2\""
+    }
+   ]
+  },
+  {
+   "name": "two OpenAPI schema sources",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersApi"
+     ],
+     {
+      "type": "openapi",
+      "description": "Orders",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "Orders",
+        "version": "1"
+       },
+       "paths": {
+        "/orders/{id}": {
+         "get": {
+          "operationId": "getOrder",
+          "parameters": [
+           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "schemaS3Uri": "s3://b/k.json"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi",
+     "message": "set exactly one of `schemaS3Uri` / `source` / `schema` (found schemaS3Uri and schema). One of three has to say where the OpenAPI document is: schemaS3Uri = an object you already host; source = a file in app/tools/<source>/openapi.json the framework uploads; schema = the document itself, inline. None leaves the target with no schema; more than one is ambiguous."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.schemaS3Uri",
+     "message": "must be s3://<bucket>/<key> — the Gateway loads an OpenAPI schema only from S3"
+    }
+   ]
+  },
+  {
+   "name": "an agent whose model chooses its tools",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "maxToolCalls"
+     ],
+     4
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "model-chosen tools with no tools, and too many calls",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "maxToolCalls"
+     ],
+     50
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "toolMode"
+     ],
+     "always"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.maxToolCalls",
+     "message": "must be from 1 to 20"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.toolMode",
+     "message": "\"model\" lets the model choose among the agent's tools, and it has none — bind one with `tool`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.toolMode",
+     "message": "\"always\" is not one of: direct, model"
+    }
+   ]
+  },
+  {
+   "name": "every memory strategy, a scope, a custom strategy and a custom judge",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "longTerm": [
+       "semantic",
+       "summary",
+       "userPreference",
+       "episodic"
+      ],
+      "scope": "subject",
+      "custom": {
+       "base": "semantic",
+       "instructions": "Keep only product configuration and open issues."
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "agentcore",
+      "evaluations"
+     ],
+     {
+      "enabled": true,
+      "evaluators": [
+       "Builtin.Helpfulness",
+       "Custom.policyTone"
+      ],
+      "custom": [
+       {
+        "name": "policyTone",
+        "instructions": "Score how well the reply keeps to policy wording."
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "evaluators this framework cannot score, and custom ones that are not right",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "agentcore",
+      "evaluations"
+     ],
+     {
+      "enabled": true,
+      "evaluators": [
+       "Builtin.GoalSuccessRate",
+       "Builtin.ToolSelectionAccuracy",
+       "Custom.missing"
+      ],
+      "custom": [
+       {
+        "name": "bad name",
+        "instructions": "x"
+       },
+       {
+        "name": "twice",
+        "instructions": ""
+       },
+       {
+        "name": "twice",
+        "instructions": "y",
+        "scale": [
+         {
+          "value": 1
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "longTerm": [
+       "semantic"
+      ],
+      "scope": "everyone",
+      "custom": {
+       "base": "episodic",
+       "instructions": "x"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.memory.scope",
+     "message": "\"everyone\" is not one of: user, subject, agent, run"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.evaluators[0]",
+     "message": "Builtin.GoalSuccessRate scores a session, and this framework scores one agent's run — not offered yet"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.evaluators[1]",
+     "message": "Builtin.ToolSelectionAccuracy scores a tool call, and this framework scores one agent's run — not offered yet"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.evaluators[2]",
+     "message": "Custom.missing is not defined in evaluations.custom or in the build's evaluators"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.custom[0].name",
+     "message": "needs a name: a letter, then letters and digits (32 at most)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.custom[1].instructions",
+     "message": "is required: what the judge scores, and how"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.custom[2].name",
+     "message": "\"twice\" is used twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.evaluations.custom[2].scale",
+     "message": "must be 2 to 20 {value, label, definition} points"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.agentcore.memory.custom.base",
+     "message": "must be one of: semantic, summary, userPreference"
+    }
+   ]
+  },
+  {
+   "name": "custom Cedar policies, in log-only mode",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "LOG_ONLY",
+      "custom": [
+       {
+        "name": "noFilterlessSearch",
+        "description": "Never search the knowledge base without a corpus filter.",
+        "statement": "forbid(principal, action == AgentCore::Action::\"kb___retrieve\", resource == AgentCore::Gateway::\"{{gateway}}\") unless { context.input has filter };"
+       },
+       {
+        "name": "docsOnly",
+        "statement": "// the docs server, every tool\npermit(principal, action in AgentCore::Action::\"docs\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       },
+       {
+        "name": "smallQueries",
+        "libraryId": "a1b2c3d4",
+        "statement": "@id(\"small\") permit(principal, action == AgentCore::Action::\"websearch___WebSearch\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has query && context.input.query like \"*\" };"
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "custom Cedar policies that are not right, and an unknown mode",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "ALLOW",
+      "custom": [
+       "not an object",
+       {
+        "name": "bad name",
+        "statement": "permit(principal, action, resource);"
+       },
+       {
+        "name": "twice",
+        "statement": "forbid(principal, action == AgentCore::Action::\"refunds___issue\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       },
+       {
+        "name": "twice",
+        "description": 3,
+        "tool": "kb",
+        "statement": "permit(principal, action == AgentCore::Action::\"kb___retrieve\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       },
+       {
+        "name": "unclosed",
+        "statement": "permit(principal, action == AgentCore::Action::\"kb___retrieve, resource);"
+       },
+       {
+        "name": "wholeTool",
+        "statement": "permit(principal, action == AgentCore::Action::\"kb\", resource == AgentCore::Gateway::\"arn:aws:bedrock-agentcore:us-east-1:111122223333:gateway/x\");"
+       },
+       {
+        "name": "two",
+        "statement": "forbid(principal, action in AgentCore::Action::\"kb\", resource == AgentCore::Gateway::\"{{gateway}}\"); forbid(principal, action in AgentCore::Action::\"docs\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       },
+       {
+        "name": "empty",
+        "statement": ""
+       },
+       {
+        "name": "trailing",
+        "statement": "forbid(principal, action in AgentCore::Action::\"kb\", resource == AgentCore::Gateway::\"{{gateway}}\") because;"
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.mode",
+     "message": "must be one of: ENFORCE, LOG_ONLY"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[0]",
+     "message": "must be {name, description, statement}"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[1].name",
+     "message": "needs a name: a letter, then letters and digits (32 at most)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[1].statement",
+     "message": "must name the tool it governs: action == AgentCore::Action::\"<key>___<tool>\", or action in AgentCore::Action::\"<key>\" for all of its tools"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[1].statement",
+     "message": "the resource must be resource == AgentCore::Gateway::\"{{gateway}}\": the build's Gateway ARN is filled in when it deploys"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[2].statement",
+     "message": "\"refunds___issue\" is not a tool of this build (its tools: docs, kb, lifecycle, pricing, websearch)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[3].tool",
+     "message": "unknown key; a policy takes: name, description, statement, libraryId"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[3].name",
+     "message": "\"twice\" is used twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[3].description",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[3].statement",
+     "message": "a permit for one tool needs a `when` condition, e.g. when { context.input has query } — AgentCore rejects an unconditioned one as overly permissive"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[4].statement",
+     "message": "a string is not closed: add the missing \""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[5].statement",
+     "message": "action == needs one tool, \"kb___<toolName>\"; for all of its tools write action in AgentCore::Action::\"kb\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[5].statement",
+     "message": "the resource must be resource == AgentCore::Gateway::\"{{gateway}}\": the build's Gateway ARN is filled in when it deploys"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[6].statement",
+     "message": "holds more than one statement: give each its own policy"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[7].statement",
+     "message": "is empty: write one permit(...) or forbid(...) statement"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[8].statement",
+     "message": "after the head only `when { … }` or `unless { … }` may follow, not `because`"
+    }
+   ]
+  },
+  {
+   "name": "custom Cedar policies with the policy engine off",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false,
+      "custom": [
+       {
+        "name": "noFilterlessSearch",
+        "description": "Never search the knowledge base without a corpus filter.",
+        "statement": "forbid(principal, action == AgentCore::Action::\"kb___retrieve\", resource == AgentCore::Gateway::\"{{gateway}}\") unless { context.input has filter };"
+       }
+      ],
+      "rules": []
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.rules",
+     "message": "unknown key; allowed: enabled, mode, custom"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom",
+     "message": "is not deployed: the policy engine is off (orchestrator.policy.enabled)"
+    }
+   ]
+  },
+  {
+   "name": "a Lambda tool written in the build, with every grant",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "refunds"
+     ],
+     {
+      "type": "lambda",
+      "description": "Refunds, in code written here.",
+      "toolSchema": [
+       {
+        "name": "issueRefund",
+        "description": "Refund an order.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "The order id."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "secret": "payments/api-key",
+        "table": "orders",
+        "tableAccess": "readwrite",
+        "s3Prefix": "s3://my-bucket/refunds/",
+        "s3Access": "read",
+        "vpc": {
+         "subnetIds": [
+          "subnet-0abc1234"
+         ],
+         "securityGroupIds": [
+          "sg-0abc1234"
+         ]
+        }
+       },
+       "timeoutSeconds": 60,
+       "memoryMB": 512,
+       "environment": {
+        "CURRENCY": "USD"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a code tool with grants and settings that are not right",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     ],
+     {
+      "type": "lambda",
+      "description": "x",
+      "toolSchema": [
+       {
+        "name": "issueRefund",
+        "description": "Refund an order.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "The order id."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "secret": "no spaces allowed",
+        "table": "a",
+        "tableAccess": "write",
+        "s3Access": "readwrite",
+        "s3Prefix": "s3://b/no-slash",
+        "iam": true,
+        "vpc": {
+         "subnetIds": [],
+         "securityGroupIds": [
+          "sg-zz"
+         ]
+        }
+       },
+       "timeoutSeconds": 900,
+       "memoryMB": 64.5,
+       "environment": {
+        "AWS_REGION": "x",
+        "TABLE_NAME": "y",
+        "OK": 3,
+        "fine": "yes"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.memoryMB",
+     "message": "must be an integer"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX",
+     "message": "a code tool's key is at most 41 characters: it names the function ToolLambda-<agentName>-<key>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.iam",
+     "message": "unknown grant; a code tool may have: secret, table, tableAccess, s3Prefix, s3Access, vpc"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.secret",
+     "message": "must be the name of a Secrets Manager secret in the build's account"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.table",
+     "message": "must be the name of a DynamoDB table in the build's account"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.s3Prefix",
+     "message": "must be s3://<bucket>/ or s3://<bucket>/<prefix>/, ending in /"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.tableAccess",
+     "message": "must be one of: read, readwrite"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.vpc.subnetIds",
+     "message": "must list one or more subnet ids, subnet-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.grants.vpc.securityGroupIds",
+     "message": "must list one or more security group ids, sg-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.timeoutSeconds",
+     "message": "must be a whole number of seconds, 1 to 300"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.memoryMB",
+     "message": "must be a whole number of MB, 128 to 10240"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.environment.AWS_REGION",
+     "message": "is not a name you can set: letters, digits and _, not AWS_..., SECRET_NAME, TABLE_NAME or S3_PREFIX"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.environment.TABLE_NAME",
+     "message": "is not a name you can set: letters, digits and _, not AWS_..., SECRET_NAME, TABLE_NAME or S3_PREFIX"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "aVeryLongToolKeyThatNamesTheFunctionTooLongX"
+     },
+     "path": "tools.aVeryLongToolKeyThatNamesTheFunctionTooLongX.code.environment.OK",
+     "message": "must be a string of at most 1000 characters"
+    }
+   ]
+  },
+  {
+   "name": "a code tool no grants, and code next to a lambdaArn",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "plain"
+     ],
+     {
+      "type": "lambda",
+      "description": "x",
+      "toolSchema": [
+       {
+        "name": "issueRefund",
+        "description": "Refund an order.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "The order id."
+         }
+        }
+       }
+      ],
+      "code": {}
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "both"
+     ],
+     {
+      "type": "lambda",
+      "description": "x",
+      "toolSchema": [
+       {
+        "name": "issueRefund",
+        "description": "Refund an order.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "The order id."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": []
+      },
+      "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:x"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "both"
+     },
+     "path": "tools.both.code.grants",
+     "message": "must be an object"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "both"
+     },
+     "path": "tools.both",
+     "message": "set exactly one of `lambdaArn` / `source` / `code` (found lambdaArn and code). lambdaArn = a function you already own, which the framework only registers. source = one the framework ships and deploys. code = one you write in the build (its handler.py travels with it), which the framework deploys with a role of only the grants you pick. Same rule, for the same reason, as an a2a agent's agentCard vs source."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "both"
+     },
+     "path": "tools.both.code.grants",
+     "message": "must be an object of grants: secret, table, tableAccess, s3Prefix, s3Access, vpc"
+    }
+   ]
+  },
+  {
+   "name": "a code tool granted the framework's own tables, secrets and buckets",
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sneaky"
+     },
+     "path": "tools.sneaky.code.grants.secret",
+     "message": "is one of the framework's own secrets, which no tool may read"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sneaky"
+     },
+     "path": "tools.sneaky.code.grants.table",
+     "message": "is named like one of the framework's own tables, which no tool may reach"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sneaky"
+     },
+     "path": "tools.sneaky.code.grants.s3Prefix",
+     "message": "is one of the framework's own buckets, which no tool may reach"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sneaky2"
+     },
+     "path": "tools.sneaky2.code.grants.secret",
+     "message": "must be the name of a Secrets Manager secret in the build's account"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sneaky2"
+     },
+     "path": "tools.sneaky2.code.grants.table",
+     "message": "is named like one of the framework's own tables, which no tool may reach"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sneaky2"
+     },
+     "path": "tools.sneaky2.code.grants.s3Prefix",
+     "message": "is one of the framework's own buckets, which no tool may reach"
+    }
+   ],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sneaky"
+     ],
+     {
+      "type": "lambda",
+      "description": "x",
+      "toolSchema": [
+       {
+        "name": "t",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "table": "agentexpress_builds",
+        "secret": "agentexpress/console/builds/p1",
+        "s3Prefix": "s3://agentexpress-stack-builderbuildsbucket12ab-x/"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "sneaky2"
+     ],
+     {
+      "type": "lambda",
+      "description": "x",
+      "toolSchema": [
+       {
+        "name": "t",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "table": "ax_1a2b3c4d_status",
+        "secret": "bedrock-agentcore-identity!x",
+        "s3Prefix": "s3://agentcore-builds-123/tfstate/"
+       }
+      }
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: mcpTool (mcp), engine on, a forbid, ENFORCE",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "mcpTool"
+     ],
+     {
+      "type": "mcp",
+      "description": "MCP",
+      "endpoint": "https://mcp.example.com/mcp"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "mcpTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "ENFORCE",
+      "custom": [
+       {
+        "name": "blockSecrets",
+        "statement": "forbid(principal, action == AgentCore::Action::\"mcpTool___run\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has secret };"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: mcpTool (mcp), LOG_ONLY, its permit off and a permit of our own",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "mcpTool"
+     ],
+     {
+      "type": "mcp",
+      "description": "MCP",
+      "endpoint": "https://mcp.example.com/mcp",
+      "policy": {
+       "permit": false
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "mcpTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "LOG_ONLY",
+      "custom": [
+       {
+        "name": "onlyQueries",
+        "statement": "permit(principal, action in AgentCore::Action::\"mcpTool\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: mcpTool (mcp), the engine off",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "mcpTool"
+     ],
+     {
+      "type": "mcp",
+      "description": "MCP",
+      "endpoint": "https://mcp.example.com/mcp"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "mcpTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: mcpTool (mcp), a policy naming a tool the build lacks",
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[0].statement",
+     "message": "\"missing\" is not a tool of this build (its tools: docs, kb, lifecycle, mcpTool, pricing, websearch)"
+    }
+   ],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "mcpTool"
+     ],
+     {
+      "type": "mcp",
+      "description": "MCP",
+      "endpoint": "https://mcp.example.com/mcp"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "mcpTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "custom": [
+       {
+        "name": "wrongTool",
+        "statement": "forbid(principal, action in AgentCore::Action::\"missing\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: apiTool (openapi), engine on, a forbid, ENFORCE",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "apiTool"
+     ],
+     {
+      "type": "openapi",
+      "description": "API",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "T",
+        "version": "1"
+       },
+       "paths": {
+        "/x": {
+         "get": {
+          "operationId": "getX",
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "call": "getX",
+      "arg": "query"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "apiTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "ENFORCE",
+      "custom": [
+       {
+        "name": "blockSecrets",
+        "statement": "forbid(principal, action == AgentCore::Action::\"apiTool___run\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has secret };"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: apiTool (openapi), LOG_ONLY, its permit off and a permit of our own",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "apiTool"
+     ],
+     {
+      "type": "openapi",
+      "description": "API",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "T",
+        "version": "1"
+       },
+       "paths": {
+        "/x": {
+         "get": {
+          "operationId": "getX",
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "call": "getX",
+      "arg": "query",
+      "policy": {
+       "permit": false
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "apiTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "LOG_ONLY",
+      "custom": [
+       {
+        "name": "onlyQueries",
+        "statement": "permit(principal, action in AgentCore::Action::\"apiTool\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: apiTool (openapi), the engine off",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "apiTool"
+     ],
+     {
+      "type": "openapi",
+      "description": "API",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "T",
+        "version": "1"
+       },
+       "paths": {
+        "/x": {
+         "get": {
+          "operationId": "getX",
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "call": "getX",
+      "arg": "query"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "apiTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: apiTool (openapi), a policy naming a tool the build lacks",
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[0].statement",
+     "message": "\"missing\" is not a tool of this build (its tools: apiTool, docs, kb, lifecycle, pricing, websearch)"
+    }
+   ],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "apiTool"
+     ],
+     {
+      "type": "openapi",
+      "description": "API",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "T",
+        "version": "1"
+       },
+       "paths": {
+        "/x": {
+         "get": {
+          "operationId": "getX",
+          "responses": {
+           "200": {
+            "description": "ok"
+           }
+          }
+         }
+        }
+       }
+      },
+      "call": "getX",
+      "arg": "query"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "apiTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "custom": [
+       {
+        "name": "wrongTool",
+        "statement": "forbid(principal, action in AgentCore::Action::\"missing\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: restTool (apigateway), engine on, a forbid, ENFORCE",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "restTool"
+     ],
+     {
+      "type": "apigateway",
+      "description": "REST",
+      "restApiId": "a1b2c3d4e5",
+      "stage": "prod",
+      "toolFilters": [
+       {
+        "path": "/x",
+        "methods": [
+         "GET"
+        ]
+       }
+      ],
+      "auth": "sigv4"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "restTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "ENFORCE",
+      "custom": [
+       {
+        "name": "blockSecrets",
+        "statement": "forbid(principal, action == AgentCore::Action::\"restTool___run\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has secret };"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: restTool (apigateway), LOG_ONLY, its permit off and a permit of our own",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "restTool"
+     ],
+     {
+      "type": "apigateway",
+      "description": "REST",
+      "restApiId": "a1b2c3d4e5",
+      "stage": "prod",
+      "toolFilters": [
+       {
+        "path": "/x",
+        "methods": [
+         "GET"
+        ]
+       }
+      ],
+      "auth": "sigv4",
+      "policy": {
+       "permit": false
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "restTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "LOG_ONLY",
+      "custom": [
+       {
+        "name": "onlyQueries",
+        "statement": "permit(principal, action in AgentCore::Action::\"restTool\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: restTool (apigateway), the engine off",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "restTool"
+     ],
+     {
+      "type": "apigateway",
+      "description": "REST",
+      "restApiId": "a1b2c3d4e5",
+      "stage": "prod",
+      "toolFilters": [
+       {
+        "path": "/x",
+        "methods": [
+         "GET"
+        ]
+       }
+      ],
+      "auth": "sigv4"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "restTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: restTool (apigateway), a policy naming a tool the build lacks",
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[0].statement",
+     "message": "\"missing\" is not a tool of this build (its tools: docs, kb, lifecycle, pricing, restTool, websearch)"
+    }
+   ],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "restTool"
+     ],
+     {
+      "type": "apigateway",
+      "description": "REST",
+      "restApiId": "a1b2c3d4e5",
+      "stage": "prod",
+      "toolFilters": [
+       {
+        "path": "/x",
+        "methods": [
+         "GET"
+        ]
+       }
+      ],
+      "auth": "sigv4"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "restTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "custom": [
+       {
+        "name": "wrongTool",
+        "statement": "forbid(principal, action in AgentCore::Action::\"missing\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: arnTool (lambda), engine on, a forbid, ENFORCE",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "arnTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "ARN",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:x"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "arnTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "ENFORCE",
+      "custom": [
+       {
+        "name": "blockSecrets",
+        "statement": "forbid(principal, action == AgentCore::Action::\"arnTool___run\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has secret };"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: arnTool (lambda), LOG_ONLY, its permit off and a permit of our own",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "arnTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "ARN",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:x",
+      "policy": {
+       "permit": false
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "arnTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "LOG_ONLY",
+      "custom": [
+       {
+        "name": "onlyQueries",
+        "statement": "permit(principal, action in AgentCore::Action::\"arnTool\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: arnTool (lambda), the engine off",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "arnTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "ARN",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:x"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "arnTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: arnTool (lambda), a policy naming a tool the build lacks",
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[0].statement",
+     "message": "\"missing\" is not a tool of this build (its tools: arnTool, docs, kb, lifecycle, pricing, websearch)"
+    }
+   ],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "arnTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "ARN",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:x"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "arnTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "custom": [
+       {
+        "name": "wrongTool",
+        "statement": "forbid(principal, action in AgentCore::Action::\"missing\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: codeTool (lambda), engine on, a forbid, ENFORCE",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "codeTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "Code",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "table": "orders",
+        "tableAccess": "readwrite",
+        "s3Prefix": "s3://my-bucket/p/"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "codeTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "ENFORCE",
+      "custom": [
+       {
+        "name": "blockSecrets",
+        "statement": "forbid(principal, action == AgentCore::Action::\"codeTool___run\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has secret };"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: codeTool (lambda), LOG_ONLY, its permit off and a permit of our own",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "codeTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "Code",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "table": "orders",
+        "tableAccess": "readwrite",
+        "s3Prefix": "s3://my-bucket/p/"
+       }
+      },
+      "policy": {
+       "permit": false
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "codeTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "mode": "LOG_ONLY",
+      "custom": [
+       {
+        "name": "onlyQueries",
+        "statement": "permit(principal, action in AgentCore::Action::\"codeTool\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: codeTool (lambda), the engine off",
+   "expect": [],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "codeTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "Code",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "table": "orders",
+        "tableAccess": "readwrite",
+        "s3Prefix": "s3://my-bucket/p/"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "codeTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ]
+  },
+  {
+   "name": "matrix: codeTool (lambda), a policy naming a tool the build lacks",
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.policy.custom[0].statement",
+     "message": "\"missing\" is not a tool of this build (its tools: codeTool, docs, kb, lifecycle, pricing, websearch)"
+    }
+   ],
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "codeTool"
+     ],
+     {
+      "type": "lambda",
+      "description": "Code",
+      "toolSchema": [
+       {
+        "name": "doIt",
+        "description": "Do it.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "q"
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "table": "orders",
+        "tableAccess": "readwrite",
+        "s3Prefix": "s3://my-bucket/p/"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "tool"
+     ],
+     [
+      "kb",
+      "codeTool"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": true,
+      "custom": [
+       {
+        "name": "wrongTool",
+        "statement": "forbid(principal, action in AgentCore::Action::\"missing\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+       }
+      ]
+     }
+    ]
+   ]
+  },
+  {
+   "name": "named: every kind defined and used, correctly",
+   "ops": [
+    [
+     "set",
+     [
+      "guardrails"
+     ],
+     {
+      "strict": {
+       "contentFilters": {
+        "HATE": "HIGH"
+       },
+       "blockedInputMessage": "No."
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "memories"
+     ],
+     {
+      "shared": {
+       "strategies": [
+        "semantic",
+        "summary"
+       ],
+       "expiryDays": 90,
+       "scope": "agent"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "evaluators"
+     ],
+     {
+      "clarity": {
+       "instructions": "Score clarity.",
+       "scale": [
+        {
+         "value": 0,
+         "label": "Bad",
+         "definition": "b"
+        },
+        {
+         "value": 1,
+         "label": "Good",
+         "definition": "g"
+        }
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "identities"
+     ],
+     {
+      "partner": {
+       "type": "oauth2",
+       "clientId": "abc",
+       "scopes": [
+        "r"
+       ],
+       "tokenUrl": "https://auth.example.com/token"
+      },
+      "keyed": {
+       "type": "apikey"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "policies"
+     ],
+     {
+      "noSecrets": {
+       "description": "x",
+       "statement": "forbid(principal, action == AgentCore::Action::\"{{tool}}___run\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has secret };"
+      },
+      "blockAll": {
+       "statement": "forbid(principal, action in AgentCore::Action::\"{{tool}}\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "agentcore",
+      "guardrails"
+     ],
+     {
+      "input": true,
+      "use": "strict"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "use": "shared"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentcore",
+      "evaluations"
+     ],
+     {
+      "enabled": true,
+      "evaluators": [
+       "Builtin.Helpfulness",
+       "Custom.clarity"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "agentcore",
+      "identity"
+     ],
+     {
+      "outbound": [
+       "partner",
+       "keyed"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "policies"
+     ],
+     [
+      "noSecrets",
+      "blockAll"
+     ]
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "identity"
+     ],
+     "partner"
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "named: an unknown guardrail, memory and evaluator",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "agentcore",
+      "guardrails"
+     ],
+     {
+      "input": true,
+      "use": "nope"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "use": "nope",
+      "longTerm": [
+       "semantic"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentcore",
+      "evaluations"
+     ],
+     {
+      "enabled": true,
+      "evaluators": [
+       "Custom.nope"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.agentcore.guardrails.use",
+     "message": "\"nope\" is not a guardrail. Define it under Guardrails, or pick one of: (none yet)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.agentcore.memory.use",
+     "message": "\"nope\" is not a memory. Define it under Memory, or pick one of: (none yet)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.agentcore.memory.longTerm",
+     "message": "the memory it uses sets this — remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.agentcore.evaluations.evaluators[0]",
+     "message": "Custom.nope is not defined in evaluations.custom or in the build's evaluators"
+    }
+   ]
+  },
+  {
+   "name": "named: a guardrail by name and by id, and checking nothing",
+   "ops": [
+    [
+     "set",
+     [
+      "guardrails"
+     ],
+     {
+      "strict": {
+       "contentFilters": {
+        "HATE": "HIGH"
+       },
+       "blockedInputMessage": "No."
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "agentcore",
+      "guardrails"
+     ],
+     {
+      "use": "strict",
+      "guardrailId": "gr-1"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.agentcore.guardrails.guardrailId",
+     "message": "use a guardrail by name or by id, not both"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.agentcore.guardrails",
+     "message": "names a guardrail but checks neither input nor output — turn one on"
+    }
+   ]
+  },
+  {
+   "name": "named: bad memory, evaluator and identity entries",
+   "ops": [
+    [
+     "set",
+     [
+      "memories"
+     ],
+     {
+      "m1": {
+       "strategies": [],
+       "expiryDays": 1
+      },
+      "m2": {
+       "strategies": [
+        "bogus"
+       ],
+       "scope": "planet"
+      },
+      "bad-name": {
+       "strategies": [
+        "semantic"
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "evaluators"
+     ],
+     {
+      "e1": {
+       "instructions": " "
+      },
+      "e2": {
+       "scale": [
+        {
+         "value": 1
+        }
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "identities"
+     ],
+     {
+      "i1": {
+       "type": "oauth2"
+      },
+      "i2": {
+       "type": "oauth2",
+       "clientId": "c",
+       "tokenUrl": "http://x",
+       "discoveryUrl": "https://y.example.com/.well-known"
+      },
+      "i3": {
+       "type": "saml"
+      },
+      "i4": {
+       "type": "apikey",
+       "clientId": "c"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "memories"
+     },
+     "path": "memories.m1.strategies",
+     "message": "name at least one strategy"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "memories"
+     },
+     "path": "memories.m1.expiryDays",
+     "message": "must be from 3 to 365"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "memories"
+     },
+     "path": "memories.m2.strategies[0]",
+     "message": "\"bogus\" is not one of: semantic, summary, userPreference, episodic"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "memories"
+     },
+     "path": "memories.m2.scope",
+     "message": "\"planet\" is not one of: user, subject, agent, run"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "memories"
+     },
+     "path": "memories.bad-name",
+     "message": "a name is a letter, then letters and digits (32 at most)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "evaluators"
+     },
+     "path": "evaluators.e1.instructions",
+     "message": "is required: what the judge scores, and how"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "evaluators"
+     },
+     "path": "evaluators.e2.instructions",
+     "message": "`instructions` is required"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "evaluators"
+     },
+     "path": "evaluators.e2.scale",
+     "message": "must be 2 to 20 {value, label, definition} points"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "identities"
+     },
+     "path": "identities.i1.clientId",
+     "message": "`clientId` is required for type \"oauth2\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "identities"
+     },
+     "path": "identities.i1",
+     "message": "an oauth2 identity needs exactly one of discoveryUrl or tokenUrl"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "identities"
+     },
+     "path": "identities.i2",
+     "message": "an oauth2 identity needs exactly one of discoveryUrl or tokenUrl"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "identities"
+     },
+     "path": "identities.i2",
+     "message": "discoveryUrl / tokenUrl must be an https:// URL"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "identities"
+     },
+     "path": "identities.i3.type",
+     "message": "\"saml\" is not one of: oauth2, apikey"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "identities"
+     },
+     "path": "identities.i4.clientId",
+     "message": "`clientId` does not apply to type \"apikey\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "named: a named map that is not an object",
+   "ops": [
+    [
+     "set",
+     [
+      "memories"
+     ],
+     [
+      "x"
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "memories"
+     },
+     "path": "memories",
+     "message": "must be an object of named entries"
+    }
+   ]
+  },
+  {
+   "name": "named: a policy that does not check out, or is attached nowhere",
+   "ops": [
+    [
+     "set",
+     [
+      "policies"
+     ],
+     {
+      "p1": {
+       "statement": "permit(principal, action, resource);"
+      },
+      "p2": {
+       "statement": "forbid(principal, action in AgentCore::Action::\"{{tool}}\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "policies"
+     },
+     "path": "policies.p1.statement",
+     "message": "must name the tool it governs: action == AgentCore::Action::\"<key>___<tool>\", or action in AgentCore::Action::\"<key>\" for all of its tools"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "policies"
+     },
+     "path": "policies.p1.statement",
+     "message": "the resource must be resource == AgentCore::Gateway::\"{{gateway}}\": the build's Gateway ARN is filled in when it deploys"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "policies"
+     },
+     "path": "policies.p2",
+     "message": "is written for {{tool}} and attached to no tool, so it deploys nowhere — attach it to a tool"
+    }
+   ]
+  },
+  {
+   "name": "named: a tool names unknown, repeated and foreign policies",
+   "ops": [
+    [
+     "set",
+     [
+      "policies"
+     ],
+     {
+      "forKb": {
+       "statement": "forbid(principal, action in AgentCore::Action::\"kb\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+      },
+      "blockAll": {
+       "statement": "forbid(principal, action in AgentCore::Action::\"{{tool}}\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+      },
+      "inputOnGroup": {
+       "statement": "forbid(principal, action in AgentCore::Action::\"{{tool}}\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input.x > 1 };"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "policies"
+     ],
+     [
+      "forKb",
+      "missing",
+      "blockAll",
+      "blockAll",
+      "inputOnGroup"
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "policies"
+     },
+     "path": "policies.inputOnGroup.statement",
+     "message": "a condition on context.input needs one tool, action == AgentCore::Action::\"{{tool}}___<toolName>\": all of a target's tools together have no input to read"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.policies[0]",
+     "message": "\"forKb\" names other tools, not docs: write it for AgentCore::Action::\"{{tool}}\" to attach it to any tool"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.policies[1]",
+     "message": "\"missing\" is not a policy. Define it under Policies, or pick one of: forKb, blockAll, inputOnGroup"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.policies[3]",
+     "message": "\"blockAll\" is listed twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.policies[4]",
+     "message": "\"inputOnGroup\" for docs: a condition on context.input needs one tool, action == AgentCore::Action::\"docs___<toolName>\": all of \"docs\"'s tools together have no input to read"
+    }
+   ]
+  },
+  {
+   "name": "named: policies on a tool while the engine is off",
+   "ops": [
+    [
+     "set",
+     [
+      "policies"
+     ],
+     {
+      "blockAll": {
+       "statement": "forbid(principal, action in AgentCore::Action::\"{{tool}}\", resource == AgentCore::Gateway::\"{{gateway}}\");"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "policies"
+     ],
+     [
+      "blockAll"
+     ]
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "policy"
+     ],
+     {
+      "enabled": false
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.policies",
+     "message": "is not deployed: the policy engine is off (orchestrator.policy.enabled)"
+    }
+   ]
+  },
+  {
+   "name": "named: a tool identity that is unknown, the wrong kind, or doubled with auth",
+   "ops": [
+    [
+     "set",
+     [
+      "identities"
+     ],
+     {
+      "partner": {
+       "type": "oauth2",
+       "clientId": "abc",
+       "scopes": [
+        "r"
+       ],
+       "tokenUrl": "https://auth.example.com/token"
+      },
+      "keyed": {
+       "type": "apikey"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "identity"
+     ],
+     "nope"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "identity"
+     ],
+     "partner"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "identity"
+     ],
+     "keyed"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "lifecycle",
+      "identity"
+     ],
+     "partner"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "lifecycle",
+      "auth"
+     ],
+     "apikey"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.identity",
+     "message": "an oauth2 identity works with mcp or openapi tools"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.identity",
+     "message": "\"nope\" is not an identity. Define it under Identity, or pick one of: partner, keyed"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.identity",
+     "message": "an apikey identity works with mcp, openapi, apigateway tools"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lifecycle"
+     },
+     "path": "tools.lifecycle.auth",
+     "message": "the identity says how to authenticate — remove this"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.identity",
+     "message": "`identity` does not apply to type \"kb\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.identity",
+     "message": "`identity` does not apply to type \"lambda\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "named: shared items that could not be loaded",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "shared1"
+     ],
+     {
+      "library": "0a1b2c3d"
+     }
+    ],
+    [
+     "set",
+     [
+      "guardrails"
+     ],
+     {
+      "g": {
+       "library": "11111111"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "policies"
+     ],
+     {
+      "p": {
+       "library": "22222222"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "shared1"
+     },
+     "path": "tools.shared1",
+     "message": "a shared tool that could not be loaded: it was deleted, or is no longer shared with you. Remove it, or pick another"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "guardrails"
+     },
+     "path": "guardrails.g",
+     "message": "a shared guardrail that could not be loaded: it was deleted, or is no longer shared with you. Remove it, or pick another"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "policies"
+     },
+     "path": "policies.p",
+     "message": "a shared policy that could not be loaded: it was deleted, or is no longer shared with you. Remove it, or pick another"
+    }
+   ]
+  },
+  {
+   "name": "named: memory.use with its own strategies",
+   "ops": [
+    [
+     "set",
+     [
+      "memories"
+     ],
+     {
+      "shared": {
+       "strategies": [
+        "semantic",
+        "summary"
+       ],
+       "expiryDays": 90,
+       "scope": "agent"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "agentcore",
+      "memory"
+     ],
+     {
+      "use": "shared",
+      "scope": "run",
+      "custom": {
+       "base": "semantic",
+       "instructions": "x"
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.agentcore.memory.scope",
+     "message": "the memory it uses sets this — remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.agentcore.memory.custom",
+     "message": "the memory it uses sets this — remove it"
+    }
+   ]
+  },
+  {
+   "name": "named: gatewayIdentity",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "gatewayIdentity"
+     ],
+     "perAgent"
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "named: gatewayIdentity must be a known mode",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "gatewayIdentity"
+     ],
+     "everyone"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.gatewayIdentity",
+     "message": "\"everyone\" is not one of: shared, perAgent"
+    }
+   ]
+  },
+  {
+   "name": "named: a guardrail that enforces nothing",
+   "ops": [
+    [
+     "set",
+     [
+      "guardrails"
+     ],
+     {
+      "empty": {
+       "blockedInputMessage": "x"
+      },
+      "emptyFilters": {
+       "contentFilters": {}
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "guardrails"
+     },
+     "path": "guardrails.empty",
+     "message": "a guardrail needs something to enforce: content filters, denied words or topics, managed word lists or PII entities"
+    }
+   ]
+  },
+  {
+   "name": "vision: reads an earlier image agent",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "cost_research",
+      "output"
+     ],
+     "image"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "vision"
+     ],
+     {
+      "from": [
+       "cost_research"
+      ],
+      "maxImages": 3
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "cost_research"
+     },
+     "path": "agents.cost_research.output",
+     "message": "images are rendered by stability.sd3-5-large-v1:0, which Bedrock serves in us-west-2: a deployment elsewhere sends this agent's image brief there, and one outside that geography is refused unless image.allowCrossRegion is true. Bedrock guardrails and evaluations do not check images"
+    }
+   ]
+  },
+  {
+   "name": "vision: what it may read",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "vision"
+     ],
+     {
+      "from": [
+       "report"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "web_search",
+      "vision"
+     ],
+     {
+      "from": [
+       "knowledge_research"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "documentation_search",
+      "vision"
+     ],
+     {
+      "from": [
+       "nope",
+       "documentation_search",
+       "intake"
+      ],
+      "maxImages": 50
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "vision"
+     ],
+     {
+      "from": []
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "recommendation",
+      "vision"
+     ],
+     {
+      "from": [
+       "intake"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.vision.from",
+     "message": "\"report\" does not run before intake, so it has no images yet when intake runs"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "web_search"
+     },
+     "path": "agents.web_search.vision.from",
+     "message": "\"knowledge_research\" does not run before web_search, so it has no images yet when web_search runs"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.vision.from",
+     "message": "\"nope\" is not an agent in this workflow"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.vision.from",
+     "message": "an agent cannot read its own images"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.vision.from",
+     "message": "\"intake\" is not an image agent (output \"image\"): only images its output lists are read"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.vision.maxImages",
+     "message": "must be a whole number from 1 to 20"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "recommendation"
+     },
+     "path": "agents.recommendation.vision",
+     "message": "`vision` does not apply to runtime \"a2a\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.vision.from",
+     "message": "name at least one earlier agent whose images this agent reads"
+    }
+   ]
+  },
+  {
+   "name": "named: a policy naming a web search tool by a name it does not have",
+   "ops": [
+    [
+     "set",
+     [
+      "policies"
+     ],
+     {
+      "noAcme": {
+       "statement": "forbid(principal, action == AgentCore::Action::\"websearch___search\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has query && context.input.query like \"*Acme*\" };"
+      },
+      "noAcmeRight": {
+       "statement": "forbid(principal, action == AgentCore::Action::\"websearch___WebSearch\", resource == AgentCore::Gateway::\"{{gateway}}\") when { context.input has query && context.input.query like \"*Acme*\" };"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "websearch",
+      "policies"
+     ],
+     [
+      "noAcme",
+      "noAcmeRight"
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "websearch"
+     },
+     "path": "tools.websearch.policies[0]",
+     "message": "\"noAcme\" names websearch___search, but a websearch tool's one tool is \"WebSearch\": write AgentCore::Action::\"websearch___WebSearch\""
+    }
+   ]
+  }
+ ]
+}

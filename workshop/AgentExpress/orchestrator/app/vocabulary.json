@@ -1,0 +1,184 @@
+{
+  "$comment": "FRAMEWORK VOCABULARY — the closed value sets workflow.json is validated against. NOT a file a customer edits: workflow.json is yours, this is the framework's. It exists because every one of these lists used to be written out two or three times — once in Python, once in cdk/lib/*.ts and once in terraform/*.tf — so adding a value meant finding all the copies, and a copy that got missed rejected a config the other planes accepted. All three planes read THIS file now: app/orchestrator/registry.py and bff/authz.py via json, cdk/lib/vocabulary.ts via require, terraform/tools.tf via jsondecode(file(...)). cdk/test/parity.test.ts asserts they read it rather than that three copies happen to agree.",
+
+  "runtimes": {
+    "$comment": "An agent's `runtime`: where the step runs. Closed by what the framework can place — a fourth value needs framework code by definition.",
+    "values": ["main", "dedicated", "a2a"]
+  },
+
+  "toolTypes": {
+    "$comment": "A `tools` entry's `type`. Each is a different kind of Gateway target with its own infrastructure, so the set is closed by what the framework can provision. To reach anything else, put it behind a Lambda and use type \"lambda\" with \"lambdaArn\".",
+    "values": ["kb", "websearch", "mcp", "openapi", "lambda", "apigateway"]
+  },
+
+  "toolSchemaPropertyTypes": {
+    "$comment": "Property types the AgentCore inline tool schema accepts, for a type=\"lambda\" tool's toolSchema.",
+    "values": ["string", "number", "integer", "boolean", "array", "object"]
+  },
+
+  "toolAuthModes": {
+    "$comment": "A tool target's `auth`. \"\" means unset. oauth2 = OAuth client credentials through an AgentCore Identity provider the framework creates (mcp, openapi only: an API Gateway target takes apikey, sigv4 or none).",
+    "values": ["", "none", "apikey", "sigv4", "oauth2"]
+  },
+
+  "httpMethods": {
+    "$comment": "The HTTP methods an API Gateway target's toolFilters and toolOverrides may name.",
+    "values": ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
+  },
+
+  "oauthToolTypes": {
+    "$comment": "The target kinds whose outbound auth may be OAuth (auth: oauth2). An API Gateway target does not support it.",
+    "values": ["mcp", "openapi"]
+  },
+
+  "memoryScopes": {
+    "$comment": "Whose memories an agent's long-term memory holds (agentcore.memory.scope): user = each user's own (the default, so one user's runs never feed another's); subject = shared by everyone for one subject_id (a customer, a case) — per user when a run has none; agent = shared by everyone who runs this agent; run = this run only. The framework builds the memory actor from it, so no template can reach another scope.",
+    "values": ["user", "subject", "agent", "run"]
+  },
+
+  "customMemoryBases": {
+    "$comment": "The built-in strategy a custom long-term memory strategy overrides (agentcore.memory.custom.base): its extraction runs with your instructions and model.",
+    "values": ["semantic", "summary", "userPreference"]
+  },
+  "codeGrantAccess": {
+    "$comment": "What a code tool's grant on a table or an S3 prefix allows (tools.<key>.code.grants.tableAccess / s3Access): read, or read and write. Default read.",
+    "values": ["read", "readwrite"]
+  },
+  "policyModes": {
+    "$comment": "How the Gateway's Cedar engine applies a decision (orchestrator.policy.mode): ENFORCE blocks a denied call; LOG_ONLY lets it through and logs what it would have decided — roll a new policy out this way first.",
+    "values": ["ENFORCE", "LOG_ONLY"]
+  },
+
+  "builtinEvaluators": {
+    "$comment": "AgentCore Evaluations' built-in evaluators, by level. This framework scores one agent's run (a trace), so the SESSION and TOOL_CALL ones are listed but refused until their spans are emitted (unsupported).",
+    "values": ["Builtin.Coherence", "Builtin.Conciseness", "Builtin.Correctness", "Builtin.Faithfulness", "Builtin.GoalSuccessRate", "Builtin.Harmfulness", "Builtin.Helpfulness", "Builtin.InstructionFollowing", "Builtin.Refusal", "Builtin.ResponseRelevance", "Builtin.Stereotyping", "Builtin.ToolParameterAccuracy", "Builtin.ToolSelectionAccuracy"],
+    "unsupported": ["Builtin.GoalSuccessRate", "Builtin.ToolParameterAccuracy", "Builtin.ToolSelectionAccuracy"],
+    "levels": {"Builtin.GoalSuccessRate": "SESSION", "Builtin.ToolParameterAccuracy": "TOOL_CALL", "Builtin.ToolSelectionAccuracy": "TOOL_CALL"},
+    "customPlaceholders": "\n\nContext: {context}\nResponse to score: {assistant_turn}",
+    "customScale": [
+      {"value": 1, "label": "Very good", "definition": "Fully meets the criteria."},
+      {"value": 0.75, "label": "Good", "definition": "Meets the criteria with minor gaps."},
+      {"value": 0.5, "label": "Fair", "definition": "Meets some of the criteria and misses others."},
+      {"value": 0.25, "label": "Poor", "definition": "Mostly misses the criteria."},
+      {"value": 0, "label": "Very poor", "definition": "Does not meet the criteria at all."}
+    ]
+  },
+
+  "toolModes": {
+    "$comment": "An agent's `toolMode`: who decides which tools to call. direct = every bound tool is queried with the request before the model reasons (the shipped agents' behaviour); model = the model is given the tools' schemas and decides which to call, with what arguments, one result at a time.",
+    "values": ["direct", "model"]
+  },
+
+  "apiKeyToolTypes": {
+    "$comment": "The only target kinds that get an API-key credential provider.",
+    "values": ["mcp", "openapi", "apigateway"]
+  },
+
+  "toolListingModes": {
+    "$comment": "An MCP target's `listingMode`.",
+    "values": ["DEFAULT", "DYNAMIC"]
+  },
+
+  "agentFrameworks": {
+    "$comment": "An agent's `framework`: how scaffold.py writes its reasoning step. Each is a template in scaffold.py FRAMEWORKS and calls the model through ctx.llm, so the set is closed by what the framework can generate.",
+    "values": ["plain", "strands", "langgraph"]
+  },
+  "imageModels": {
+    "$comment": "`image.model` of an image agent (output \"image\"). `regionsByModel` is where Bedrock serves each one on demand (checked with ListFoundationModels, by output modality IMAGE). A render runs in the deployment's own region when the model is there, else in the first listed region in the SAME geography (inferenceProfileGeos), else — only when the agent sets `image.allowCrossRegion: true` — in the first listed region. Otherwise the deploy is refused: the brief would leave the deployment's geography. `pricePerImageUsd` is the offline price snapshot; the AWS Price List (orchestrator.priceList) and orchestrator.imageRates take precedence.",
+    "values": ["stability.sd3-5-large-v1:0", "stability.stable-image-ultra-v1:1", "stability.stable-image-core-v1:1"],
+    "regionsByModel": {
+      "stability.sd3-5-large-v1:0": ["us-west-2"],
+      "stability.stable-image-ultra-v1:1": ["us-west-2"],
+      "stability.stable-image-core-v1:1": ["us-west-2"]
+    },
+    "pricePerImageUsd": {"stability.sd3-5-large-v1:0": 0.08, "stability.stable-image-ultra-v1:1": 0.14, "stability.stable-image-core-v1:1": 0.04}
+  },
+  "imageAspectRatios": {
+    "$comment": "`image.aspectRatio`: the ratios the Stability models accept.",
+    "values": ["1:1", "16:9", "9:16", "3:2", "2:3", "4:5", "5:4", "21:9", "9:21"]
+  },
+  "imageFormats": {
+    "$comment": "`image.outputFormat`.",
+    "values": ["png", "jpeg"]
+  },
+  "a2aAuthModes": {
+    "$comment": "A runtime:\"a2a\" agent's `auth` — how this deployment authenticates TO the remote agent.",
+    "values": ["none", "bearer", "oauth2", "sigv4"]
+  },
+
+  "a2aSources": {
+    "$comment": "The only `source` an a2a agent may name: the stand-in A2A server this repo deploys and injects a URL for. A framework-deployed agent needs infrastructure config cannot express, so this is not an arbitrary string.",
+    "values": ["a2a_lambda"]
+  },
+
+  "a2aLambdaSkills": {
+    "$comment": "Skills the shipped stand-in A2A server publishes (a2a_lambda/handler.py SKILLS). A CATALOGUE, not a roster: workflow.json picks which become agents, and a skill nobody names is simply never reached. Only meaningful with `source`; an EXTERNAL agent advertises its own skills in its Agent Card.",
+    "values": ["compliance", "resilience", "analysis", "recommendation"]
+  },
+
+  "memoryStrategies": {
+    "$comment": "Long-term memory strategies an agent may name in agentcore.memory.longTerm. These are the ones the IaC actually provisions and app/common/context.py can build a namespace for — an unrecognised one is searched as its own namespace, which nothing writes to, so recall returns nothing and reports success.",
+    "values": ["semantic", "summary", "userPreference", "episodic"]
+  },
+
+  "authorizationActions": {
+    "$comment": "The actions authorization.actions may gate. Each one is checked in bff/handler.py (_forbidden(<name>) or authz.permitted(<name>)); a name nothing checks would read as a restriction and gate nothing. audit (everyone's activity) and admin (read every user's builds and runs, destroy any build) are CLOSED unless granted; insights (which spans every user's runs) is closed unless granted whenever any action is restricted.",
+    "values": ["start", "decision", "rerun", "cancel", "evaluate", "insights", "delete", "deploy", "destroy", "audit", "admin"]
+  },
+
+  "inferenceProfileGeos": {
+    "$comment": "Cross-region inference profile prefixes (the `us.` in `us.anthropic.claude-...`). A profile only works from a source region in its own geography, so a `us.` default deployed in eu-west-1 fails every call. The DEFAULT model (orchestrator.defaultModel, else the framework's) and each agent's `model` are moved to the deployment region's geography: `byRegionPrefix` maps a region to its geography (first match wins), `fallback` covers regions with no geography of their own. `global.` ids and ids with no prefix are left alone. Read by app/common/vocabulary.py, bff/workflow.py, cdk/lib/vocabulary.ts and terraform/models.tf.",
+    "values": ["us", "us-gov", "eu", "apac", "jp", "au", "ca", "global"],
+    "byRegionPrefix": [["us-gov-", "us-gov"], ["us-", "us"], ["eu-", "eu"], ["ap-", "apac"], ["me-central-", "apac"]],
+    "fallback": "global"
+  },
+
+  "webSearchRegions": {
+    "$comment": "Where the managed AgentCore Web Search connector is available.",
+    "values": ["us-east-1", "eu-west-1", "ap-northeast-1"]
+  },
+
+  "guardrailFilterStrengths": {
+    "$comment": "Strength of a guardrail content filter.",
+    "values": ["NONE", "LOW", "MEDIUM", "HIGH"]
+  },
+
+  "guardrailPiiActions": {
+    "$comment": "What a guardrail does with a detected PII entity.",
+    "values": ["BLOCK", "ANONYMIZE"]
+  },
+
+  "embeddingModels": {
+    "$comment": "The embedding model a `type: \"kb\"` tool's vector store is built with. Closed because the model and the index DIMENSION have to agree and neither can be changed in place - a mismatch is not a validation error at deploy, it is a Bedrock ingestion that fails later while the deploy reports success. `dimensionsByModel` below gives the dimensions each model supports, FIRST being its default, so declaring only `embeddingModel` is enough. Add a model by adding it here and to that map; nothing else reads these names.",
+    "values": [
+      "amazon.titan-embed-text-v2:0",
+      "amazon.titan-embed-text-v1",
+      "cohere.embed-english-v3",
+      "cohere.embed-multilingual-v3"
+    ],
+    "dimensionsByModel": {
+      "amazon.titan-embed-text-v2:0": [1024, 512, 256],
+      "amazon.titan-embed-text-v1": [1536],
+      "cohere.embed-english-v3": [1024],
+      "cohere.embed-multilingual-v3": [1024]
+    }
+  },
+
+  "kbCorpusOperators": {
+    "$comment": "How a `type: \"kb\"` tool matches an agent's `corpus` against the metadata attribute named by `corpusKey`. DELIBERATELY ONLY SINGLE-VALUE OPERATORS: the corpus an agent may read is enforced by the generated Cedar permit, which is a scalar value match (`[\"reference\"].contains(context.input.filter)`). A list-valued operator like `in` would make the agent-supplied argument a list, which that permit cannot express - so the boundary would silently weaken to \"has a filter at all\". Multi-condition narrowing belongs in the tool's target-level `filter`, which the agent cannot influence.",
+    "values": ["equals", "notEquals", "startsWith", "stringContains"]
+  },
+
+  "builtinLambdaSource": {
+    "$comment": "A `type: \"lambda\"` tool's `source`: the folder under orchestrator/app/tools/ whose code the framework zips and deploys. Closed to the one the repo ships, because a framework-deployed function needs an execution role config cannot express - the role that exists grants logs plus read-only on the PUBLIC AWS price list, which is right for that function and wrong for a connector that needs VPC config or a secret. Your own function is deployed by you and declared with `lambdaArn`; the framework only registers it as a Gateway target. NOTE this closes `source` for type=\"lambda\" ONLY, via `vocabularyFor` in app/keys.json. A type=\"openapi\" `source` is deliberately OPEN: the framework only uploads a file, which needs no permissions, so closing it would force a customer to edit this framework-owned file to add a schema of their own. That one is checked by whether app/tools/<source>/openapi.json exists.",
+    "values": ["pricing"]
+  },
+  "identityTypes": {
+    "$comment": "What an identity (identities.<name>) holds: oauth2 = OAuth client credentials (a client id here, its secret in the build's secrets), from which the framework creates an AgentCore Identity OAuth2 credential provider; apikey = an API key (in the build's secrets), vaulted in an AgentCore Identity API-key provider. The two provider kinds AgentCore Identity has for machine-to-machine calls.",
+    "values": ["oauth2", "apikey"]
+  },
+  "gatewayIdentityModes": {
+    "$comment": "How agents authenticate to the Gateway (orchestrator.gatewayIdentity): shared = one machine client for every agent (the default); perAgent = one client per agent that has a tool, so the Gateway knows WHICH agent called. perAgent needs the Cognito pool the deployment creates itself: with your own IdP there is no client to create.",
+    "values": ["shared", "perAgent"]
+  }
+}

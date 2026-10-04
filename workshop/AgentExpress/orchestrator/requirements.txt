@@ -1,0 +1,46 @@
+# Runtime dependencies — baked into the AgentCore Runtime container. Pinned (==), and
+# every transitive package is pinned too, in requirements.lock.
+langgraph==1.2.12
+langchain-core==1.6.6
+# Asset contracts are pydantic v2 models. Transitively present via langchain, but
+# pinned here since we import it directly.
+pydantic==2.13.5
+langchain-aws==1.8.0
+langgraph-checkpoint-aws==1.2.4
+# bedrock-agentcore provides the runtime host (BedrockAgentCoreApp), the
+# long-term Memory client (MemorySessionManager) and Workload Identity
+# (IdentityClient) used by app/features/.
+bedrock-agentcore==1.24.0
+boto3==1.43.108
+# MCP client for Gateway-backed tool access (Streamable HTTP).
+langchain-mcp-adapters==0.3.2
+# --- An agentic framework used BY A SUB-AGENT, not by this framework -----------
+# An agent under app/subagents/<id>/ may be authored with whatever framework you
+# like. Strands is here because a shipped sample agent uses it (web_search); it
+# reaches the model through ctx.llm via app/subagents/_shared/strands_bridge.py, so
+# guardrails, cost telemetry, memory and truncation detection still apply. The
+# orchestrator does not need it and the import is lazy — remove this line and the
+# `think=` argument in web_search/agent.py and that agent falls back to a single
+# plain ctx.llm call.
+#
+# BUDGET FOR ONE OF THESE BEFORE ADDING IT. There is ONE container image for every
+# agent, so every agent pays for every framework in it whether it uses one or not.
+# Measured on python3.13 site-packages:
+#   requirements.txt as it stands   153 MB
+#   + strands-agents                166 MB  (+13 MB)
+# For comparison, CrewAI was measured at 804 MB (+651 MB — pyarrow, lancedb,
+# onnxruntime, chromadb, kubernetes, grpc, numpy, openai, tokenizers) and caps the
+# project at Python <3.14, which is why it is documented as a pattern rather than
+# shipped. LangGraph costs nothing extra: it is already the outer orchestrator, and
+# knowledge_research nests a graph of its own inside it.
+strands-agents==1.57.2
+# Observability note: we deliberately do NOT install
+# opentelemetry-instrumentation-langchain. The current Traceloop build is
+# incompatible with the OpenTelemetry semconv bundled in aws-opentelemetry-distro
+# (it references a gen_ai attribute that does not exist there) and its import
+# CRASHES OTEL auto-initialization — which silently disables all tracing. Bedrock
+# model calls are already captured by ADOT's built-in botocore instrumentation
+# (gen_ai spans), and the per-agent / per-tool spans plus token stamping come from
+# app/features/observability/otel.py, so the langchain instrumentor is not needed.
+# If you want it back, pin a version whose semconv matches the ADOT distro and
+# verify OTEL init succeeds in the runtime logs.

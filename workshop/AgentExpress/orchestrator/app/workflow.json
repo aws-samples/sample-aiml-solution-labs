@@ -1,0 +1,335 @@
+{
+  "$schema": "./workflow.schema.json",
+  "$comment": "THIS FILE IS THE WORKFLOW — edit it (plus terraform.tfvars) and you have your own multi-agent system. Both Terraform and CDK read it, so declaring a tool or agent here provisions its infrastructure; there are no IaC edits. BLOCKS: orchestrator (engine settings) · ui (branding) · guardrail (content safety) · authorization (who may approve/re-run/cancel/evaluate/delete) · tools (your data sources) · agents (one per folder under app/subagents/<id>/, except runtime \"a2a\" which has no folder) · steps (topology + review gates + branch conditions). EVERY AGENT reads the same way: name · kind · runtime · produces, then the model group (model · temperature · maxTokens) for a local agent OR the remote group (source|agentCard · skill · auth) for runtime \"a2a\", then what it may read (tool · corpus · access), then agentcore. EVERY TOOL reads: type · description, then where it lives, then how it is called, then filters, auth and policy. That order is not a convention you have to remember — `python3 format_workflow.py` rewrites the file into it, and `--check` fails CI if it drifts. WHICH KEYS ARE LEGAL WHERE is app/keys.json, and the allowed VALUES are app/vocabulary.json; both are framework-owned, and $schema above points your editor at the generated schema so it autocompletes keys, enumerates values and explains each one on hover. Prose reference: orchestrator/docs/WORKFLOW_REFERENCE.md",
+  "orchestrator": {
+    "defaultModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "runtimeInvoke": { "maxAttempts": 1, "readTimeoutSeconds": 120 },
+    "a2aInvoke": { "timeoutSeconds": 150 },
+    "insights": { "lookbackHours": 168, "pollTimeoutSeconds": 900, "pollIntervalSeconds": 20 },
+    "policy": { "enabled": true, "mode": "ENFORCE" },
+    "chatbot": {
+      "enabled": true,
+      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "greeting": "Hi! I can answer questions about your workflow runs — status, cost, latency, outputs, guardrails, evaluations — and take actions like approving a review gate, re-running an agent, or running an evaluation. What would you like to know?",
+      "placeholder": "Ask about a run, or tell me to do something…",
+      "tools": {
+        "status": true,
+        "sessions": true,
+        "outputs": true,
+        "costs": true,
+        "latency": true,
+        "guardrails": true,
+        "evals": true,
+        "runEval": true,
+        "rerun": true,
+        "review": true
+      }
+    }
+  },
+  "ui": {
+    "title": "AgentExpress",
+    "heading": "🧭 AgentExpress",
+    "defaultTopic": "Design a serverless data pipeline on AWS",
+    "topicPlaceholder": "What should the workflow work on?",
+    "subjectPlaceholder": "Subject (optional, for memory)",
+    "assistantTitle": "Run Assistant",
+    "assistantSubtitle": "Ask about status, cost, evals — or run actions"
+  },
+  "guardrail": {
+    "blockedInputMessage": "This request was blocked by the content guardrail.",
+    "blockedOutputMessage": "The generated content was blocked by the content guardrail.",
+    "contentFilters": {
+      "HATE": "MEDIUM",
+      "VIOLENCE": "MEDIUM",
+      "SEXUAL": "HIGH",
+      "INSULTS": "MEDIUM",
+      "MISCONDUCT": "MEDIUM",
+      "PROMPT_ATTACK": "HIGH"
+    },
+    "deniedWords": ["BLOCKED_DEMO_TERM"],
+    "managedWordLists": ["PROFANITY"],
+    "deniedTopics": [
+      {
+        "name": "LegalAdvice",
+        "definition": "Statements that give specific legal advice, or assert what a reader is legally obliged or entitled to do.",
+        "examples": [
+          "You are legally required to sign this contract.",
+          "You can ignore that clause — it isn't enforceable."
+        ]
+      }
+    ],
+    "piiEntities": { "US_SOCIAL_SECURITY_NUMBER": "BLOCK", "EMAIL": "ANONYMIZE" }
+  },
+  "authorization": {
+    "groupsClaim": "cognito:groups",
+    "actions": {
+      "decision": ["approvers", "members"],
+      "rerun": ["approvers", "members"],
+      "cancel": ["approvers", "operators", "members"],
+      "evaluate": ["operators", "members"],
+      "insights": ["admins"],
+      "delete": ["operators", "members"],
+      "deploy": ["operators", "members"],
+      "destroy": ["operators", "members"],
+      "audit": ["admins"],
+      "admin": ["admins"]
+    }
+  },
+  "tools": {
+    "kb": {
+      "type": "kb",
+      "description": "Bedrock Knowledge Base over kb_docs/, on S3 Vectors, via a Gateway Lambda target. Each top-level folder under kb_docs/ is a corpus (doc_type) an agent can be scoped to.",
+      "corpora": ["reference"],
+      "maxResults": 5,
+      "policy": {
+        "tool": "retrieve",
+        "restrictTo": {
+          "filter": ["reference"]
+        }
+      }
+    },
+    "websearch": {
+      "type": "websearch",
+      "description": "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. us-east-1, eu-west-1, ap-northeast-1 only.",
+      "maxResults": 10
+    },
+    "docs": {
+      "type": "mcp",
+      "description": "AWS Knowledge MCP Server - managed by AWS, fronted by the Gateway over Streamable HTTP. Nothing to deploy, no credentials. Publishes five tools over live AWS content.",
+      "endpoint": "https://knowledge-mcp.global.api.aws",
+      "listingMode": "DYNAMIC",
+      "call": "aws___search_documentation",
+      "arg": "search_phrase",
+      "args": { "limit": 5 }
+    },
+    "pricing": {
+      "type": "lambda",
+      "description": "Real AWS on-demand unit prices, via an AWS Lambda target. The type=\"lambda\" demonstration: a Lambda reaches what the Gateway cannot - a warehouse, an RDBMS, a VPC, or here a control-plane API with no MCP server in front of it. Returns RATES, never a total: a total needs usage volumes, which are a property of the workload and not of AWS.",
+      "source": "pricing",
+      "call": "aws_prices",
+      "arg": "services",
+      "rowFields": {
+        "service": "service",
+        "dimension": "dimension",
+        "unit": "unit",
+        "price": "pricePerUnit",
+        "currency": "currency",
+        "region": "region",
+        "requested": "requestedAs"
+      },
+      "toolSchema": [
+        {
+          "name": "aws_prices",
+          "description": "On-demand unit prices for the named AWS services in one region, from the AWS Price List Query API. Unit rates only, never a total.",
+          "properties": {
+            "services": {
+              "type": "string",
+              "required": true,
+              "description": "Comma-separated AWS service names, e.g. \"Amazon Bedrock, AWS Lambda, DynamoDB\"."
+            },
+            "region": {
+              "type": "string",
+              "required": false,
+              "description": "Region code to price for, e.g. \"us-east-1\". Defaults to the deployment's own region."
+            }
+          }
+        }
+      ]
+    },
+    "lifecycle": {
+      "type": "openapi",
+      "description": "Support and end-of-life dates for versioned products, via a REST API described by an OpenAPI schema. The type=\"openapi\" demonstration: a service that already speaks HTTP and already has a contract needs no function and no MCP server - the Gateway loads the schema, publishes each operationId as a tool, and translates the call. Returns DATES as published, never a judgement about them.",
+      "source": "lifecycle",
+      "call": "getProductLifecycle",
+      "arg": "product",
+      "rowPath": "result.releases",
+      "rowFields": {
+        "version": "name",
+        "released": "releaseDate",
+        "activeUntil": "eoasFrom",
+        "supportedUntil": "eolFrom",
+        "isEol": "isEol",
+        "isLts": "isLts"
+      }
+    }
+  },
+  "agents": {
+    "intake": {
+      "name": "Request Intake",
+      "runtime": "main",
+      "produces": "request-brief",
+      "maxTokens": 3000,
+      "access": ["Session input (topic)"],
+      "agentcore": {
+        "guardrails": { "input": true },
+        "evaluations": {
+          "enabled": true,
+          "auto": true,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.Correctness", "Builtin.InstructionFollowing"]
+        }
+      }
+    },
+    "knowledge_research": {
+      "name": "Knowledge Base Research",
+      "runtime": "dedicated",
+      "produces": "research-finding",
+      "maxTokens": 4000,
+      "tool": "kb",
+      "corpus": "reference",
+      "agentcore": {
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
+        },
+        "policy": { "enabled": true }
+      }
+    },
+    "web_search": {
+      "name": "Web Search Research",
+      "runtime": "dedicated",
+      "produces": "research-finding",
+      "maxTokens": 4000,
+      "tool": "websearch",
+      "agentcore": {
+        "guardrails": { "output": true },
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
+        },
+        "policy": { "enabled": true }
+      }
+    },
+    "documentation_search": {
+      "name": "MCP Documentation Research",
+      "runtime": "dedicated",
+      "produces": "research-finding",
+      "maxTokens": 4000,
+      "tool": "docs",
+      "agentcore": {
+        "guardrails": { "output": true },
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
+        },
+        "policy": { "enabled": true }
+      }
+    },
+    "cost_research": {
+      "name": "Cost Research",
+      "runtime": "main",
+      "produces": "research-finding",
+      "maxTokens": 1500,
+      "tool": "pricing",
+      "agentcore": {
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
+        },
+        "policy": { "enabled": true }
+      }
+    },
+    "analysis": {
+      "name": "Analysis",
+      "runtime": "a2a",
+      "produces": "analysis",
+      "source": "a2a_lambda",
+      "skill": "analysis",
+      "auth": "sigv4",
+      "agentcore": {
+        "memory": {
+          "longTerm": ["semantic"]
+        },
+        "guardrails": { "output": true },
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Coherence", "Builtin.InstructionFollowing"]
+        }
+      }
+    },
+    "recommendation": {
+      "name": "Recommendation",
+      "runtime": "a2a",
+      "produces": "recommendation",
+      "source": "a2a_lambda",
+      "skill": "recommendation",
+      "auth": "sigv4",
+      "agentcore": {
+        "memory": {
+          "longTerm": ["semantic", "summary"]
+        },
+        "guardrails": { "output": true },
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Helpfulness", "Builtin.InstructionFollowing"]
+        }
+      }
+    },
+    "report": {
+      "name": "Report",
+      "runtime": "main",
+      "produces": "report",
+      "maxTokens": 8000,
+      "access": ["Upstream assets (orchestrator graph state)"],
+      "agentcore": {
+        "guardrails": { "input": true, "output": true },
+        "evaluations": {
+          "enabled": true,
+          "auto": true,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.Coherence", "Builtin.Conciseness"]
+        }
+      }
+    },
+    "lifecycle_research": {
+      "name": "Lifecycle Research",
+      "runtime": "main",
+      "produces": "research-finding",
+      "maxTokens": 1500,
+      "tool": "lifecycle",
+      "agentcore": {
+        "evaluations": {
+          "enabled": true,
+          "auto": false,
+          "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
+        },
+        "policy": { "enabled": true }
+      }
+    }
+  },
+  "steps": [
+    {
+      "agent": "intake",
+      "hitl": true,
+      "branch": {
+        "when": [
+          { "field": "objective", "exists": false, "goto": "END" },
+          { "field": "keyQuestions", "lt": 1, "goto": "analysis_reco" }
+        ]
+      }
+    },
+    {
+      "parallel": [
+        "knowledge_research",
+        "web_search",
+        "documentation_search",
+        "cost_research",
+        "lifecycle_research"
+      ],
+      "hitl": true,
+      "gateId": "research",
+      "gateName": "Research"
+    },
+    {
+      "sequence": ["analysis", "recommendation"],
+      "hitl": true,
+      "gateId": "analysis_reco",
+      "gateName": "Analysis & Recommendation (A2A)"
+    },
+    { "agent": "report" }
+  ]
+}
