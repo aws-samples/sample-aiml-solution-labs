@@ -95,6 +95,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Upload one file for the next run, straight to S3 with a presigned POST
+ *  (POST /api/sessions/attachments). Returns what the run start names it by. */
+export async function uploadRunFile(file: File): Promise<{ key: string; name: string }> {
+  const { url, fields, key, name } = await api.post<{ url: string; fields: Record<string, string>; key: string; name: string }>(
+    "/api/sessions/attachments", { name: file.name });
+  const form = new FormData();
+  for (const [k, v] of Object.entries(fields)) form.append(k, v);
+  form.append("file", file);
+  const res = await fetch(url, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`upload failed (${res.status})`);
+  return { key, name };
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>

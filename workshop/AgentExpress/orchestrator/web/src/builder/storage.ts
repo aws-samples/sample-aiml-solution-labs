@@ -14,7 +14,7 @@
  *  saving, because "I have not finished yet" is the normal state of a draft. */
 
 import { api } from "../api";
-import type { Project } from "./model";
+import type { Entry, Project } from "./model";
 
 /** Fired on every save and delete, so the side navigation's list of builds stays
  *  current without the shell importing — and so downloading — the Builder itself. */
@@ -62,6 +62,8 @@ export interface Deployed {
   appUser?: string;
   /** The framework release that deployed it (orchestrator/VERSION). */
   frameworkVersion?: string;
+  /** Tool -> the redirect (callback) URL to register at its provider ("Each person's own account"). */
+  callbackUrls?: Record<string, string>;
 }
 
 export interface BuildSummary {
@@ -321,7 +323,8 @@ export interface PolicyGeneration {
 }
 // --- the library: items any build uses live, and sharing (bff/library.py, sharing.py) ----
 
-export type LibraryKind = "tool" | "guardrail" | "memory" | "evaluator" | "identity" | "policy";
+/** "interceptor" is copied into a build, never linked live (bff/library.py COPY_KINDS). */
+export type LibraryKind = "tool" | "guardrail" | "memory" | "evaluator" | "identity" | "policy" | "skill" | "interceptor";
 export interface LibraryItem {
   id: string;
   kind: LibraryKind;
@@ -397,6 +400,34 @@ export const buildSecrets = {
   names: (id: string) => api.get<SecretNames>(`/api/builds/${enc(id)}/secrets`),
   set: (id: string, kind: SecretKind, name: string, value: string) =>
     api.put<SecretNames>(`/api/builds/${enc(id)}/secrets`, { [kind]: { [name]: value } }),
+};
+
+// --- AWS Agent Registry (bff/registry.py) --------------------------------------------
+export type RegistryKind = "tool" | "agent" | "skill";
+export interface Registry { id: string; name: string; description: string; status: string }
+/** An approved record, and what the build would hold for it (or why it cannot). */
+export interface RegistryHit {
+  recordId: string; name: string; displayName: string; description: string;
+  type: string; version: string; updatedAt: string;
+  kind: RegistryKind | null; key?: string; entry?: Entry; why?: string;
+  /** An MCP record's tool names; an agent card's skills. */
+  tools?: string[]; skills?: string[];
+}
+/** A newer approved version of something the build took from a registry. */
+export interface RegistryUpdate { map: "tools" | "agents" | "skills"; key: string; sync: boolean; from: string; to: string; entry: Entry }
+/** Where a deployed build is published (R2). */
+export interface RegistryPublished {
+  registryId?: string; registryName?: string; version?: number; at?: string; by?: string;
+  records?: Record<string, { recordId: string; name: string; status?: string; statusReason?: string }>;
+}
+export const registryApi = {
+  registries: () => api.get<Registry[]>("/api/registry"),
+  search: (registry: string, q: string, kind: RegistryKind) =>
+    api.get<RegistryHit[]>(`/api/registry/search?registry=${enc(registry)}&q=${enc(q)}&kind=${kind}`),
+  state: (buildId: string) =>
+    api.get<{ updates: RegistryUpdate[]; published: RegistryPublished }>(`/api/builds/${enc(buildId)}/registry`),
+  publish: (buildId: string, body: { registry: string; what: "build" | "skill"; skill?: string }) =>
+    api.post<RegistryPublished>(`/api/builds/${enc(buildId)}/publish`, body),
 };
 
 export interface KbDoc {

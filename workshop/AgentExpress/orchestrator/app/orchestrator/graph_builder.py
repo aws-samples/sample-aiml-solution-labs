@@ -27,7 +27,7 @@ import itertools
 
 from langgraph.graph import END, START, StateGraph
 
-from app.common import branching
+from app.common import branching, gates
 from app.common.config import STEPS
 from app.common.config import step_agents as agents_in
 from app.common.state import State
@@ -128,6 +128,10 @@ def validate_branches() -> None:
             f"distinct one. Names in order: "
             f"{', '.join(_step_name(s, i) for i, s in enumerate(STEPS))}.")
     for i, step in enumerate(STEPS):
+        # A review gate's own spec (app/common/gates.py): checked here too, so a typo in a
+        # mode or a threshold rule fails the container at start rather than every run.
+        gates.validate(step.get("hitl"), f"workflow.json steps[{i}] ({_step_name(step, i)})")
+    for i, step in enumerate(STEPS):
         spec = step.get("branch")
         if spec is None:
             continue
@@ -214,17 +218,17 @@ def build_graph(checkpointer=None):
         if "agent" in step:
             aid = step["agent"]
             gname = f"{aid}_gate"
-            g.add_node(gname, make_gate_node(aid, registry[aid].name))
+            g.add_node(gname, make_gate_node(aid, registry[aid].name, step["hitl"]))
         elif "parallel" in step:
             gid = _gate_id(step, i)
             gname = f"{gid}_gate"
             g.add_node(gname, make_group_gate_node(gid, step["parallel"],
-                                                   step.get("gateName") or gid))
+                                                   step.get("gateName") or gid, step["hitl"]))
         else:  # sequence
             gid = _gate_id(step, i)
             gname = f"{gid}_gate"
             g.add_node(gname, make_sequence_gate_node(gid, step["sequence"],
-                                                      step.get("gateName") or gid))
+                                                      step.get("gateName") or gid, step["hitl"]))
         gate_of[i] = gname
 
     # Branch nodes. One per step carrying "branch": it resolves the decision from the

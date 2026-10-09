@@ -808,3 +808,42 @@ describe("cedarStatement", () => {
     }
   });
 });
+
+describe("triggers and gates (orchestrator.triggers, steps[].hitl)", () => {
+  const { triggersOf, triggerPattern, gateSteps } = require("../lib/orchestrator-stack");
+  it("checks each trigger at synth", () => {
+    expect(triggersOf({})).toEqual({});
+    const ok = triggersOf({ orchestrator: { triggers: {
+      nightly: { type: "schedule", expression: "rate(1 day)", prompt: "x" },
+      inbox: { type: "s3", bucket: "acme", prefix: "in/", prompt: "x" },
+      q: { type: "sqs", prompt: "x" } } } });
+    expect(Object.keys(ok)).toEqual(["nightly", "inbox", "q"]);
+    const bad = (t: any) => () => triggersOf({ orchestrator: { triggers: { t } } });
+    expect(bad({ type: "fax" })).toThrow(/needs a "type"/);
+    expect(bad({ type: "schedule", expression: "daily" })).toThrow(/cron\(\.\.\.\) or rate/);
+    expect(bad({ type: "eventbridge", pattern: {} })).toThrow(/pattern/);
+    expect(bad({ type: "s3", bucket: "Bad_Bucket" })).toThrow(/bucket/);
+    expect(bad({ type: "sqs", queueArn: "arn:aws:sns:us-east-1:123456789012:x" })).toThrow(/queueArn/);
+    expect(() => triggersOf({ orchestrator: { triggers: { "bad-name": { type: "sqs" } } } })).toThrow(/name/);
+  });
+  it("listens to an S3 bucket's Object Created events, under its prefix", () => {
+    expect(triggerPattern({ type: "s3", bucket: "acme", prefix: "in/" })).toEqual({
+      source: ["aws.s3"], "detail-type": ["Object Created"],
+      detail: { bucket: { name: ["acme"] }, object: { key: [{ prefix: "in/" }] } } });
+    expect(triggerPattern({ type: "eventbridge", pattern: { source: ["x"] } })).toEqual({ source: ["x"] });
+  });
+  it("wires gate decisions and timeouts only when a step asks", () => {
+    expect(gateSteps({ steps: [{ agent: "a", hitl: true }] })).toEqual({ events: false, timeouts: false });
+    expect(gateSteps({ steps: [{ agent: "a", hitl: { approval: "event" } },
+      { agent: "b", hitl: { timeout: { after: "1h", action: "deny" } } }] })).toEqual({ events: true, timeouts: true });
+  });
+  it("mirrors Terraform", () => {
+    const fs = require("fs");
+    const tf = (f: string) => fs.readFileSync(require("path").join(__dirname, "..", "..", "terraform", f), "utf8");
+    for (const r of ["aws_scheduler_schedule", "aws_cloudwatch_event_rule", "aws_sqs_queue", "aws_lambda_event_source_mapping"]) {
+      expect(tf("triggers.tf")).toContain(`resource "${r}" "trigger"`);
+    }
+    expect(tf("gates.tf")).toContain("AgentExpress Approval Decision");
+    expect(tf("gates.tf")).toContain("rate(5 minutes)");
+  });
+});

@@ -253,7 +253,7 @@ def test_top_level_and_orchestrator_keys_are_known():
     w = wf()
     assert TOP_LEVEL <= set(w) <= TOP_LEVEL | OPTIONAL_TOP_LEVEL, (
         f"unexpected top-level keys: {set(w) ^ TOP_LEVEL}")
-    assert {"guardrails", "memories", "evaluators", "identities", "policies"} == OPTIONAL_TOP_LEVEL
+    assert {"guardrails", "memories", "evaluators", "identities", "policies", "skills"} == OPTIONAL_TOP_LEVEL
     unknown = set(w["orchestrator"]) - set(ORCHESTRATOR_KEYS)
     assert not unknown, f"orchestrator has unread key(s): {sorted(unknown)}"
 

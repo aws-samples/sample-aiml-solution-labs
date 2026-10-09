@@ -14,6 +14,7 @@
  * `CDK_DOCKER=/nonexistent/builder`.
  */
 
+import { HOOK_ROUTE } from "../lib/orchestrator-stack";
 import * as cdk from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 import * as path from "path";
@@ -22,7 +23,7 @@ import * as os from "os";
 
 import {
   a2aLambdaAgents, customEvaluatorsOf, customPoliciesOf, memoryStrategiesFor, OrchestratorStack, PRIVILEGED_ACTIONS,
-  privilegedGrants, stageBffPackage,
+  privilegedGrants, stageBffPackage, validateWorkflow,
 } from "../lib/orchestrator-stack";
 
 const ORCH_ROOT = path.join(__dirname, "..", "..");
@@ -108,13 +109,22 @@ describe("HTTP API", () => {
     // them must carry the authorizer, not just most.
     const routes = template.findResources("AWS::ApiGatewayV2::Route");
     const apiRoutes = Object.values<any>(routes).filter((r) =>
-      String(r.Properties.RouteKey).includes("/api/")
+      String(r.Properties.RouteKey).includes("/api/") && r.Properties.RouteKey !== HOOK_ROUTE
     );
     expect(apiRoutes.length).toBeGreaterThan(10);
     for (const r of apiRoutes) {
       expect(r.Properties.AuthorizationType).toBe("JWT");
       expect(r.Properties.AuthorizerId).toBeDefined();
     }
+  });
+  it("leaves exactly one route without a JWT: a webhook trigger's, with its own throttle", () => {
+    // Its proof is the body's signature (bff/triggers.py), checked before anything is read.
+    const open = Object.values<any>(template.findResources("AWS::ApiGatewayV2::Route"))
+      .filter((r) => r.Properties.AuthorizationType !== "JWT").map((r) => r.Properties.RouteKey);
+    expect(open).toEqual([HOOK_ROUTE]);
+    const stage = Object.values<any>(template.findResources("AWS::ApiGatewayV2::Stage"))[0];
+    expect(stage.Properties.RouteSettings[HOOK_ROUTE].ThrottlingRateLimit).toBeLessThan(
+      stage.Properties.DefaultRouteSettings.ThrottlingRateLimit);
   });
 
   it("wires every mutating route the RBAC guards cover", () => {
@@ -1044,5 +1054,188 @@ describe("Hosted UI sign-in options", () => {
       gatewayAudience: "", toolApiKeys: {}, a2aTokens: {}, transactionSearchIndexingPercentage: 100,
     } as any);
     expect(clients(Template.fromStack(stack))[0].Properties.SupportedIdentityProviders).toEqual(["MyCompanyOidc"]);
+  });
+});
+describe("a run's files (agents with `attachments`)", () => {
+  const withFiles = {
+    ...shipped,
+    orchestrator: { ...shipped.orchestrator, attachments: { s3: ["customer-docs/contracts", "whole-bucket"] } },
+    agents: Object.fromEntries(Object.entries<any>(shipped.agents).map(([id, a]) =>
+      [id, id === "intake" || id === "web_search" ? { ...a, attachments: true } : a])),
+  };
+  let t: Template;
+  beforeAll(() => { t = synth({ workflow: withFiles }); });
+  const policyText = (prefix: string) => JSON.stringify(Object.entries<any>(t.findResources("AWS::IAM::Policy"))
+    .filter(([k]) => k.startsWith(prefix)).map(([, p]) => p.Properties.PolicyDocument));
+
+  it("creates the assets bucket with uploads that expire, and lets the page POST to it", () => {
+    const b = Object.values<any>(t.findResources("AWS::S3::Bucket"))
+      .find((x) => JSON.stringify(x.Properties.BucketName).includes("-assets-"));
+    expect(b.Properties.LifecycleConfiguration.Rules[0]).toMatchObject({ Prefix: "uploads/", ExpirationInDays: 1 });
+    expect(b.Properties.CorsConfiguration.CorsRules[0].AllowedMethods).toEqual(["POST"]);
+  });
+  it("routes the upload, and gives the BFF exactly the grants it needs", () => {
+    const routes = Object.values<any>(t.findResources("AWS::ApiGatewayV2::Route")).map((r) => r.Properties.RouteKey);
+    expect(routes).toContain("POST /api/sessions/attachments");
+    const bff = policyText("BffServiceRoleDefaultPolicy");
+    for (const sid of ["RunFileUploads", "RunFileCopies", "RunFilesFromS3", "ListRunFilesInS3"]) expect(bff).toContain(sid);
+    expect(bff).toContain("arn:aws:s3:::customer-docs/contracts/*");
+    expect(bff).toContain('"contracts/*"');
+  });
+  it("lets the runtimes that run a reader read the run's files", () => {
+    expect(policyText("SubagentRolewebsearch")).toContain("ReadRunFiles");
+    expect(policyText("SubagentRoleknowledgeresearch")).not.toContain("ReadRunFiles");
+    expect(policyText("RuntimeRole")).toContain("s3:GetObject");
+  });
+  it("matches the Terraform path", () => {
+    const tf = fs.readFileSync(path.join(ORCH_ROOT, "terraform", "images.tf"), "utf8");
+    for (const s of ["RunFileUploads", "RunFileCopies", "RunFilesFromS3", "ListRunFilesInS3", "ReadRunFiles",
+      "expire-uploads", 'prefix = "uploads/"', "runs/*/attachments/*"]) expect(tf).toContain(s);
+    expect(fs.readFileSync(path.join(ORCH_ROOT, "terraform", "bff.tf"), "utf8")).toContain('"POST /api/sessions/attachments"');
+  });
+  it("adds nothing for a workflow whose agents read no files", () => {
+    expect(Object.values<any>(template.findResources("AWS::ApiGatewayV2::Route")).map((r) => r.Properties.RouteKey))
+      .toContain("POST /api/sessions/attachments");          // the route set is the same everywhere
+    expect(JSON.stringify(template.findResources("AWS::IAM::Policy"))).not.toContain("RunFileUploads");
+  });
+});
+
+describe("Okta and Microsoft Entra ID sign-in", () => {
+  const TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+  const API_APP = "11111111-2222-3333-4444-555555555555";
+  const stackFor = (overrides: Record<string, any>) => {
+    const app = new cdk.App();
+    return new OrchestratorStack(app, "IdpStack", {
+      env: { account: "123456789012", region: "us-east-1" },
+      agentName: "multiagent_orchestrator", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      memoryEventExpiryDays: 30, createCognito: false, cognitoUserPoolId: "", cognitoClientId: "",
+      cognitoDomainPrefix: "", auth0Domain: "", auth0ClientId: "", enableGateway: true,
+      gatewayClientId: "m2m-client", gatewayClientSecret: "dummy", toolApiKeys: {}, a2aTokens: {},
+      transactionSearchIndexingPercentage: 100, ...overrides,
+    } as any);
+  };
+  const okta = { idp: "okta", oktaDomain: "acme.okta.com", oktaClientId: "0oaSpa", gatewayAudience: "api://default",
+    gatewayScope: "gateway.invoke" };
+  const entra = { idp: "entra", entraTenantId: TENANT, entraClientId: "spa-app-id", gatewayAudience: API_APP };
+  let tOkta: Template, tEntra: Template, sOkta: OrchestratorStack, sEntra: OrchestratorStack;
+  beforeAll(() => {
+    sOkta = stackFor(okta); tOkta = Template.fromStack(sOkta);
+    sEntra = stackFor(entra); tEntra = Template.fromStack(sEntra);
+  });
+  const only = (t: Template, type: string) => {
+    const all = Object.values(t.findResources(type)) as any[];
+    expect(all).toHaveLength(1);
+    return all[0].Properties;
+  };
+  const runtimeEnv = (t: Template) => (Object.values(t.findResources("AWS::BedrockAgentCore::Runtime")) as any[])
+    .map((r) => r.Properties.EnvironmentVariables ?? {});
+
+  it("creates nothing in Cognito", () => {
+    expect(Object.keys(tOkta.findResources("AWS::Cognito::UserPool"))).toHaveLength(0);
+    expect(Object.keys(tEntra.findResources("AWS::Cognito::UserPool"))).toHaveLength(0);
+  });
+  it("trusts the provider's ID tokens on /api/*: its issuer, and the SPA client as audience", () => {
+    const o = only(tOkta, "AWS::ApiGatewayV2::Authorizer").JwtConfiguration;
+    expect(o).toEqual({ Issuer: "https://acme.okta.com/oauth2/default", Audience: ["0oaSpa"] });
+    const e = only(tEntra, "AWS::ApiGatewayV2::Authorizer").JwtConfiguration;
+    expect(e).toEqual({ Issuer: `https://login.microsoftonline.com/${TENANT}/v2.0`, Audience: ["spa-app-id"] });
+  });
+  it("pins the Gateway to the audience and the calling client: cid on Okta, azp on Entra", () => {
+    const o = only(tOkta, "AWS::BedrockAgentCore::Gateway").AuthorizerConfiguration.CustomJWTAuthorizer;
+    expect(o.DiscoveryUrl).toBe("https://acme.okta.com/oauth2/default/.well-known/openid-configuration");
+    expect(o.AllowedAudience).toEqual(["api://default"]);
+    expect(o.AllowedClients).toBeUndefined();
+    expect(o.CustomClaims).toEqual([expect.objectContaining({ InboundTokenClaimName: "cid",
+      AuthorizingClaimMatchValue: expect.objectContaining({ ClaimMatchValue: { MatchValueString: "m2m-client" } }) })]);
+    const e = only(tEntra, "AWS::BedrockAgentCore::Gateway").AuthorizerConfiguration.CustomJWTAuthorizer;
+    expect(e.DiscoveryUrl).toBe(`https://login.microsoftonline.com/${TENANT}/v2.0/.well-known/openid-configuration`);
+    expect(e.AllowedAudience).toEqual([API_APP]);
+    expect(e.CustomClaims).toEqual([expect.objectContaining({ InboundTokenClaimName: "azp" })]);
+  });
+  it("tells every runtime how to ask for its Gateway token", () => {
+    const o = runtimeEnv(tOkta);
+    expect(o.length).toBeGreaterThan(0);
+    for (const env of o) {
+      expect(env).toMatchObject({ GATEWAY_AUTH_FLOW: "okta", GATEWAY_SCOPE: "gateway.invoke", GATEWAY_AUDIENCE: "api://default",
+        GATEWAY_TOKEN_URL: "https://acme.okta.com/oauth2/default/v1/token", GATEWAY_CLIENT_ID: "m2m-client" });
+    }
+    for (const env of runtimeEnv(tEntra)) {
+      expect(env).toMatchObject({ GATEWAY_AUTH_FLOW: "entra", GATEWAY_SCOPE: `${API_APP}/.default`,
+        GATEWAY_TOKEN_URL: `https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token` });
+    }
+  });
+  it("gives the UI the provider's endpoints", () => {
+    expect(sOkta.authConfigJs).toContain('provider: "okta"');
+    expect(sOkta.authConfigJs).toContain('authorizeUrl: "https://acme.okta.com/oauth2/default/v1/authorize"');
+    expect(sOkta.authConfigJs).toContain('logoutUrl: "https://acme.okta.com/oauth2/default/v1/logout"');
+    expect(sOkta.authConfigJs).toContain('clientId: "0oaSpa"');
+    expect(sEntra.authConfigJs).toContain(`tokenUrl: "https://login.microsoftonline.com/${TENANT}/oauth2/v2.0/token"`);
+    expect(sEntra.authConfigJs).toContain('clientId: "spa-app-id"');
+  });
+  it("refuses settings that would deploy a sign-in that cannot work", () => {
+    expect(() => stackFor({ ...okta, oktaDomain: "https://acme.okta.com" })).toThrow(/oktaDomain=<the org's host/);
+    expect(() => stackFor({ ...okta, gatewayScope: "" })).toThrow(/requires -c gatewayScope/);
+    expect(() => stackFor({ ...entra, entraTenantId: "common" })).toThrow(/entraTenantId=<the Directory \(tenant\) ID/);
+    expect(() => stackFor({ ...entra, entraTenantId: "contoso.onmicrosoft.com" })).toThrow(/a GUID/);
+    expect(() => stackFor({ ...entra, gatewayAudience: "api://agentexpress" })).toThrow(/carries that as `aud`/);
+  });
+});
+
+describe("signing people in elsewhere, the agents' Gateway client made here", () => {
+  const TENANT = "72f988bf-86f1-41af-91ab-2d7cd011db47";
+  const validateWorkflowFor = (wf: any, idp: string) => validateWorkflow(wf, ORCH_ROOT, "multiagent_orchestrator", idp);
+  const base = (overrides: Record<string, any>) => {
+    const app = new cdk.App();
+    const stack = new OrchestratorStack(app, "MachineStack", {
+      env: { account: "123456789012", region: "us-east-1" },
+      agentName: "multiagent_orchestrator", modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      memoryEventExpiryDays: 30, createCognito: false, cognitoUserPoolId: "", cognitoClientId: "",
+      cognitoDomainPrefix: "", auth0Domain: "", auth0ClientId: "", enableGateway: true,
+      gatewayClientId: "", gatewayClientSecret: "", gatewayAudience: "", toolApiKeys: {}, a2aTokens: {},
+      transactionSearchIndexingPercentage: 100, ...overrides,
+    } as any);
+    return { stack, t: Template.fromStack(stack) };
+  };
+  let t: Template, s: OrchestratorStack;
+  beforeAll(() => {
+    ({ stack: s, t } = base({ idp: "entra", entraTenantId: TENANT, entraClientId: "spa-app-id" }));
+  });
+  it("makes a pool for machines only: no sign-in client, no groups, no sign-in page", () => {
+    const pools = Object.values(t.findResources("AWS::Cognito::UserPool")) as any[];
+    expect(pools.map((p) => p.Properties.UserPoolName)).toEqual(["multiagent_orchestrator-machines"]);
+    const clients = (Object.values(t.findResources("AWS::Cognito::UserPoolClient")) as any[]).map((c) => c.Properties);
+    expect(clients.every((c) => (c.AllowedOAuthFlows ?? []).every((f: string) => f === "client_credentials"))).toBe(true);
+    expect(clients.map((c) => c.ClientName)).toContain("multiagent_orchestrator-m2m");
+    expect(Object.keys(t.findResources("AWS::Cognito::UserPoolGroup"))).toHaveLength(0);
+    expect(Object.keys(t.findResources("AWS::Cognito::UserPoolDomain"))).toHaveLength(1);
+  });
+  it("still trusts Entra's ID tokens on /api/*", () => {
+    const a = Object.values(t.findResources("AWS::ApiGatewayV2::Authorizer")) as any[];
+    expect(a[0].Properties.JwtConfiguration.Issuer).toBe(`https://login.microsoftonline.com/${TENANT}/v2.0`);
+    expect(s.authConfigJs).toContain('provider: "entra"');
+  });
+  it("pins the Gateway to the machine client, and the runtimes ask the machine pool", () => {
+    const gw = (Object.values(t.findResources("AWS::BedrockAgentCore::Gateway")) as any[])[0].Properties
+      .AuthorizerConfiguration.CustomJWTAuthorizer;
+    expect(gw.AllowedClients).toHaveLength(1);
+    expect(gw.AllowedAudience).toBeUndefined();
+    expect(gw.CustomClaims).toBeUndefined();
+    expect(JSON.stringify(gw.DiscoveryUrl)).toContain("MachinePool");
+    for (const r of Object.values(t.findResources("AWS::BedrockAgentCore::Runtime")) as any[]) {
+      const env = r.Properties.EnvironmentVariables ?? {};
+      expect(env.GATEWAY_AUTH_FLOW).toBe("cognito");
+      expect(env.GATEWAY_AUDIENCE).toBe("gateway/invoke");
+      expect(env.GATEWAY_SCOPE).toBe("");
+    }
+  });
+  it("uses your own Gateway client instead when you give one", () => {
+    const { t: own } = base({ idp: "okta", oktaDomain: "acme.okta.com", oktaClientId: "0oaSpa",
+      gatewayClientId: "m2m", gatewayClientSecret: "x", gatewayAudience: "api://default", gatewayScope: "gw.invoke" });
+    expect(Object.keys(own.findResources("AWS::Cognito::UserPool"))).toHaveLength(0);
+  });
+  it("refuses a workflow whose sign-in disagrees with the deployment's", () => {
+    const wf = { ...shipped, authorization: { ...shipped.authorization, signIn: { provider: "okta" } } };
+    expect(() => validateWorkflowFor(wf, "cognito")).toThrow(/signIn.provider is "okta", but this deployment's idp is "cognito"/);
+    expect(() => validateWorkflowFor(wf, "okta")).not.toThrow(/signIn.provider/);
   });
 });

@@ -6,7 +6,7 @@ npm install
 npm test
 ```
 
-269 tests across six files. No AWS credentials: `Template.fromStack` renders the
+315 tests across seven files. No AWS credentials: `Template.fromStack` renders the
 template without staging the cloud assembly, which is the step that would build the
 runtime's Docker image. Synthesizing the stack does build the UI bundle
 (`npm ci && npm run build` in `../web`), locally when `npm` is on the PATH and in a
@@ -24,7 +24,7 @@ IaC.
 |---|---|---|
 | `config-plane.test.ts` | 77 | the pure projections and validators: `validateTools`, `validateWorkflow` (which runs `validateRuntimes`), `validateBranches`, `authzGroups`, `buildGuardrail`, `cedarStatement`, and the `openapi` / `lambda` tool shapes |
 | `tool-plane.test.ts` | 87 | the ToolPlane construct with tools blocks the sample does not ship: one Gateway target per `tools` entry (`websearch`, `lambda` incl. cross-account and multi-tool, `openapi`, `apigateway` with an inline schema and OAuth client credentials, a tool written in the build), the Knowledge Base config and document sources (the digest that lets an immutable property be replaced rather than fail the deploy), custom Cedar policies, and a tool × policy-engine matrix |
-| `stack.test.ts` | 68 | the synthesized template: Cognito groups and self-signup, the route set and its authorizer, the BFF deployment package and environment, the tool plane, `idp=none`, a2a agents and the stand-in, dedicated-agent roles, the Builder control plane, connected accounts, image agents, long-term memory strategies and custom evaluators, that inline Lambda code compiles, and the baseline hardening (PITR, TLS-only buckets, API logs and throttle, security headers, Cognito policy, no credential in a runtime's environment) |
+| `stack.test.ts` | 73 | the synthesized template: Cognito groups and self-signup, the route set and its authorizer, the BFF deployment package and environment, the tool plane, `idp=none`, a2a agents and the stand-in, dedicated-agent roles, the Builder control plane, connected accounts, image agents, long-term memory strategies and custom evaluators, that inline Lambda code compiles, and the baseline hardening (PITR, TLS-only buckets, API logs and throttle, security headers, Cognito policy, no credential in a runtime's environment) |
 | `named.test.ts` | 13 | the build-level named blocks (`guardrails`, `memories`, `evaluators`, `identities`, `policies`) and `orchestrator.gatewayIdentity`, synthesized |
 | `regional-model.test.ts` | 12 | model ids made regional (inference-profile prefixes) for the deploy region |
 | `nag.test.ts` | 3 | cdk-nag's AwsSolutions pack over a console and a build stack: no finding that `lib/nag.ts` has not acknowledged with a reason |

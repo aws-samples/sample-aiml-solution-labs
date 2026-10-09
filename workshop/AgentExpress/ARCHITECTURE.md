@@ -17,7 +17,7 @@ Contents: [Overview](#1-overview) · [Planes](#2-planes) · [Request flow](#3-re
 ![Architecture](architecture.png)
 
 ```
- IdP (Cognito | Auth0 | none)
+ IdP (Cognito | Auth0 | Okta | Entra ID | none)
    │ user login (SPA client)          │ client-credentials (agent → Gateway)
    ▼                                  │
  Browser SPA ─Bearer JWT─▶ CloudFront ── / ──▶ S3 (static UI)
@@ -139,7 +139,7 @@ receives an `AgentContext` (`app/common/context.py`):
 
 | Call | Purpose |
 |---|---|
-| `ctx.llm(system, user, name=...)` | Model call with guardrails, telemetry, memory injection, `vision` images, truncation warning |
+| `ctx.llm(system, user, name=...)` | Model call with guardrails, telemetry, memory injection, `vision` images, the run's files (`attachments`), truncation warning |
 | `ctx.call_tool(key, query)`, `ctx.call_tool_rows(...)` | Gateway tool call; `_rows` returns data rows rather than evidence text |
 | `ctx.retrieve(query)` | KB retrieval scoped to the agent's corpus |
 | `ctx.image(prompt, negative_prompt)` | Render an image ([Images](#5-images)) |
@@ -183,6 +183,11 @@ what an agent's `tool` names.
   `aws___search_documentation`). The client (`app/features/gateway/client.py`) follows
   `tools/list` pagination, unwraps the MCP envelope and caps evidence at
   `MAX_EVIDENCE_CHARS` (20000) per block and `MAX_RESULT_CHARS` (4000) per result.
+- Skills (`skills.<name>`, `app/common/skills.py`) are added in `ctx.llm`, so every
+  framework gets them. With `toolMode: "model"` and tools, the tool turn offers
+  `use_skill(name, file?)`: it is not counted against `maxToolCalls` and is never evidence,
+  and later calls carry the opened skills in full and the rest by name. Otherwise each
+  listed skill is added in full (up to 60k characters). A skill is text; nothing in it runs.
 - Research agents verify citation URLs against the evidence; an invented URL is dropped
   and a `sourced-fact` resting on it is downgraded (`_shared/research.py`).
 
@@ -212,7 +217,7 @@ Each feature lives in `app/features/<name>/` and is switched on per agent in its
 |---|---|
 | Runtime | Orchestrator and dedicated runtimes |
 | Memory | One store is the LangGraph checkpointer; a second holds long-term `semantic`/`summary`. The actor is per agent, partitioned by `memory.scope` (`user` default, `subject`, `agent`, `run`) |
-| Gateway | MCP endpoint for all tools; CUSTOM_JWT authorizer pinned to the caller (`allowed_clients` for Cognito, `allowed_audience` + `azp` for Auth0) |
+| Gateway | MCP endpoint for all tools; CUSTOM_JWT authorizer pinned to the caller (`allowed_clients` for Cognito; `allowed_audience` + `azp` for Auth0 and Entra ID, + `cid` for Okta) |
 | Identity | Credential providers from `identities.<name>`, secrets from the environment. `gatewayIdentity: "perAgent"` gives each tool-using agent its own Gateway client |
 | Policy | Cedar engine on the Gateway, `ENFORCE` (default-deny) or `LOG_ONLY`. `ctx.policy_check` is a secondary, fail-open helper |
 | Guardrails | Build-wide `guardrail` block (not created if it enforces nothing), plus named `guardrails.<name>` |
@@ -266,17 +271,22 @@ groups do not permit are withheld. Configured by `orchestrator.chatbot`.
 Builder's designer. `POST /api/builds/{id}/design` stores the message and hands the turn
 to a background self-invocation; the page polls. The model changes the latest draft only
 through `apply_changes` and `undo_last_change`, each result checked by
-`bff/validate_build.py` with up to 3 fix rounds. The model is Claude Sonnet 5.5 at medium
-reasoning effort, falling back to Claude Sonnet 5 when the account may not call 5.5
+`bff/validate_build.py` with up to 3 fix rounds. Its edits reach what the tabs reach:
+agents, steps, tools and their code, the named maps (skills included), triggers,
+interceptors (their code generated from the templates by `bff/interceptor_code.py`, a
+byte-for-byte port of the tab's generator), and items from the organization's AWS Agent
+Registry, which it finds with a read-only `search_registry` tool and imports by record id
+(the server builds the entry). Publishing to the registry stays an admin's button. The
+model is Claude Sonnet 5.5 at medium reasoning effort, falling back to Claude Sonnet 5 when the account may not call 5.5
 (`DESIGNER_MODEL`, a `model[:effort]` list, and `DESIGNER_EFFORT`). Replies stream (ConverseStream) into
 the conversation file the page polls: the text as it is written, each edit of a change as it
 is written ("Adding agent x"), and the canvas reloads as each change is saved. A turn that
 passes 180 s in one invocation carries on in a fresh one (up to 3 more) from the saved
-draft instead of stopping. It has no deploy tool.
+draft instead of stopping. It has no deploy or publish tool.
 
 **Library and sharing** (`bff/library.py`, `bff/sharing.py`, `bff/builds.py`):
 
-- A build references a library item (tool, guardrail, memory, evaluator, identity,
+- A build references a library item (tool, skill, guardrail, memory, evaluator, identity,
   policy) as `{"library": "<id>"}` in place of the entry. It is resolved live on build
   GET, in the designer's validation and at deploy, which freezes a resolved snapshot
   into the version. The build's `META` records `libraryUses`; deleting an item detaches
@@ -284,6 +294,20 @@ draft instead of stopping. It has no deploy tool.
 - `shares = {emails, groups, everyone}` on a build or item, with `SHARE#…` pointer items
   for listing. A share grants everything the owner may do; groups are admin-defined.
   Every save bumps `rev`, and a save based on a stale `rev` gets 409.
+
+**AWS Agent Registry** (`bff/registry.py`, `bff/builds.py`): the registries in the
+console's account and region. Search reads only APPROVED records (the discoverable API);
+`to_entry` maps an MCP record to an `mcp` tool (an https streamable-HTTP remote; its tools
+as `toolSchema`; never auth), an A2A card to a `runtime: "a2a"` agent and a SKILL.md to a
+skill, each carrying `registry {registryId, recordId, name, version, sync}`. A record's URLs
+are never fetched. Items with `sync` are refreshed on `GET /api/builds/{id}/registry` and in
+the deploy after `library.resolve`; an update replaces only the registry's fields
+(`_TAKES`). `POST /api/builds/{id}/publish` (admin) writes the deployed version as an AGENT
+record (a `custom` descriptor: the workflow and its app URL; a build is not an A2A server)
+and an MCP record for its Gateway (`gatewayUrl`, tools as `<key>___<name>`, person tools
+left out), or a skill as a SKILL record, each as `n.0.0`, and submits them for approval;
+destroy deprecates the build's records. The Lambda's boto3 predates the API, so its models
+ship in `bff/botocore_data/` as a fallback search path.
 
 **Activity log.** Three best-effort writers share one item layout
 (`bff/buildstore.audit_items`) in the table named by `AUDIT_TABLE`: the BFF
@@ -322,8 +346,10 @@ Table names are `<agentName>_<suffix>`; a build's `agentName` is `ax_` + 8 hex.
   `kb/<corpus>/…`, `design.json`, `design-rev/<n>.json`; `connect/<externalId>.json`;
   `tfstate/<owner>/<id>/…`. Secrets Manager holds a build's tool keys, A2A tokens and
   `-login` secret.
-- Assets bucket: `runs/<session>/<agent>/<n>.<ext>`. Also UI, KB documents and tool
-  schema buckets.
+- Assets bucket: `runs/<session>/<agent>/<n>.<ext>` (images); a run's files under
+  `runs/<session>/attachments/` (copied in by `bff/runfiles.py` when it starts, read by agents
+  with `attachments`); uploads under `uploads/<owner digest>/`, expired after a day. Also UI,
+  KB documents and tool schema buckets.
 
 ## 9. Builder deploy pipeline
 
@@ -382,7 +408,24 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
   actions. Cedar authorizes agents calling tools, `bff/authz.py` people
   acting on runs and builds; BFF → runtime is IAM/SigV4.
 - Runs, builds, library items and connections are private to their owner unless shared
-  (404 otherwise). There is no tenant boundary beyond that.
+  (404 otherwise). There is no tenant boundary beyond that. A run a service trigger
+  started (`runAs: "service"`) belongs to the trigger; its `approvers` groups read and decide it.
+- One route has no JWT: `POST /api/hooks/{name}`, a webhook trigger's delivery
+  (`bff/triggers.py`). Its proof is an HMAC signature of the body with the trigger's secret
+  (Secrets Manager, set from the app's Triggers page), checked before anything else is read,
+  with a freshness window, a per-delivery idempotency key, an hourly run cap and its own
+  stage throttle. Schedules, EventBridge rules and SQS mappings invoke the BFF directly,
+  scoped by rule ARN or queue. A gate answered by event (`bff/gates.py`) takes an
+  "AgentExpress Approval Decision" event for this app: whoever may put events on the
+  account's default bus may decide it.
+- AWS Agent Registry: anyone may search and import (read only, like the library);
+  publishing speaks for the organization, so it needs `admin`, and the console never
+  approves its own records. An imported MCP tool gets no credentials until the author
+  sets how it connects.
+- Gateway interceptors (`orchestrator.interceptors`) are Lambdas the Gateway role alone may
+  invoke; one written in the build is deployed like a code tool (its own role, a boundary
+  denying the framework's data). With `passRequestHeaders` they see the agent's Gateway
+  token and the `x-ax-*` run headers.
 - Least privilege: a role per dedicated agent, connected-account roles without
   AdministratorAccess, console roles scoped to `ax_*` resources. The console deploy role
   cannot edit its own role or policies. A code tool's grants reach only resources tagged
@@ -403,9 +446,9 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
 
 | Suite | Runner | Count | Covers |
 |---|---|---|---|
-| `tests/` | pytest | 1310 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
-| `cdk/test/` | jest | 282 in 7 files | Projections, validators, synthesized template, Terraform ↔ CDK parity, cdk-nag |
-| `web/` | vitest | 265 in 30 files | Asset renderer, token refresh, gates, Builder views, validator parity |
+| `tests/` | pytest | 1510 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
+| `cdk/test/` | jest | 315 in 7 files | Projections, validators, synthesized template, Terraform ↔ CDK parity, cdk-nag |
+| `web/` | vitest | 400 in 42 files | Asset renderer, token refresh, gates, Builder views, validator parity |
 
 None need AWS credentials. Prompt quality is not unit-tested; the HITL gates and
 Evaluations cover it. Each suite's directory has a `README.md`.

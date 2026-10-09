@@ -152,6 +152,9 @@ class AgentContext:
         # once per run of the agent, on its first model call (see _vision_images).
         self.vision = dict(getattr(agent, "vision", None) or {})
         self._seen_images: list[dict] | None = None
+        # `attachments`: this agent's model reads the files the run was started with.
+        self.reads_attachments = getattr(agent, "attachments", False) is True
+        self._files: list[dict] | None = None
         self.max_tokens = agent.max_tokens
         # The tools this agent is bound to (keys in the workflow.json `tools` block;
         # `tool` there is one key or a list) and, for a Knowledge Base tool, the
@@ -164,6 +167,10 @@ class AgentContext:
         self.corpus = getattr(agent, "corpus", None)
         self.tool_mode = str(getattr(agent, "tool_mode", None) or "direct")
         self.max_tool_calls = int(getattr(agent, "max_tool_calls", None) or 6)
+        # The build's skills this agent may use (app/common/skills.py), and those it has
+        # opened in its tool-calling turn: ctx.llm carries those in full.
+        self.skills = list(getattr(agent, "skills", None) or [])
+        self.opened_skills: set[str] = set()
         # The agent's name and role, for the model choosing its tools (tool_loop).
         self.agent_name = str(getattr(agent, "name", "") or self.agent_id)
         # The agent's own instructions, for the tool-calling turn (toolMode "model"):
@@ -203,6 +210,11 @@ class AgentContext:
         # and the graph looped back to re-run this agent. Empty on a first run.
         self.feedback = (state.get("feedback") or {}).get(agent.id, "")
 
+    @property
+    def skills_by_tool(self) -> bool:
+        """Whether this agent opens its skills itself, in a model-driven tool turn."""
+        return getattr(self, "tool_mode", "direct") == "model" and bool(getattr(self, "tools", None))
+
     def input(self, agent_id: str):
         """Return the output produced by an upstream agent, or None."""
         return (self.state.get("outputs") or {}).get(agent_id)
@@ -229,6 +241,14 @@ class AgentContext:
                 + "\n---\n".join(self.recalled_memory)
                 + f"\n({RECALL_CAVEAT})"
             )
+        # Skills: in full when there is no model-driven tool turn to open them in;
+        # otherwise the ones it opened, and the rest by name (app/common/skills.py).
+        if getattr(self, "skills", None):
+            from app.common import skills
+            block = skills.prompt_block(self.skills, getattr(self, "opened_skills", set()),
+                                        full=not self.skills_by_tool)
+            if block:
+                system = f"{system}\n\n{block}"
         # The model has no clock: without this, every deadline and timeline it writes is
         # anchored to its training cut-off (a 2026 launch plan dated 2024).
         system = f"{system}\n\n{today_line()}"
@@ -238,13 +258,17 @@ class AgentContext:
         wanted = (getattr(self, "vision", None) or {}).get("from")
         if wanted and not seen:
             user += "\n\n(No images were available from: " + ", ".join(map(str, wanted)) + ".)"
+        files = await self._run_files()
+        if files:
+            user += ("\n\nThe run was started with these files, attached to this message: "
+                     + ", ".join(f["name"] for f in files) + ".")
         text, truncated = await run_llm(call, system, user,
                                         model=model or self.model,
                                         temperature=self.temperature,
                                         max_tokens=budget,
                                         top_p=getattr(self, "top_p", None),
                                         stop_sequences=getattr(self, "stop_sequences", None),
-                                        images=seen)
+                                        images=seen, files=files)
         if truncated:
             # SAY SO. The response is a prefix: it stopped because it ran out of room,
             # not because the model was done, so whatever the agent builds from it is
@@ -281,6 +305,24 @@ class AgentContext:
                            f"{', '.join(sources)}" if got else
                            f"No images from {', '.join(sources)} to read")
         return self._seen_images
+
+    async def _run_files(self) -> list[dict]:
+        """The files the run was started with (attachments.load_for), once per run of the
+        agent. [] unless the agent sets `attachments` and the run brought some."""
+        if not getattr(self, "reads_attachments", False):
+            return []
+        if getattr(self, "_files", None) is None:
+            import asyncio
+
+            from app.common import attachments
+            listed = attachments.mine((self.state or {}).get("attachments"), self.session_id)
+            self._files = (await asyncio.to_thread(attachments.load_for, listed,
+                                                   session_id=self.session_id)) if listed else []
+            if self._files:
+                await self.log(f"Reading {len(self._files)} attached file"
+                               f"{'' if len(self._files) == 1 else 's'}: "
+                               + ", ".join(f["name"] for f in self._files))
+        return self._files
 
     async def image(self, prompt: str, negative_prompt: str = "") -> dict:
         """Render an image from `prompt` with this agent's `image` settings, store it in
@@ -399,10 +441,13 @@ class AgentContext:
         try:
             result = await check(text, source, guardrail_id=gid, version=version)
         except GuardrailBlocked as e:
-            self._record_guardrail(source, "blocked", e.message,
+            why = getattr(e, "reasons", None)
+            self._record_guardrail(source, "blocked", f"{e.message} ({', '.join(why)})" if why else e.message,
                                    int((_t.perf_counter() - start) * 1000))
             raise
-        self._record_guardrail(source, "passed", "(allowed)",
+        masked = result != text
+        self._record_guardrail(source, "anonymized" if masked else "passed",
+                               "(sensitive information masked)" if masked else "(allowed)",
                                int((_t.perf_counter() - start) * 1000))
         return result
 

@@ -32,7 +32,7 @@ credentials, and Bedrock access to the model in `terraform.tfvars` and the embed
 Text Embeddings V2 by default; override with `embeddingModel` on the `kb` tool).
 
 Create a login, add yourself to a group so you can approve gates, and open `terraform output
-ui_url`. Type a request, approve the gates, and watch the run. User and group setup, CDK, Auth0,
+ui_url`. Type a request, approve the gates, and watch the run. User and group setup, CDK, Auth0, Okta, Entra ID,
 no-login, IAM, the Builder console and teardown are in [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ## 2. Point it at your data
@@ -267,6 +267,11 @@ ones. It edits the build as you talk, highlights changed agents on the preview, 
 and cannot deploy. **Defaults used** lists what it filled in; **Needs your input** lists values
 only you can give (endpoint, ARN, key), and the deploy waits for them. Secrets go in the
 **Secrets** card, never the chat. **Undo** / **Redo** cover its changes, canvas edits and uploads.
+It reaches what the tabs reach: agents, steps, tools and their code, skills, interceptors (it
+checks templates and the server writes the code, as the tab does), triggers and the named blocks.
+Ask for something *from the registry* and it searches your AWS Agent Registry, asks which match
+and whether to keep it in sync, and imports it; it also brings registry items up to date. It
+cannot publish: that is an admin's **Publish to registry** button.
 
 ### Build manually
 
@@ -290,17 +295,35 @@ problems are named as you make them, in the deploy's own words.
   status (*Valid*, or the error and warning count), which opens the problems list.
 
 **Tabs and named blocks.** A build keeps named `guardrails`, `memories`, `evaluators`,
-`identities` (an OAuth client or API key) and `policies` (Cedar), each on its own tab. Agents pick
+`identities` (an OAuth client or API key), `policies` (Cedar) and `skills`, each on its own tab. Agents pick
 them by name (`agentcore.guardrails.use`, `agentcore.memory.use`, `Custom.<name>` in
-`evaluations.evaluators`, `agentcore.identity.outbound`); a tool attaches `policies` and signs in
+`evaluations.evaluators`, `agentcore.identity.outbound`, the agent's `skills`); a tool attaches `policies` and signs in
 with `identity`. `orchestrator.gatewayIdentity: "perAgent"` gives each agent its own Gateway client.
 Every row has **Edit** and **Delete**. The Identity tab's **Secrets** section takes each identity's
 API key or OAuth client secret (write-only); an `apikey` tool sends it as `X-API-Key` from
 AgentCore Identity, so the agent never sees it.
 
+**Skills.** A skill is know-how an agent opens only when a task needs it: a description (when to
+use it), instructions (the SKILL.md body) and up to 20 text reference files (200 KB in all). On the
+**Skills** tab write one or import a SKILL.md, then pick it in an agent's **Skills**. An agent with
+tools and `toolMode: "model"` opens a skill, and any of its files, itself (`use_skill`); otherwise
+its skills are added to its instructions in full. Skills never run code.
+
+**AWS Agent Registry.** With a registry in the console's account and region, **Add from registry**
+(Tools tab, Skills tab and the Agents palette) lists what your organization approved: an MCP
+server becomes an `mcp` tool (its endpoint and tools; you choose how it signs in), an A2A agent
+card a remote agent (place it in a stage before deploying), a SKILL.md a skill. Choose **Keep in
+sync** to take each newer approved version when the build opens and before each deploy, or
+import it once and press **Update** when the Builder says a newer one is out. Admins publish with
+**Publish to registry**: on the Deployment panel for the deployed build (its workflow, and its
+Gateway's tools as an MCP server), on the Skills tab for a skill. Records are submitted for
+approval and a curator approves them in the registry; destroying the build deprecates its
+records. Setup and IAM: [DEPLOYMENT.md](DEPLOYMENT.md#aws-agent-registry).
+
 ### Library and sharing
 
-The Tools, Identity, Memory, Evals, Policies and Guardrails pages hold items usable in any build.
+The library pages hold items usable in any build, grouped as the Builder's tabs are: **Agent library** (Tools,
+Skills, Memory, Guardrails), **Gateway and access library** (Identity, Policies, Interceptors) and **Quality library** (Evals).
 An item is private until shared, and builds use it live: change it and every build shows the
 change (a deployed build picks it up on its next deploy).
 
@@ -401,7 +424,94 @@ or Lite, Llama 3.2 Vision) and a verdict schema such as `{"score": "0-100", "iss
 Only this run's images are read. The validator requires each agent in `from` to run in an earlier
 step (not a parallel peer, not itself) and warns if it isn't an image agent.
 
-## 6. Tune features
+## 6. Files a run starts with
+
+Set `"attachments": true` on the agents that should read the files a run is started with.
+**Start run** then shows **Attach files** (up to 5; documents 4.5 MB, images 3.75 MB), and the
+request may name S3 objects or folders as `s3://bucket/key` or `s3://bucket/folder/` inside a
+location `orchestrator.attachments.s3` lists:
+
+```json
+"orchestrator": { "attachments": { "s3": ["customer-docs/contracts"] } },
+"agents": { "intake": { "name": "Intake", "attachments": true } }
+```
+
+The files are checked and copied into the run's own folder when it starts (so a re-run reads
+the same ones), listed on the run page, and sent to those agents' models as document or image
+content. Uploads not used within a day are deleted.
+
+## 7. Gateway interceptors
+An interceptor is a Lambda the AgentCore Gateway calls on every tool call: one before the
+request reaches the tool, one after the tool answers. A Cedar policy allows or denies a call;
+an interceptor can also change it, redact it or log it. On the Builder's **Interceptors** tab,
+turn either on and check what it should do; each checked template becomes a section of its
+`handler.py`, which you may then edit (or point it at a Lambda of yours by ARN):
+
+| Before each request | After each answer |
+|---|---|
+| Audit log (no argument values, no headers) | Audit log |
+| Block tools, for every agent or the ones listed | Redact email, phone, SSN, card numbers |
+| Argument guard: a size cap, denied patterns | Hide tools from `tools/list` |
+| Inject run context (session, agent, user) into arguments | Cap result size |
+| Your own check | Your own change |
+
+```json
+"orchestrator": { "interceptors": {
+  "request":  { "code": {}, "passRequestHeaders": true,
+                "templates": { "audit": {}, "blockTools": { "tools": ["refunds___issueRefund"] } } },
+  "response": { "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:my-redactor" } } }
+```
+With `passRequestHeaders` the runtime's `x-ax-session`, `x-ax-agent` and `x-ax-user` headers
+reach it (the agent's Gateway token does too: never log headers). A refusal shows on the run's
+timeline as "Refused by interceptor". The Gateway may call an interceptor twice for one
+request, so keep it free of side effects you would not want repeated. Both need the Gateway.
+
+## 8. Triggers: runs nobody typed
+`orchestrator.triggers` starts runs from outside, on the Builder's **Triggers** tab:
+
+| Type | From | Set |
+|---|---|---|
+| `webhook` | GitHub, Jira, ServiceNow, Slack, Stripe, your system | `signature`: `agentexpress` (default), `github`, `slack`, `stripe`, `token` |
+| `schedule` | EventBridge Scheduler | `expression` cron(...) or rate(...), `timezone` |
+| `eventbridge` | AWS services, your applications, SaaS partners | `pattern`, `bus` |
+| `s3` | an object created in a bucket | `bucket`, `prefix` |
+| `sqs` | a message on a queue | `queueArn`, or none for a queue made for you, with a dead-letter queue |
+
+```json
+"triggers": {
+  "jira":    { "type": "webhook", "prompt": "Triage {{body.issue.key}}: {{body.issue.fields.summary}}",
+               "attachPayload": true, "maxRunsPerHour": 30 },
+  "alarms":  { "type": "eventbridge", "pattern": { "source": ["aws.cloudwatch"] },
+               "prompt": "Investigate {{detail.alarmName}}" },
+  "nightly": { "type": "schedule", "expression": "cron(0 6 * * ? *)", "prompt": "Daily summary",
+               "runAs": "service", "approvers": ["reviewers"], "gates": "auto" } }
+```
+`prompt` is the run's request, filled from the delivery (`{{body.x}}`, `{{headers.x}}`,
+`{{detail.x}}`, `{{event.x}}`, `{{time}}`); the delivery is untrusted text and never runs as
+code. A delivery seen in the last day starts no second run (`idempotencyKey` overrides the key).
+`runAs` is the build's owner (default) or `service`, whose runs its `approvers` groups read and
+decide. Once deployed, the app's **Triggers** page (admins) shows each webhook's URL, generates
+or stores its secret (shown once), gives a signed `curl`, sends test deliveries and lists the
+last ones. An S3 bucket must send its events to EventBridge; its object is attached to the run
+when `orchestrator.attachments.s3` allows the bucket. A queue of yours needs a visibility timeout
+above 300 seconds.
+
+## 9. Review gates that decide for themselves
+`"hitl": true` waits for a person in the app. The object form says more:
+```json
+{ "agent": "triage", "hitl": {
+    "mode": "threshold", "when": [{ "field": "riskScore", "gte": 80 }],
+    "approval": "event", "timeout": { "after": "24h", "action": "deny" } } }
+```
+`mode` is `always` (default), `threshold` (a person only when a `when` rule, a branch rule
+without `goto`, matches the output) or `auto`. `approval: "event"` also puts an "AgentExpress
+Approval Requested" event on the account's default bus and accepts an "AgentExpress Approval
+Decision" event (`detail`: `app`, `session`, `gate`, `decision`, `comment`, `by`) as the answer,
+so Slack, ServiceNow or your code can decide; whoever may put events on that bus may decide.
+`timeout` decides a gate nobody decided in time (checked every five minutes). Every
+self-approval, event decision and timeout is on the timeline and in the activity log.
+
+## 10. Tune features
 
 Each capability is a flag under an agent's `agentcore` (see the example in section 3), applied
 around your `run()`: `guardrails.input`/`.output` (Bedrock `ApplyGuardrail` before/after the model
@@ -473,12 +583,12 @@ is on unless `orchestrator.chatbot.enabled` is `false`, so a Builder build gets 
 answers questions about runs and acts on them within your `authorization` rules; replies render
 Markdown.
 
-## 7. Tests and redeploy
+## 11. Tests and redeploy
 
 ```bash
-cd orchestrator     && pytest      # runtime side: 1310 tests
-cd orchestrator/cdk && npm test    # IaC + Terraform/CDK parity + cdk-nag: 282 tests in 7 files
-cd orchestrator/web && npm test    # UI and Builder: 265 tests in 30 files
+cd orchestrator     && pytest      # runtime side: 1510 tests
+cd orchestrator/cdk && npm test    # IaC + Terraform/CDK parity + cdk-nag: 315 tests in 7 files
+cd orchestrator/web && npm test    # UI and Builder: 400 tests in 42 files
 ```
 
 None needs AWS credentials, a model or a container builder. They test the config plane

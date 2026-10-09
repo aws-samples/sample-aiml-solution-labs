@@ -218,8 +218,9 @@ def bundle_of(project: dict, version: int) -> dict:
     agents = workflow.get("agents") or {}
     prompts = {aid: p for aid, p in (project.get("prompts") or {}).items()
                if aid in agents and (agents[aid] or {}).get("runtime") != "a2a"}
-    # The files of each tool written in the build (tools.<key>.code), and only those.
-    coded = code_tools(workflow)
+    # The files of each function written in the build (tools.<key>.code and
+    # orchestrator.interceptors.<point>.code), and only those.
+    coded = code_functions(workflow)
     code = {k: files for k, files in (project.get("toolCode") or {}).items() if k in coded}
     return {"format": "agentexpress-bundle", "version": 1,
             "framework": {"version": FRAMEWORK_VERSION},
@@ -233,6 +234,20 @@ def code_tools(workflow: dict) -> list[str]:
     """The tool keys whose function is written in the build (scaffold.py code_tools)."""
     return [k for k, t in (workflow.get("tools") or {}).items()
             if isinstance(t, dict) and str(t.get("type") or "").lower() == "lambda" and "code" in t]
+
+
+def code_interceptors(workflow: dict) -> list[str]:
+    """interceptor-<point> for each Gateway interceptor written in the build
+    (scaffold.py code_interceptors): its files are toolCode["interceptor-<point>"]."""
+    orch = workflow.get("orchestrator") if isinstance(workflow.get("orchestrator"), dict) else {}
+    ics = orch.get("interceptors") if isinstance(orch.get("interceptors"), dict) else {}
+    return [f"interceptor-{p}" for p in ("request", "response")
+            if isinstance(ics.get(p), dict) and "code" in ics[p]]
+
+
+def code_functions(workflow: dict) -> list[str]:
+    """Every function written in the build: code tools, then interceptors."""
+    return code_tools(workflow) + code_interceptors(workflow)
 
 
 def needs_gateway(workflow: dict) -> bool:

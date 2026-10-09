@@ -65,6 +65,8 @@ synth with the exact name, so nothing half-configured reaches AWS.
 | Cognito, created (recommended) | `idp = "cognito"`, `cognito = { create = true }` | `-c idp=cognito -c createCognito=true` |
 | Cognito, your pool | `cognito = { create = false, user_pool_id, client_id, domain_prefix }` | `-c cognitoUserPoolId=… -c cognitoClientId=… -c cognitoDomainPrefix=…` |
 | Auth0 | `idp = "auth0"`, `auth0 = { domain, client_id }` | `-c idp=auth0 -c auth0Domain=… -c auth0ClientId=…` |
+| Okta | `idp = "okta"`, `okta = { domain, client_id, authorization_server = "default" }` | `-c idp=okta -c oktaDomain=… -c oktaClientId=… [-c oktaAuthServer=…]` |
+| Microsoft Entra ID | `idp = "entra"`, `entra = { tenant_id, client_id }` | `-c idp=entra -c entraTenantId=… -c entraClientId=…` |
 | None (sandbox) | `idp = "none"`, `allow_unauthenticated = true`, `enable_gateway = false` | `-c idp=none -c allowUnauthenticated=true` |
 
 - Cognito, created: the stack creates the User Pool, Hosted UI domain
@@ -77,8 +79,30 @@ synth with the exact name, so nothing half-configured reaches AWS.
 - Auth0: nothing is created in the tenant. Create a Single Page Application (domain without
   scheme or trailing slash) and, with the tool plane, an API (its Identifier is the audience) plus
   a Machine to Machine application. Set `authorization.groupsClaim` ([RBAC](#users-groups-and-rbac))
-- Your pool or Auth0: after the first deploy, add the UI URL to the client's allowed callback and
-  sign-out/logout URLs (Auth0: also Allowed Web Origins)
+- Okta: nothing is created in the org. `domain` is its host (`acme.okta.com` or your custom
+  domain), with no scheme or path. Sign-in goes through a custom authorization server (Security >
+  API; `default` unless you name another), because the org server cannot issue the Gateway's
+  client-credentials token. Create an OIDC Single-Page App integration with the Authorization Code
+  and Refresh Token grants (rotation on), turn Federation Broker Mode off and assign its users
+  (with it on, Okta answers "You are not allowed to access this app"). Allow it in the
+  authorization server's access policy (a rule with Authorization Code for it), add the app URL as
+  a Trusted Origin (CORS and Redirect), and give the app a sign-on policy your users can satisfy
+  (a new org may require Okta Verify). For RBAC, add a `groups` claim to the ID token on that
+  server and set `authorization.groupsClaim` to `groups`. The agents' Gateway client is made in a
+  machine-only pool by default; to use an Okta API Services app instead, see
+  [M2M identity](#m2m-identity-agent-to-gateway)
+- Microsoft Entra ID: nothing is created in the tenant. `tenant_id` is the Directory (tenant) ID,
+  a GUID: a domain name or `common` is refused, since the token's issuer carries the GUID and
+  `common` would admit other tenants. Register a single-tenant app with the Single-page application
+  platform. Add the optional `email` claim to its ID token (sharing and the audit log use it). For
+  RBAC, define app roles, assign them, and set `authorization.groupsClaim` to `roles`. The
+  `groups` claim carries object IDs, not names. With the tool plane, register an API app (Expose an
+  API, an app role for callers, and `"requestedAccessTokenVersion": 2` in its manifest: a v1
+  token's issuer is `sts.windows.net` and the Gateway refuses it), plus a client app with a secret
+  granted that role, with admin consent
+- Your pool, Auth0, Okta or Entra ID: after the first deploy, add the UI URL to the client's
+  allowed callback (redirect) and sign-out URLs (Auth0: also Allowed Web Origins). The URL has no
+  trailing slash. `terraform output login_issuer` names the issuer the API trusts
 - None: the UI and `/api/*` are open to anyone with the URL. The tool plane is not allowed (the
   Gateway's `CUSTOM_JWT` authorizer needs an OIDC provider), so tool-bound agents, including the
   five research agents, fail with `ToolUnavailable`. Also remove `authorization.actions`: with no
@@ -86,18 +110,39 @@ synth with the exact name, so nothing half-configured reaches AWS.
 
 ### M2M identity (agent to Gateway)
 
-Needed with the tool plane unless Cognito is created for you. Terraform:
-`gateway_identity = { client_id = "...", audience = "gateway/invoke" }`; CDK:
-`-c gatewayClientId=... -c gatewayAudience=...`. The audience is the OAuth2 scope on Cognito and
-the API Identifier on Auth0. The client secret goes in the environment only
-(`TF_VAR_gateway_client_secret` / `GATEWAY_CLIENT_SECRET`).
+Optional. The agents sign in to the Gateway as a machine, not as a person, so by default the
+deployment makes their client itself: in the Cognito pool it creates, or, when people sign in
+with Okta, Auth0, Entra ID or a pool of your own, in a small pool for machines only (no users and
+no sign-in page). Nothing has to be set up at your provider for tools to work. To use your
+provider's own machine client instead, set it here. Terraform:
+`gateway_identity = { client_id = "...", audience = "gateway/invoke", scope = "" }`; CDK:
+`-c gatewayClientId=... -c gatewayAudience=... [-c gatewayScope=...]`. The audience is the OAuth2
+scope on Cognito, the API Identifier on Auth0, the authorization server's Audience on Okta (e.g.
+`api://default`), and the API app's client id (a GUID) on Entra ID. `scope` is required on Okta
+(the custom scope); on Entra ID it defaults to `<audience>/.default`. The client secret goes in the
+environment only (`TF_VAR_gateway_client_secret` / `GATEWAY_CLIENT_SECRET`).
 
-| | Cognito M2M token | Auth0 M2M token |
-|---|---|---|
-| Claims present | `client_id` + `scope`, no `aud` | `aud` + `azp`, no `client_id` |
-| Gateway pins on | `allowed_clients` | `allowed_audience` + an `azp` custom claim |
-| Token request | HTTP Basic + `scope` | form body + `audience` |
-| Token endpoint | `/oauth2/token` | `/oauth/token` |
+| | Cognito M2M token | Auth0 M2M token | Okta M2M token | Entra ID M2M token (v2) |
+|---|---|---|---|---|
+| Claims present | `client_id` + `scope`, no `aud` | `aud` + `azp`, no `client_id` | `aud` + `cid` + `scp` | `aud` + `azp` + `roles` |
+| Gateway pins on | `allowed_clients` | `allowed_audience` + an `azp` custom claim | `allowed_audience` + a `cid` custom claim | `allowed_audience` + an `azp` custom claim |
+| Token request | HTTP Basic + `scope` | form body + `audience` | HTTP Basic + `scope` | form body + `scope` |
+| Token endpoint | `/oauth2/token` | `/oauth/token` | `/oauth2/<server>/v1/token` | `/<tenant>/oauth2/v2.0/token` |
+
+### Tools that act as the person
+
+A tool with `auth: "user"` (each person's own account) or `"obo"` (the person's sign-in) gets a
+second Gateway, `<agent-name>-gwu`, whose inbound JWT check trusts the app's sign-in (the
+provider's discovery URL, audience = the SPA client id) instead of the agents' machine client.
+Each call carries the ID token of the person who started the run. Nothing else to set: it
+follows the sign-in provider (and so needs one).
+
+- `user`: register the tool's callback URL at its provider as a redirect URL. It exists only after
+  the first deploy: the Builder shows it on the tool, `cdk deploy` prints it as
+  `toolCallbackUrls`, Terraform as `tool_callback_urls`. A person connects once from the run's
+  **Connect** button; the app's `POST /api/connect` binds the grant to their sign-in.
+- `obo`: the tool's provider must accept the app's sign-in token in a token exchange
+  (`subject_token_type` ID token). Refused with Entra ID sign-in for now.
 
 ## IAM to deploy
 
@@ -193,7 +238,7 @@ unless `consoleMode=builder`; `gatewayUrl`, `knowledgeBaseId` with the tool plan
 
 ## Users, groups and RBAC
 
-Skip for `idp = none`; on Auth0, create users in your tenant. The Cognito pool is admin-create-only
+Skip for `idp = none`; on Auth0, Okta or Entra ID, create (or assign) users in your tenant. The Cognito pool is admin-create-only
 by default (self sign-up on a public URL lets anyone spend your Bedrock budget). The stack creates
 one group per group named in `authorization.actions`, but membership is not in IaC, and a user in
 no group sees Approve/Revise/Deny greyed out. Create a user, add groups, then sign out and back in
@@ -252,7 +297,10 @@ curl -s -H "Authorization: Bearer $ID_TOKEN" "$(terraform output -raw api_endpoi
 
 Auth0: set `authorization.groupsClaim` to a namespaced custom claim (e.g. `https://your-app/roles`)
 emitted by a post-login Action. Auth0 will not issue an unnamespaced claim, so the default
-`cognito:groups` finds nothing and every gated action is denied.
+`cognito:groups` finds nothing and every gated action is denied. Okta: `groups`, from a groups
+claim on the authorization server. Entra ID: `roles`, the app roles assigned to the user. Groups
+named in `authorization.actions` are then those claim values. Only a pool the stack creates gets
+them made for you.
 
 ## Using it
 
@@ -317,17 +365,43 @@ agent name, with the tool the user picked:
 | | CDK | Terraform |
 |---|---|---|
 | Settings | `-c agentName=ax_<id> -c idp=cognito -c createCognito=true -c enableGateway=<workflow has tools> -c builder=false` | `agent_name = "ax_<id>"`, `idp = "cognito"`, `cognito = { create = true }`, `enable_gateway = <workflow has tools>`, `enable_builder = false` |
+| Sign-in elsewhere | `-c idp=okta -c oktaDomain=… -c oktaClientId=…` (or the `auth0*` / `entra*` keys) instead of `createCognito` | `idp = "okta"`, `okta = { domain, client_id }` (or `auth0` / `entra`) instead of `cognito` |
 | Deploys as | CDK bootstrap roles | `deploy-role-policy.json` plus `ReadOnlyAccess` |
 | State | CloudFormation | the console's builds bucket |
 
 - Build secrets live in Secrets Manager under `agentexpress/<console agent name>/builds/<build id>`
   and are passed as the [Secrets](#secrets) variables
-- After a deploy, the owner is invited into the build's app with a temporary password
+- Who signs in to the build's app is chosen on its Identity tab, Sign-in (`authorization.signIn`
+  in its workflow): built in (Cognito) by default, or Okta, Entra ID or Auth0. The tab shows the
+  two values to copy from the provider and, after a deploy, the address to register there
+- After a deploy with built-in sign-in, the owner is invited into the build's app with a temporary
+  password. With Okta, Entra ID or Auth0 there is no invite: people sign in with the provider
 - A CDK build in the console's own account needs that account and region CDK-bootstrapped; a
   connected account with no bootstrap is bootstrapped on its first deploy
 - A CDK build stack whose first create failed (`ROLLBACK_COMPLETE`, `ROLLBACK_FAILED`,
   `DELETE_FAILED`) is deleted through the CDK deploy role and created again. A stack that ever
   deployed is never deleted this way
+
+### AWS Agent Registry
+A Builder console works with the AWS Agent Registries in its own account and region
+(`bff/registry.py`). Nothing to configure: with one registry it is used without asking; with
+several the author picks.
+
+- **Add from registry** (Tools tab, Skills tab, and the agent list): search what is APPROVED and
+  take it into the build. An MCP server becomes an `mcp` tool with its endpoint and its tool list
+  (choose How it connects afterwards), an A2A agent card a remote agent, a SKILL record a skill.
+  **Keep in sync** refreshes the item to each newer approved version when the build is opened and
+  before each deploy; off, it stays as taken and the Builder offers the update.
+- **Publish to registry** (admins only: the `admin` action): the deployed build (an AGENT record
+  describing the workflow and its app, and an MCP record for its Gateway's tools) or its skills
+  (SKILL records, as their SKILL.md). Records are submitted for approval; the console never
+  approves its own. Publishing again submits the next version of the same record, and the
+  registry keeps serving the approved one meanwhile. Destroying the build deprecates its records.
+- IAM: the console's BFF gets `agent-registry:ListRegistries`, and on `registry/*` the
+  discoverable reads plus `CreateRegistryRecord`, `UpdateRegistryRecord`, `GetRegistryRecord`,
+  `SubmitRegistryRecordForApproval`, `UpdateRegistryRecordStatus` and `TagResource` (a published
+  record is tagged `agentexpress:published`). It never creates or deletes
+  a registry.
 
 ### Connected accounts
 
@@ -379,7 +453,10 @@ Edit `orchestrator/app/workflow.json`, then re-deploy.
 ## Tear down
 
 With the Builder, destroy every deployed build from the console first: each build is its own stack,
-and the builds bucket (holding Terraform builds' state) is deleted with the console.
+and the builds bucket (holding Terraform builds' state) is deleted with the console. The builds
+table has deletion protection on, so no stray DeleteTable or account clean-up tool takes every
+build with it: turn it off first (`aws dynamodb update-table --table-name <agentName>_builds
+--no-deletion-protection-enabled`), or the destroy stops at that table.
 
 ```bash
 terraform destroy                        # leaves Transaction Search and the state bucket
@@ -425,8 +502,9 @@ An MCP target looks empty: `tools/list` paginates, so follow `nextCursor` (recip
 | Symptom | Fix |
 |---|---|
 | Deploy or ingestion fails invoking a model | Enable Bedrock model access for the model and embedding model |
-| Login redirect mismatch | Add the UI URL to the client's callback and sign-out URLs (Auth0: also web origins) |
+| Login redirect mismatch | Add the UI URL to the client's callback and sign-out URLs (Auth0: also web origins; Entra ID: as a Single-page application redirect URI) |
+| "Could not sign you in" page | The provider refused the sign-in; its reason is shown (e.g. Entra `AADSTS50105`: the user is not assigned to the app) |
 | Gate buttons greyed out, API 403 | Add the user to a group, then sign out and back in |
-| Every gated action denied | Auth0: set `authorization.groupsClaim`. `idp = none`: remove `authorization.actions` |
+| Every gated action denied | Auth0, Okta, Entra ID: set `authorization.groupsClaim`. `idp = none`: remove `authorization.actions` |
 | Tool-bound agents fail with `ToolUnavailable` | Enable the tool plane, or check the target's `tools/list` |
 | Plan/synth names a missing value or secret | Supply it (see [Identity provider](#identity-provider), [Secrets](#secrets)) |

@@ -179,7 +179,8 @@
             "bedrock-agentcore.amazonaws.com",
             "bedrock.amazonaws.com",
             "lambda.amazonaws.com",
-            "codebuild.amazonaws.com"
+            "codebuild.amazonaws.com",
+            "scheduler.amazonaws.com"
           ]
         }
       }
@@ -572,7 +573,11 @@
         "s3:DeleteObjectTagging",
         "s3:PutBucketPolicy",
         "s3:GetBucketPolicy",
-        "s3:DeleteBucketPolicy"
+        "s3:DeleteBucketPolicy",
+        "s3:PutLifecycleConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:PutBucketCORS",
+        "s3:GetBucketCORS"
       ],
       "Resource": [
         "arn:aws:s3:::agentcore-*-schemas-*",
@@ -757,7 +762,10 @@
         "secretsmanager:TagResource",
         "secretsmanager:UntagResource"
       ],
-      "Resource": "arn:aws:secretsmanager:*:*:secret:agentexpress/*/runtime-*"
+      "Resource": [
+        "arn:aws:secretsmanager:*:*:secret:agentexpress/*/runtime-*",
+        "arn:aws:secretsmanager:*:*:secret:agentexpress/*/triggers-*"
+      ]
     },
     {
       "Sid": "TagResources",
@@ -781,6 +789,76 @@
         "apigateway:UntagResource"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "TriggerRulesAndSchedules",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutRule",
+        "events:DeleteRule",
+        "events:DescribeRule",
+        "events:EnableRule",
+        "events:DisableRule",
+        "events:PutTargets",
+        "events:RemoveTargets",
+        "events:ListTargetsByRule",
+        "events:TagResource",
+        "events:UntagResource",
+        "events:ListTagsForResource",
+        "scheduler:CreateSchedule",
+        "scheduler:UpdateSchedule",
+        "scheduler:DeleteSchedule",
+        "scheduler:GetSchedule",
+        "scheduler:TagResource",
+        "scheduler:UntagResource",
+        "scheduler:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:events:*:*:rule/AgentCoreTrigger-*",
+        "arn:aws:events:*:*:rule/*/AgentCoreTrigger-*",
+        "arn:aws:scheduler:*:*:schedule/default/AgentCoreTrigger-*"
+      ]
+    },
+    {
+      "Sid": "TriggerQueues",
+      "Effect": "Allow",
+      "Action": [
+        "sqs:CreateQueue",
+        "sqs:DeleteQueue",
+        "sqs:GetQueueAttributes",
+        "sqs:SetQueueAttributes",
+        "sqs:GetQueueUrl",
+        "sqs:TagQueue",
+        "sqs:UntagQueue",
+        "sqs:ListQueueTags"
+      ],
+      "Resource": "arn:aws:sqs:*:*:agentcore-*-trigger-*"
+    },
+    {
+      "Sid": "TriggerQueueMappings",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateEventSourceMapping",
+        "lambda:UpdateEventSourceMapping"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringLike": {
+          "lambda:FunctionArn": "arn:aws:lambda:*:*:function:AgentCoreBFF-*"
+        }
+      }
+    },
+    {
+      "Sid": "TriggerQueueMappingsManage",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:GetEventSourceMapping",
+        "lambda:DeleteEventSourceMapping",
+        "lambda:TagResource",
+        "lambda:UntagResource",
+        "lambda:ListTags"
+      ],
+      "Resource": "arn:aws:lambda:*:*:event-source-mapping:*"
     }
   ]
 }

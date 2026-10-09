@@ -34,6 +34,7 @@ import {
   groups as groupsApi, library, NO_SHARES, type Group, type LibraryItem, type LibraryKind, type Shares,
 } from "./storage";
 import type { Issue } from "./validate";
+import { SkillForm } from "./SkillForm";
 import "./builder.css";
 
 type Notify = (type: "success" | "error" | "info", msg: string) => void;
@@ -45,6 +46,7 @@ export const KINDS: { kind: LibraryKind; map: NamedMapName; label: string; one: 
   { kind: "evaluator", map: "evaluators", label: "Evals", one: "evaluator", block: "evaluator", about: "Custom LLM-as-a-judge evaluators an agent is scored with." },
   { kind: "policy", map: "policies", label: "Policies", one: "policy", block: "policy", about: "Cedar policies for a tool, written for AgentCore::Action::\"{{tool}}\" and attached to any tool." },
   { kind: "guardrail", map: "guardrails", label: "Guardrails", one: "guardrail", block: "guardrail", about: "Content guardrails an agent's input or output is checked with." },
+  { kind: "skill", map: "skills", label: "Skills", one: "skill", block: "skill", about: "Know-how an agent opens when a task needs it: a SKILL.md with optional reference files." },
 ];
 export const kindInfo = (k: LibraryKind) => KINDS.find((x) => x.kind === k)!;
 
@@ -55,6 +57,9 @@ const STARTERS: Record<LibraryKind, Entry> = {
   evaluator: { instructions: "" },
   policy: { statement: 'forbid(\n  principal,\n  action in AgentCore::Action::"{{tool}}",\n  resource == AgentCore::Gateway::"{{gateway}}"\n);' },
   guardrail: { contentFilters: { HATE: "HIGH", PROMPT_ATTACK: "HIGH" } },
+  skill: { description: "", instructions: "" },
+  // Published from a build's Interceptors tab, not made here.
+  interceptor: { point: "request", code: {} },
 };
 
 // --- sharing -----------------------------------------------------------------------
@@ -132,9 +137,12 @@ export const sharedLabel = (s?: Shares) => {
 
 // --- one item's definition ---------------------------------------------------------
 
-export function ItemForm({ kind, value, onChange, issues = [], path = "" }: {
+export function ItemForm({ kind, value, onChange, issues = [], path = "", onName }: {
   kind: LibraryKind; value: Entry; onChange: (e: Entry) => void; issues?: Issue[]; path?: string;
+  /** A name an imported file suggests (a skill's SKILL.md). */
+  onName?: (name: string) => void;
 }) {
+  if (kind === "skill") return <SkillForm value={value} onChange={onChange} onName={onName} />;
   if (kind === "policy") {
     const st = String(value.statement ?? "");
     const wrong = st.trim() ? cedarProblems(st) : [];
@@ -170,7 +178,8 @@ function ItemModal({ kind, visible, initial, taken, onDismiss, onSave, note }: {
   const save = async () => {
     setBusy(true);
     try {
-      await onSave({ name, description, definition: def });
+      // A skill says when to use it in its own definition: that is its description.
+      await onSave({ name, description: kind === "skill" ? String(def.description ?? "") : description, definition: def });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -189,10 +198,12 @@ function ItemModal({ kind, visible, initial, taken, onDismiss, onSave, note }: {
         <FormField label="Name" errorText={nameError || undefined} description="What agents and tools pick it by.">
           <Input value={name} onChange={({ detail }) => setName(detail.value)} ariaLabel="Name" />
         </FormField>
-        <FormField label="Description">
-          <Input value={description} onChange={({ detail }) => setDescription(detail.value)} ariaLabel="Description" />
-        </FormField>
-        <ItemForm kind={kind} value={def} onChange={setDef} />
+        {kind !== "skill" ? (
+          <FormField label="Description">
+            <Input value={description} onChange={({ detail }) => setDescription(detail.value)} ariaLabel="Description" />
+          </FormField>
+        ) : null}
+        <ItemForm kind={kind} value={def} onChange={setDef} onName={(n) => { if (!name) setName(n); }} />
         {error ? <Alert type="error">{error}</Alert> : null}
       </SpaceBetween>
     </Modal>
@@ -201,8 +212,38 @@ function ItemModal({ kind, visible, initial, taken, onDismiss, onSave, note }: {
 
 // --- the left pane: one kind of library item -----------------------------------------
 
+/** Interceptors are published from a build's Interceptors tab and copied into a build,
+ *  never linked live (bff/library.py COPY_KINDS): here they are viewed, shared, deleted. */
+const INTERCEPTOR_INFO = { label: "Interceptors", one: "interceptor",
+  about: "Gateway interceptors: a Lambda before each tool request or after each answer, with its code. Publish one from a build's Interceptors tab; a build that adds one takes a copy, so changing it never changes another build." };
+
+function InterceptorView({ item, onDismiss }: { item: LibraryItem | null; onDismiss: () => void }) {
+  const d = (item?.definition ?? {}) as Record<string, unknown>;
+  const templates = Object.keys((d.templates ?? {}) as object);
+  return (
+    <Modal visible={item !== null} onDismiss={onDismiss} size="large" header={item?.name ?? ""}
+      footer={<Box float="right"><Button onClick={onDismiss}>Close</Button></Box>}>
+      {item ? (
+        <SpaceBetween size="s">
+          <Box>{item.description || "No description."}</Box>
+          <Box variant="small" color="text-body-secondary">
+            {d.point === "response" ? "After each answer" : "Before each request"}
+            {d.lambdaArn ? ` · your Lambda ${String(d.lambdaArn)}` : " · written in the build"}
+            {templates.length ? ` · from ${templates.join(", ")}` : ""}
+            {d.passRequestHeaders ? " · reads the request headers" : ""}
+          </Box>
+          {item.files?.["handler.py"] ? <pre className="axb-code">{item.files["handler.py"]}</pre> : null}
+          <Box variant="small" color="text-body-secondary">To use it, open a build&apos;s Interceptors tab and choose Add from library.</Box>
+        </SpaceBetween>
+      ) : null}
+    </Modal>
+  );
+}
+
 export function LibraryPage({ kind, notify }: { kind: LibraryKind; notify: Notify }) {
-  const info = kindInfo(kind);
+  const copied = kind === "interceptor";
+  const info = copied ? INTERCEPTOR_INFO : kindInfo(kind);
+  const [viewing, setViewing] = useState<LibraryItem | null>(null);
   const [items, setItems] = useState<LibraryItem[] | null>(null);
   const [editing, setEditing] = useState<LibraryItem | "new" | null>(null);
   const [sharing, setSharing] = useState<LibraryItem[] | null>(null);
@@ -225,11 +266,12 @@ export function LibraryPage({ kind, notify }: { kind: LibraryKind; notify: Notif
     <SpaceBetween size="l">
       <Table
         header={<Header variant="h1" counter={items ? `(${items.length})` : undefined}
-          description={`${info.about} Yours and those shared with you, for any build: a build uses one live, so a change here shows in every build that uses it.`}
+          description={copied ? `${info.about} Yours and those shared with you.`
+            : `${info.about} Yours and those shared with you, for any build: a build uses one live, so a change here shows in every build that uses it.`}
           actions={<SpaceBetween direction="horizontal" size="xs">
             <Button disabled={!selected.length} onClick={() => setSharing(selected)}>
               Share{selected.length ? ` (${selected.length})` : ""}</Button>
-            <Button variant="primary" iconName="add-plus" onClick={() => setEditing("new")}>New {info.one}</Button>
+            {copied ? null : <Button variant="primary" iconName="add-plus" onClick={() => setEditing("new")}>New {info.one}</Button>}
           </SpaceBetween>}>
           {info.label}</Header>}
         items={items ?? []} loading={items === null} loadingText="Loading" trackBy="id"
@@ -237,19 +279,24 @@ export function LibraryPage({ kind, notify }: { kind: LibraryKind; notify: Notif
         ariaLabels={{ selectionGroupLabel: "Select to share", allItemsSelectionLabel: () => "Select all",
           itemSelectionLabel: (_, i) => `Select ${i.name}` }}
         columnDefinitions={[
-          { id: "name", header: "Name", isRowHeader: true, cell: (i) => <Button variant="inline-link" onClick={() => setEditing(i)}>{i.name}</Button> },
+          { id: "name", header: "Name", isRowHeader: true, cell: (i) => <Button variant="inline-link" onClick={() => (copied ? setViewing(i) : setEditing(i))}>{i.name}</Button> },
           { id: "desc", header: "Description", cell: (i) => i.description || String(i.definition?.description ?? "") || "—" },
           { id: "owner", header: "Owner", cell: (i) => (i.mine ? "You" : i.ownerEmail || "Someone else") },
           { id: "shared", header: "Shared with", cell: (i) => sharedLabel(i.shares) },
           { id: "updated", header: "Updated", cell: (i) => (i.updatedAt ? new Date(i.updatedAt).toLocaleString() : "—") },
           { id: "actions", header: "Actions", cell: (i) => (
             <SpaceBetween direction="horizontal" size="xs">
-              <Button variant="inline-link" ariaLabel={`Edit ${i.name}`} onClick={() => setEditing(i)}>Edit</Button>
+              {copied
+                ? <Button variant="inline-link" ariaLabel={`View ${i.name}`} onClick={() => setViewing(i)}>View</Button>
+                : <Button variant="inline-link" ariaLabel={`Edit ${i.name}`} onClick={() => setEditing(i)}>Edit</Button>}
               <Button variant="inline-link" ariaLabel={`Delete ${i.name}`} onClick={() => void remove(i)}>Delete</Button>
             </SpaceBetween>) },
         ]}
-        empty={<Box textAlign="center" color="inherit">Nothing yet. Make one here, or save one from a build.</Box>}
+        empty={<Box textAlign="center" color="inherit">{copied ? "Nothing yet. Publish one from a build's Interceptors tab."
+          : "Nothing yet. Make one here, or save one from a build."}</Box>}
       />
+      <InterceptorView item={viewing} onDismiss={() => setViewing(null)} />
+      {copied ? null : (
       <ItemModal kind={kind} visible={editing !== null} taken={(items ?? []).map((i) => i.name)}
         initial={editing && editing !== "new" ? { name: editing.name, description: editing.description, definition: editing.definition as Entry } : null}
         note={editing && editing !== "new" ? "Every build that uses it sees the change at once; a deployed one when it is next deployed." : undefined}
@@ -261,6 +308,7 @@ export function LibraryPage({ kind, notify }: { kind: LibraryKind; notify: Notif
           setEditing(null);
           load();
         }} />
+      )}
       <ShareItems items={sharing} onDismiss={() => setSharing(null)} notify={notify}
         onSaved={() => { setSelected([]); load(); }} />
     </SpaceBetween>
@@ -429,6 +477,7 @@ export function NamedTab({ kind, project, view, setProject, refs, addRefs, issue
     if (kind === "memory") return hit(a, (e) => core(e).memory?.use === key);
     if (kind === "evaluator") return hit(a, (e) => ((core(e).evaluations?.evaluators ?? []) as string[]).includes(`Custom.${key}`));
     if (kind === "identity") return [...hit(a, (e) => ((core(e).identity?.outbound ?? []) as string[]).includes(key)), ...hit(t, (e) => e.identity === key)];
+    if (kind === "skill") return hit(a, (e) => ((e.skills ?? []) as string[]).includes(key));
     return hit(t, (e) => ((e.policies ?? []) as string[]).includes(key));
   };
   const errorsAt = (key: string) => issues.filter((i) => i.path === `${info.map}.${key}` || i.path.startsWith(`${info.map}.${key}.`)

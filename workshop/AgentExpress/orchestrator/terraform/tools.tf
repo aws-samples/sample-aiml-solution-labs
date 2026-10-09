@@ -60,6 +60,10 @@ locals {
       oauth_discovery_url = try(local.identity_defs[t.identity].discoveryUrl, try(t.oauth.discoveryUrl, ""))
       oauth_token_url     = try(local.identity_defs[t.identity].tokenUrl, try(t.oauth.tokenUrl, ""))
       oauth_issuer        = try(local.identity_defs[t.identity].issuer, try(t.oauth.issuer, ""))
+      # auth = "user": where each person signs in, with a tokenUrl. auth = "obo": the
+      # API the exchanged token is for (optional).
+      oauth_authorization_url = try(t.oauth.authorizationUrl, "")
+      oauth_audience          = try(t.oauth.audience, "")
       # type=lambda: an EXISTING function's ARN plus the tool schema to publish
       # for it. This is the general-purpose escape hatch — a Lambda can front a
       # database (Redshift, Snowflake, any RDBMS), an internal service, or a
@@ -221,8 +225,21 @@ locals {
   openapi_tools    = { for n, t in local.tools : n => t if t.type == "openapi" }
   lambda_tools     = { for n, t in local.tools : n => t if t.type == "lambda" }
   apigateway_tools = { for n, t in local.tools : n => t if t.type == "apigateway" }
-  # OAuth client credentials targets (mcp/openapi with auth = "oauth2").
-  oauth_tool_names = toset([for n, t in local.tools : n if t.auth == "oauth2"])
+  # Every tool that gets its token from an OAuth provider: the app's client (oauth2),
+  # each person's own account (user), or the person's sign-in exchanged (obo).
+  oauth_tool_names = toset([for n, t in local.tools : n if contains(["oauth2", "user", "obo"], t.auth)])
+  # ... and the two that act as the PERSON: on the person Gateway (gateway.tf).
+  person_tool_names = toset([for n, t in local.tools : n if contains(["user", "obo"], t.auth)])
+  # The MCP tool schema such a tool declares, as the Gateway's inline tool definitions.
+  person_mcp_schemas = { for n, t in local.mcp_tools : n => jsonencode([for s in t.tool_schema : {
+    name        = s.name
+    description = s.description
+    inputSchema = {
+      type       = "object"
+      properties = { for p in s.properties : p.name => { type = p.type, description = p.description } }
+      required   = [for p in s.properties : p.name if p.required]
+    }
+  }]) if contains(local.person_tool_names, n) }
   # API-key tools (auth "apikey", or an apikey identity): the Gateway role reads the key.
   apikey_tool_names = toset([for n, t in local.tools : n if t.auth == "apikey"])
   # SigV4 REST APIs: the Gateway role may invoke exactly these API stages.
@@ -292,14 +309,18 @@ locals {
   # not a secret; the keys stay sensitive.
   keyed_tool_names = toset(nonsensitive([
     for n, t in local.tools : n
-    if t.api_key != "" && t.auth != "oauth2" && t.auth != "sigv4" && contains(local.vocab.apiKeyToolTypes.values, t.type)
+    # Not the OAuth modes: their client secret arrives the same way (tool_api_keys) but
+    # goes to an OAuth provider, and a second (API key) credential on the target is
+    # refused ("credential_provider_configuration ... at most 1", seen live with user/obo).
+    if t.api_key != "" && !contains(["oauth2", "user", "obo", "sigv4"], t.auth) && contains(local.vocab.apiKeyToolTypes.values, t.type)
   ]))
 
   # ---- Cedar policy, generated ------------------------------------------
   # Only tools that are actually permitted produce a statement. Everything else
   # — including any tool name a compromised prompt invents — is refused by
   # Cedar's default-deny.
-  permitted_tools = { for n, t in local.tools : n => t if t.policy_permit }
+  # Not the person's tools: they are on the person Gateway, which has no policy engine.
+  permitted_tools = { for n, t in local.tools : n => t if t.policy_permit && !contains(["user", "obo"], t.auth) }
 
   # An argument restriction becomes a `when` clause. Today one key is supported
   # (the KB's `filter`), which is what the corpus scoping needs.
@@ -643,16 +664,24 @@ resource "terraform_data" "tools_validation" {
       error_message = "A type=\"apigateway\" tool needs \"restApiId\" (10 lowercase letters and digits), \"stage\", and a non-empty \"toolFilters\" list of {\"path\": \"/...\", \"methods\": [...]} with methods from ${join(", ", local.vocab.httpMethods.values)}. Offending: ${join(", ", keys(local.apigateway_tools))}."
     }
     precondition {
-      condition = alltrue([for n, t in local.tools : t.auth != "oauth2" || (
+      condition     = length(local.person_tool_names) == 0 || local.auth_enabled
+      error_message = "Tools ${join(", ", local.person_tool_names)} act as the person (auth \"user\" or \"obo\"), which needs the app's sign-in: pick an idp other than \"none\"."
+    }
+    precondition {
+      condition     = alltrue([for n, t in local.mcp_tools : !contains(local.person_tool_names, n) || length(t.tool_schema) > 0])
+      error_message = "An MCP tool used as the person must list its tools in \"toolSchema\": the Gateway cannot ask the server for them before anyone has signed in."
+    }
+    precondition {
+      condition = alltrue([for n, t in local.tools : !contains(["oauth2", "user", "obo"], t.auth) || (
         contains(local.vocab.oauthToolTypes.values, t.type) && t.oauth_client_id != ""
         && length([for u in [t.oauth_discovery_url, t.oauth_token_url] : u if u != ""]) == 1
         && alltrue([for u in [t.oauth_discovery_url, t.oauth_token_url] : u == "" || can(regex("^https://\\S+\\.\\S+", u))])
       )])
-      error_message = "A tool with auth = \"oauth2\" must be type ${join(" or ", local.vocab.oauthToolTypes.values)} and have \"oauth\": {\"clientId\", \"scopes\", and exactly one https \"discoveryUrl\" or \"tokenUrl\"}. Offending: ${join(", ", [for n, t in local.tools : n if t.auth == "oauth2"])}."
+      error_message = "A tool with auth \"oauth2\", \"user\" or \"obo\" must be type ${join(" or ", local.vocab.oauthToolTypes.values)} and have \"oauth\": {\"clientId\", \"scopes\", and exactly one https \"discoveryUrl\" or \"tokenUrl\"}. Offending: ${join(", ", local.oauth_tool_names)}."
     }
     precondition {
-      condition     = alltrue([for n, t in local.tools : t.auth != "oauth2" || nonsensitive(t.api_key != "")])
-      error_message = "A tool with auth = \"oauth2\" needs its OAuth client secret in var.tool_api_keys (the build's secrets), the same place as an API key."
+      condition     = alltrue([for n, t in local.tools : !contains(["oauth2", "user", "obo"], t.auth) || nonsensitive(t.api_key != "")])
+      error_message = "A tool with auth \"oauth2\", \"user\" or \"obo\" needs its OAuth client secret in var.tool_api_keys (the build's secrets), the same place as an API key."
     }
     # --- type=kb: where its documents come from ---------------------------
     # Mirrors validateTools in cdk/lib/orchestrator-stack.ts and bff/validate_build.py.
@@ -985,7 +1014,7 @@ resource "terraform_data" "workflow_validation" {
       # would silently evaluate against an empty group set and DENY everyone,
       # locking the UI's own buttons out of the app it just deployed.
       condition     = local.auth_enabled || length(local.authz_actions) == 0
-      error_message = "app/workflow.json restricts ${join(", ", keys(local.authz_actions))} in `authorization.actions`, but idp = \"none\" deploys the API with no authorizer, so there are no JWT claims to authorize against and every one of those actions would be denied. Set idp to \"cognito\" or \"auth0\", or remove `authorization.actions`."
+      error_message = "app/workflow.json restricts ${join(", ", keys(local.authz_actions))} in `authorization.actions`, but idp = \"none\" deploys the API with no authorizer, so there are no JWT claims to authorize against and every one of those actions would be denied. Set idp to a provider (\"cognito\", \"auth0\", \"okta\" or \"entra\"), or remove `authorization.actions`."
     }
     precondition {
       # A typo'd action name is worse than useless: it looks like a restriction in
@@ -1083,16 +1112,27 @@ resource "aws_bedrockagentcore_gateway_target" "websearch" {
 # The generic "bring your own MCP server" path: change `endpoint` in
 # workflow.json and this target follows.
 resource "aws_bedrockagentcore_gateway_target" "mcp_server" {
-  for_each           = local.mcp_tools
-  gateway_identifier = aws_bedrockagentcore_gateway.mcp[0].gateway_id
-  name               = each.key
-  description        = each.value.description
-
+  for_each = local.mcp_tools
+  # A tool that acts as the person is on the person Gateway (gateway.tf).
+  gateway_identifier = (contains(local.person_tool_names, each.key)
+  ? aws_bedrockagentcore_gateway.person[0].gateway_id : aws_bedrockagentcore_gateway.mcp[0].gateway_id)
+  name        = each.key
+  description = each.value.description
   target_configuration {
     mcp {
       mcp_server {
         endpoint     = each.value.endpoint
         listing_mode = each.value.listing_mode
+        # Used as the person: its tools are given here, since the Gateway cannot list
+        # them from the server before anyone has connected an account.
+        dynamic "mcp_tool_schema" {
+          for_each = contains(local.person_tool_names, each.key) ? [1] : []
+          content {
+            inline_payload {
+              payload = local.person_mcp_schemas[each.key]
+            }
+          }
+        }
       }
     }
   }
@@ -1122,14 +1162,21 @@ resource "aws_bedrockagentcore_gateway_target" "mcp_server" {
     }
   }
 
-  # OAuth client credentials (auth = "oauth2"), through the provider below.
+  # OAuth, through the provider below: the app's own client (oauth2); each person's own
+  # account (user), sent back to the app to bind the grant to them; or the person's
+  # sign-in, an ID token, exchanged on their behalf (obo).
   dynamic "credential_provider_configuration" {
-    for_each = each.value.auth == "oauth2" ? [1] : []
+    for_each = contains(["oauth2", "user", "obo"], each.value.auth) ? [1] : []
     content {
       oauth {
-        provider_arn = aws_bedrockagentcore_oauth2_credential_provider.tool[each.key].credential_provider_arn
-        scopes       = each.value.oauth_scopes
-        grant_type   = "CLIENT_CREDENTIALS"
+        provider_arn       = aws_bedrockagentcore_oauth2_credential_provider.tool[each.key].credential_provider_arn
+        scopes             = each.value.oauth_scopes
+        grant_type         = { oauth2 = "CLIENT_CREDENTIALS", user = "AUTHORIZATION_CODE", obo = "TOKEN_EXCHANGE" }[each.value.auth]
+        default_return_url = each.value.auth == "user" ? "https://${aws_cloudfront_distribution.ui.domain_name}" : null
+        custom_parameters = each.value.auth == "obo" ? merge(
+          { subject_token_type = "urn:ietf:params:oauth:token-type:id_token" },
+          each.value.oauth_audience != "" ? { audience = each.value.oauth_audience } : {}
+        ) : null
       }
     }
   }
@@ -1221,10 +1268,11 @@ resource "aws_s3_object" "openapi_schema" {
 }
 
 resource "aws_bedrockagentcore_gateway_target" "openapi" {
-  for_each           = local.openapi_tools
-  gateway_identifier = aws_bedrockagentcore_gateway.mcp[0].gateway_id
-  name               = each.key
-  description        = each.value.description
+  for_each = local.openapi_tools
+  gateway_identifier = (contains(local.person_tool_names, each.key)
+  ? aws_bedrockagentcore_gateway.person[0].gateway_id : aws_bedrockagentcore_gateway.mcp[0].gateway_id)
+  name        = each.key
+  description = each.value.description
 
   target_configuration {
     mcp {
@@ -1271,14 +1319,21 @@ resource "aws_bedrockagentcore_gateway_target" "openapi" {
     }
   }
 
-  # OAuth client credentials (auth = "oauth2"), through the provider below.
+  # OAuth, through the provider below: the app's own client (oauth2); each person's own
+  # account (user), sent back to the app to bind the grant to them; or the person's
+  # sign-in, an ID token, exchanged on their behalf (obo).
   dynamic "credential_provider_configuration" {
-    for_each = each.value.auth == "oauth2" ? [1] : []
+    for_each = contains(["oauth2", "user", "obo"], each.value.auth) ? [1] : []
     content {
       oauth {
-        provider_arn = aws_bedrockagentcore_oauth2_credential_provider.tool[each.key].credential_provider_arn
-        scopes       = each.value.oauth_scopes
-        grant_type   = "CLIENT_CREDENTIALS"
+        provider_arn       = aws_bedrockagentcore_oauth2_credential_provider.tool[each.key].credential_provider_arn
+        scopes             = each.value.oauth_scopes
+        grant_type         = { oauth2 = "CLIENT_CREDENTIALS", user = "AUTHORIZATION_CODE", obo = "TOKEN_EXCHANGE" }[each.value.auth]
+        default_return_url = each.value.auth == "user" ? "https://${aws_cloudfront_distribution.ui.domain_name}" : null
+        custom_parameters = each.value.auth == "obo" ? merge(
+          { subject_token_type = "urn:ietf:params:oauth:token-type:id_token" },
+          each.value.oauth_audience != "" ? { audience = each.value.oauth_audience } : {}
+        ) : null
       }
     }
   }
@@ -1534,14 +1589,13 @@ resource "aws_bedrockagentcore_gateway_target" "apigateway" {
   }
 
   # SigV4: the API's methods use IAM authorization and the Gateway signs as its own
-  # role, which may invoke exactly this API and stage (GatewayInvokeRestApis).
+  # role, which may invoke exactly this API and stage (GatewayInvokeRestApis). The role
+  # alone: AgentCore refuses a service/region here ("IamCredentialProvider is not
+  # supported for this target type", seen live) and signs for execute-api itself.
   dynamic "credential_provider_configuration" {
     for_each = each.value.auth == "sigv4" ? [1] : []
     content {
-      gateway_iam_role {
-        service = each.value.auth_service != "" ? each.value.auth_service : "execute-api"
-        region  = var.region
-      }
+      gateway_iam_role {}
     }
   }
 }
@@ -1563,9 +1617,22 @@ resource "aws_bedrockagentcore_oauth2_credential_provider" "tool" {
         dynamic "authorization_server_metadata" {
           for_each = local.tools[each.key].oauth_discovery_url == "" ? [1] : []
           content {
-            issuer                 = local.tools[each.key].oauth_issuer != "" ? local.tools[each.key].oauth_issuer : regex("^https://[^/]+", local.tools[each.key].oauth_token_url)
-            token_endpoint         = local.tools[each.key].oauth_token_url
-            authorization_endpoint = local.tools[each.key].oauth_token_url
+            issuer         = local.tools[each.key].oauth_issuer != "" ? local.tools[each.key].oauth_issuer : regex("^https://[^/]+", local.tools[each.key].oauth_token_url)
+            token_endpoint = local.tools[each.key].oauth_token_url
+            # Where each person signs in (auth "user"); unused otherwise, but required.
+            authorization_endpoint = (local.tools[each.key].oauth_authorization_url != ""
+            ? local.tools[each.key].oauth_authorization_url : local.tools[each.key].oauth_token_url)
+          }
+        }
+      }
+      # OBO: the person's sign-in token is the subject; the provider authenticates this
+      # client and needs no separate actor token.
+      dynamic "on_behalf_of_token_exchange_config" {
+        for_each = local.tools[each.key].auth == "obo" ? [1] : []
+        content {
+          grant_type = "TOKEN_EXCHANGE"
+          token_exchange_grant_type_config {
+            actor_token_content = "NONE"
           }
         }
       }

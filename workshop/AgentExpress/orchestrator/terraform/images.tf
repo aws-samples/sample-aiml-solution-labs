@@ -1,12 +1,29 @@
 # Image agents (workflow.json `output: "image"`, app/common/images.py) store what they
 # render in this bucket, and the BFF hands out short-lived links to it (GET /api/images).
-# Only when some agent draws; emptied and deleted with the stack (force_destroy).
-# Mirrors the AssetsBucket in cdk/lib/orchestrator-stack.ts.
+# It also holds the files a run is started with, for agents with `attachments`
+# (bff/runfiles.py): uploads under uploads/ (expired after a day), and each run's copy
+# under runs/<session>/attachments/. Only when some agent draws or reads files; emptied
+# and deleted with the stack (force_destroy). Mirrors the AssetsBucket in
+# cdk/lib/orchestrator-stack.ts.
 locals {
   image_agents = [
     for id, a in local.workflow_def.agents : id if try(a.output, "") == "image"
   ]
-  assets_enabled = local.workflow_plane && length(local.image_agents) > 0
+  # Agents whose model reads the files a run is started with (`attachments`).
+  file_agents = [
+    for id, a in local.workflow_def.agents : id
+    if try(a.runtime, local.key_defaults.agent.runtime) != "a2a" && try(a.attachments, false) == true
+  ]
+  run_files        = local.workflow_plane && length(local.file_agents) > 0
+  main_reads_files = length([for id in local.file_agents : id if !contains(keys(local.dedicated_agents), id)]) > 0
+  # orchestrator.attachments.s3: what a run's request may name, read by the BFF only.
+  run_files_s3 = local.run_files ? [for p in try(local.workflow_def.orchestrator.attachments.s3, []) : trimsuffix(trimprefix(p, "/"), "/")] : []
+  # The key prefixes ListBucket may be asked for: a folder and what is under it, or
+  # anything for a whole bucket.
+  run_files_s3_prefixes = distinct(flatten([for p in local.run_files_s3 :
+    length(split("/", p)) > 1 ? [join("/", slice(split("/", p), 1, length(split("/", p)))), "${join("/", slice(split("/", p), 1, length(split("/", p))))}/*"] : ["*"]
+  ]))
+  assets_enabled = local.workflow_plane && (length(local.image_agents) > 0 || length(local.file_agents) > 0)
   # Agents whose model reads earlier agents' images (workflow.json `vision`, app/common/
   # images.load_for): they read the bucket as well as write it.
   vision_agents = [
@@ -91,8 +108,9 @@ resource "aws_iam_role_policy" "runtime_assets" {
   role  = aws_iam_role.runtime[0].id
   policy = jsonencode({
     Version = "2012-10-17"
-    # Read too, only when an in-process agent reads images (`vision`).
-    Statement = [{ Effect = "Allow", Action = concat(["s3:PutObject"], local.main_reads_images ? ["s3:GetObject"] : []), Resource = "${aws_s3_bucket.assets[0].arn}/runs/*" }]
+    # Read too, only when an in-process agent reads images (`vision`) or the run's files
+    # (`attachments`).
+    Statement = [{ Effect = "Allow", Action = concat(["s3:PutObject"], local.main_reads_images || local.main_reads_files ? ["s3:GetObject"] : []), Resource = "${aws_s3_bucket.assets[0].arn}/runs/*" }]
   })
 }
 # A dedicated agent that reads images (`vision`) reads them from its own runtime.
@@ -123,7 +141,68 @@ resource "aws_iam_role_policy" "bff_assets" {
   name  = "AgentCoreBFFAssets-${var.agent_name}"
   role  = aws_iam_role.bff.id
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["s3:GetObject"], Resource = "${aws_s3_bucket.assets[0].arn}/runs/*" }]
+    Version = "2012-10-17"
+    # A for-filter, not a conditional, for the optional statements: the two results of a
+    # conditional would be tuples of different lengths, which Terraform refuses to unify.
+    Statement = concat(
+      [{ Effect = "Allow", Action = ["s3:GetObject"], Resource = "${aws_s3_bucket.assets[0].arn}/runs/*" }],
+      # A run's files (bff/runfiles.py): sign uploads, check them, copy each into the run.
+      [for st in [
+        { Sid = "RunFileUploads", Effect = "Allow", Action = ["s3:PutObject", "s3:GetObject"], Resource = "${aws_s3_bucket.assets[0].arn}/uploads/*" },
+        { Sid = "RunFileCopies", Effect = "Allow", Action = ["s3:PutObject"], Resource = "${aws_s3_bucket.assets[0].arn}/runs/*/attachments/*" },
+      ] : st if local.run_files],
+      # The S3 locations a request may name (orchestrator.attachments.s3): read, and list
+      # a folder named with a trailing /.
+      [for st in [
+        { Sid = "RunFilesFromS3", Effect = "Allow", Action = ["s3:GetObject"], Resource = [for p in local.run_files_s3 : "arn:aws:s3:::${p}/*"] },
+        { Sid      = "ListRunFilesInS3", Effect = "Allow", Action = ["s3:ListBucket"],
+          Resource = distinct([for p in local.run_files_s3 : "arn:aws:s3:::${split("/", p)[0]}"]),
+        Condition = { StringLike = { "s3:prefix" = local.run_files_s3_prefixes } } },
+      ] : st if length(local.run_files_s3) > 0],
+    )
   })
+}
+
+# A dedicated agent that reads the run's files (`attachments`) reads them from its own
+# runtime. Mirrors ReadRunFiles in cdk/lib/orchestrator-stack.ts.
+resource "aws_iam_role_policy" "subagent_files" {
+  for_each = local.run_files ? { for id in local.file_agents : id => id if contains(keys(local.dedicated_agents), id) } : {}
+  name     = "AgentCoreSubagentFiles-${each.key}"
+  role     = aws_iam_role.subagent[each.key].id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Sid = "ReadRunFiles", Effect = "Allow", Action = ["s3:GetObject"], Resource = "${aws_s3_bucket.assets[0].arn}/runs/*/attachments/*" }]
+  })
+}
+
+# Uploads are kept a day: long enough to start the run they were picked for, which
+# copies them into its own folder. Each run's copy is kept with the run.
+resource "aws_s3_bucket_lifecycle_configuration" "assets" {
+  count  = local.run_files ? 1 : 0
+  bucket = aws_s3_bucket.assets[0].id
+  rule {
+    id     = "expire-uploads"
+    status = "Enabled"
+    filter {
+      prefix = "uploads/"
+    }
+    expiration {
+      days = 1
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+}
+
+# The page uploads a run's files straight to the bucket (a presigned POST).
+resource "aws_s3_bucket_cors_configuration" "assets" {
+  count  = local.run_files ? 1 : 0
+  bucket = aws_s3_bucket.assets[0].id
+  cors_rule {
+    allowed_methods = ["POST"]
+    allowed_origins = ["https://${aws_cloudfront_distribution.ui.domain_name}"]
+    allowed_headers = ["*"]
+    max_age_seconds = 3000
+  }
 }

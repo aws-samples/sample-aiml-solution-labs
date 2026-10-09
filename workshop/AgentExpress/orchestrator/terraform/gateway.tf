@@ -147,6 +147,21 @@ resource "aws_iam_role_policy" "gateway" {
           "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:workload-identity-directory/*",
         ]
       }
+      # Tools that act as the person (auth "user" / "obo"): the person Gateway gets each
+      # person's own token, or exchanges their sign-in, as that person. Mirrors
+      # PersonGatewayTokens in cdk/lib/tool-plane.ts.
+      ], length(local.person_tool_names) == 0 ? [] : [
+      {
+        Sid    = "PersonGatewayTokens"
+        Effect = "Allow"
+        Action = ["bedrock-agentcore:GetResourceOauth2Token", "bedrock-agentcore:GetWorkloadAccessToken",
+        "bedrock-agentcore:GetWorkloadAccessTokenForJWT"]
+        Resource = [
+          "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:token-vault/*",
+          "arn:aws:acps:${var.region}:${local.account_id}:token-vault/*",
+          "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:workload-identity-directory/*",
+        ]
+      }
       # A SigV4 API Gateway target: invoke exactly that API and stage, nothing else.
       ], length(local.signed_rest_api_arns) == 0 ? [] : [
       {
@@ -155,7 +170,10 @@ resource "aws_iam_role_policy" "gateway" {
         Action   = ["execute-api:Invoke"]
         Resource = local.signed_rest_api_arns
       }
-    ])
+      # The interceptors (interceptors.tf): here, not in a separate policy, so the IAM
+      # wait before the Gateway is created covers them too. Mirrors InvokeInterceptors
+      # in cdk/lib/tool-plane.ts.
+    ], local.interceptor_statements)
   })
 }
 
@@ -177,18 +195,22 @@ resource "aws_bedrockagentcore_gateway" "mcp" {
   #   Auth0 M2M tokens are the mirror image: they carry `aud` (the API
   #   identifier) and no `client_id`, so we pin the audience and additionally
   #   constrain the calling application via its `azp` claim.
+  #
+  #   Okta tokens carry the authorization server's `aud` and the client as `cid`;
+  #   Entra v2 tokens the API app's client id as `aud` and the client as `azp`.
+  #   Same shape as Auth0: the audience, then the client by that claim.
   authorizer_configuration {
     custom_jwt_authorizer {
       discovery_url = local.gateway_discovery_url
 
-      allowed_clients = local.is_cognito ? concat([local.gateway_client_id],
+      allowed_clients = local.gateway_auth_flow == "cognito" ? concat([local.gateway_client_id],
       [for c in aws_cognito_user_pool_client.agent : c.id]) : null
-      allowed_audience = local.is_auth0 ? [local.gateway_audience] : null
+      allowed_audience = local.gateway_auth_flow == "cognito" ? null : [local.gateway_audience]
 
       dynamic "custom_claim" {
-        for_each = local.is_auth0 ? [1] : []
+        for_each = local.gateway_auth_flow == "cognito" ? [] : [local.gateway_auth_flow == "okta" ? "cid" : "azp"]
         content {
-          inbound_token_claim_name       = "azp"
+          inbound_token_claim_name       = custom_claim.value
           inbound_token_claim_value_type = "STRING"
           authorizing_claim_match_value {
             claim_match_operator = "EQUALS"
@@ -213,6 +235,22 @@ resource "aws_bedrockagentcore_gateway" "mcp" {
       mode = local.policy_mode
     }
   }
+  # Interceptors (interceptors.tf): one REQUEST and/or one RESPONSE Lambda. Headers
+  # (the caller's token and the runtime's x-ax-* headers) only with passRequestHeaders.
+  dynamic "interceptor_configuration" {
+    for_each = [for p in ["request", "response"] : p if contains(keys(local.interceptor_arns), p)]
+    content {
+      interception_points = [upper(interceptor_configuration.value)]
+      interceptor {
+        lambda {
+          arn = local.interceptor_arns[interceptor_configuration.value]
+        }
+      }
+      input_configuration {
+        pass_request_headers = try(local.interceptor_specs[interceptor_configuration.value].passRequestHeaders, false) == true
+      }
+    }
+  }
   # CreateGateway checks, with the Gateway's OWN role, that it may use the policy engine
   # (bedrock-agentcore:AuthorizeAction). Ordering after the inline policy is not enough:
   # IAM had not propagated it yet when Terraform created the Gateway a moment later, and
@@ -226,4 +264,33 @@ resource "time_sleep" "gateway_iam_propagation" {
   count           = local.gateway_enabled ? 1 : 0
   depends_on      = [aws_iam_role_policy.gateway]
   create_duration = "25s"
+}
+
+# --- The person Gateway --------------------------------------------------------
+# Tools that act as the PERSON using the app (auth "user": each person's own account,
+# OAuth authorization code; auth "obo": the person's sign-in exchanged on their behalf)
+# need the PERSON's token at the Gateway: AgentCore Identity keeps a 3LO grant per
+# person, keyed by that token's subject, and exchanges that token for OBO. The Gateway
+# above only ever sees the agents' machine client, so these tools get one of their own
+# that trusts the app's sign-in (the ID token, whose audience is the app's client).
+# MCP 2025-11-25 is what lets it answer "connect your account first" (URL elicitation).
+# No Cedar engine or interceptors here: each person is authorized by the tool's own
+# provider. Mirrors PersonGateway in cdk/lib/tool-plane.ts.
+resource "aws_bedrockagentcore_gateway" "person" {
+  count           = local.gateway_enabled && length(local.person_tool_names) > 0 ? 1 : 0
+  name            = "${replace(var.agent_name, "_", "-")}-gwu"
+  role_arn        = aws_iam_role.gateway[0].arn
+  protocol_type   = "MCP"
+  authorizer_type = "CUSTOM_JWT"
+  protocol_configuration {
+    mcp {
+      supported_versions = ["2025-11-25"]
+    }
+  }
+  authorizer_configuration {
+    custom_jwt_authorizer {
+      discovery_url    = "${trimsuffix(local.jwt_issuer, "/")}/.well-known/openid-configuration"
+      allowed_audience = [local.jwt_audience]
+    }
+  }
 }

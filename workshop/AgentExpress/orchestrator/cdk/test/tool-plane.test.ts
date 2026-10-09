@@ -14,17 +14,18 @@ import { Template } from "aws-cdk-lib/assertions";
 import { aws_dynamodb as dynamodb } from "aws-cdk-lib";
 import * as path from "path";
 
-import { CODE_BOUNDARY_DENY, customPolicyName, CustomPolicy, parseS3Location, ToolPlane, ToolSpec } from "../lib/tool-plane";
+import { CODE_BOUNDARY_DENY, customPolicyName, CustomPolicy, interceptorFunctionName, parseS3Location, ToolPlane, ToolSpec } from "../lib/tool-plane";
 import { validateTools } from "../lib/orchestrator-stack";
 
 const ORCH_ROOT = path.join(__dirname, "..", "..");
 const ACCOUNT = "123456789012";
 
 function plane(tools: Record<string, ToolSpec>, toolApiKeys: Record<string, string> = {},
-  customPolicies: CustomPolicy[] = []) {
+  customPolicies: CustomPolicy[] = [], extra: Record<string, unknown> = {}) {
   const app = new cdk.App();
   const stack = new cdk.Stack(app, "T", { env: { account: ACCOUNT, region: "us-east-1" } });
   new ToolPlane(stack, "ToolPlane", {
+    ...extra,
     agentName: "test_orch",
     tools,
     toolApiKeys,
@@ -33,7 +34,6 @@ function plane(tools: Record<string, ToolSpec>, toolApiKeys: Record<string, stri
     gatewayClientId: "client-abc",
     gatewayAudience: "gateway/invoke",
     isCognito: true,
-    isAuth0: false,
     policyEnabled: true,
     policyMode: "ENFORCE",
     customPolicies,
@@ -261,7 +261,6 @@ describe("the built-in demo function (source: pricing)", () => {
       gatewayClientId: "client-abc",
       gatewayAudience: "gateway/invoke",
       isCognito: true,
-      isAuth0: false,
       policyEnabled: false,
       policyMode: "ENFORCE",
       orchRoot: ORCH_ROOT,
@@ -688,7 +687,8 @@ describe("type=apigateway, an inline OpenAPI schema, and OAuth client credential
       },
     });
     expect(p.CredentialProviderConfigurations[0].CredentialProviderType).toBe("GATEWAY_IAM_ROLE");
-    expect(p.CredentialProviderConfigurations[0].CredentialProvider.IamCredentialProvider.Service).toBe("execute-api");
+    // The role alone: AgentCore refuses an IamCredentialProvider on this target type.
+    expect(p.CredentialProviderConfigurations[0].CredentialProvider).toBeUndefined();
     const policies = JSON.stringify(t.findResources("AWS::IAM::Policy"));
     expect(policies).toContain(`arn:aws:execute-api:us-east-1:${ACCOUNT}:a1b2c3d4e5/prod/*/*`);
   });
@@ -742,6 +742,78 @@ describe("type=apigateway, an inline OpenAPI schema, and OAuth client credential
   });
 });
 
+describe("tools that act as the person (auth user / obo)", () => {
+  const target = (t: Template, name: string) => Object.values<any>(t.findResources("AWS::BedrockAgentCore::GatewayTarget"))
+    .find((r) => r.Properties.Name === name).Properties;
+  const DOC = { openapi: "3.0.1", info: { title: "HR", version: "1" },
+    paths: { "/me": { get: { operationId: "getMe", responses: { "200": { description: "ok" } } } } } };
+  const PERSON = { personAuth: { discoveryUrl: "https://login.example.com/.well-known/openid-configuration", audience: "spa-client" },
+    returnUrl: "https://app.example.com" };
+  const OA = { clientId: "abc", scopes: ["read"], tokenUrl: "https://idp.example.com/oauth2/token",
+    authorizationUrl: "https://idp.example.com/oauth2/authorize" };
+  const ORDERS_SCHEMA = [{ name: "listOrders", description: "My orders.",
+    properties: { status: { type: "string", required: true, description: "Which orders." } } }];
+  const tools = {
+    claims: LAMBDA_TOOL,
+    hr: { type: "openapi", description: "HR", schema: DOC, auth: "user", oauth: OA } as ToolSpec,
+    orders: { type: "mcp", description: "Orders", endpoint: "https://m.example.com/mcp", auth: "obo",
+      oauth: { clientId: "abc", tokenUrl: "https://idp.example.com/oauth2/token", audience: "api://orders" },
+      toolSchema: ORDERS_SCHEMA } as unknown as ToolSpec,
+  };
+  const t = plane(tools, { hr: "s1", orders: "s2" }, [], PERSON);
+  const gateways = Object.values<any>(t.findResources("AWS::BedrockAgentCore::Gateway"));
+  const personGw = gateways.find((g) => String(g.Properties.Name).endsWith("-gwu"));
+
+  it("get a Gateway of their own that trusts the app's sign-in, and can ask to connect", () => {
+    expect(gateways.length).toBe(2);
+    expect(personGw.Properties.Name).toBe("test-orch-gwu");
+    expect(personGw.Properties.ProtocolConfiguration.Mcp.SupportedVersions).toEqual(["2025-11-25"]);
+    expect(personGw.Properties.AuthorizerConfiguration.CustomJWTAuthorizer).toEqual({
+      DiscoveryUrl: PERSON.personAuth.discoveryUrl, AllowedAudience: ["spa-client"] });
+    // No Cedar engine on it: the tool's own provider authorizes each person.
+    expect(personGw.Properties.PolicyEngineConfiguration).toBeUndefined();
+  });
+
+  it("each person's own account: authorization code, back to the app", () => {
+    const c = target(t, "hr").CredentialProviderConfigurations[0].CredentialProvider.OauthCredentialProvider;
+    expect(c).toMatchObject({ GrantType: "AUTHORIZATION_CODE", DefaultReturnUrl: "https://app.example.com", Scopes: ["read"] });
+    t.hasResourceProperties("AWS::BedrockAgentCore::OAuth2CredentialProvider", {
+      Name: "bedrock-agentcore-test-orch-hr",
+      Oauth2ProviderConfigInput: { CustomOauth2ProviderConfig: { OauthDiscovery: { AuthorizationServerMetadata: {
+        AuthorizationEndpoint: OA.authorizationUrl } } } } });
+  });
+
+  it("the person's sign-in: a token exchange of the ID token, for the tool's API", () => {
+    const c = target(t, "orders").CredentialProviderConfigurations[0].CredentialProvider.OauthCredentialProvider;
+    expect(c.GrantType).toBe("TOKEN_EXCHANGE");
+    expect(c.CustomParameters).toEqual({ subject_token_type: "urn:ietf:params:oauth:token-type:id_token", audience: "api://orders" });
+    t.hasResourceProperties("AWS::BedrockAgentCore::OAuth2CredentialProvider", {
+      Name: "bedrock-agentcore-test-orch-orders",
+      Oauth2ProviderConfigInput: { CustomOauth2ProviderConfig: { OnBehalfOfTokenExchangeConfig: {
+        GrantType: "TOKEN_EXCHANGE", TokenExchangeGrantTypeConfig: { ActorTokenContent: "NONE" } } } } });
+    // An MCP server reached as the person cannot be listed before anyone has signed in.
+    expect(JSON.parse(target(t, "orders").TargetConfiguration.Mcp.McpServer.McpToolSchema.InlinePayload)).toEqual([
+      { name: "listOrders", description: "My orders.", inputSchema: { type: "object",
+        properties: { status: { type: "string", description: "Which orders." } }, required: ["status"] } }]);
+  });
+
+  it("sit on the person Gateway, outside the machine Gateway's Cedar permits", () => {
+    const personRef = Object.entries<any>(t.findResources("AWS::BedrockAgentCore::Gateway"))
+      .find(([, g]) => String(g.Properties.Name).endsWith("-gwu"))![0];
+    expect(JSON.stringify(target(t, "hr").GatewayIdentifier)).toContain(personRef);
+    expect(JSON.stringify(target(t, "claims").GatewayIdentifier)).not.toContain(personRef);
+    const cedar = JSON.stringify(t.findResources("AWS::BedrockAgentCore::Policy"));
+    expect(cedar).toContain('AgentCore::Action::\\"claims');
+    expect(cedar).not.toContain('AgentCore::Action::\\"hr');
+    expect(cedar).not.toContain('AgentCore::Action::\\"orders');
+  });
+
+  it("need the app's sign-in, and no person tool means no person Gateway", () => {
+    expect(() => plane(tools, { hr: "s1", orders: "s2" })).toThrow(/act as the person/);
+    const plain = plane({ claims: LAMBDA_TOOL }, {}, [], PERSON);
+    expect(Object.keys(plain.findResources("AWS::BedrockAgentCore::Gateway")).length).toBe(1);
+  });
+});
 describe("custom Cedar policies (orchestrator.policy.custom)", () => {
   const statement = 'forbid(principal, action == AgentCore::Action::"claims___query_claims", '
     + 'resource == AgentCore::Gateway::"{{gateway}}") when { context.input.limit > 100 };';
@@ -788,7 +860,7 @@ describe("a tool written in the build (tools.<key>.code)", () => {
   new ToolPlane(stack, "ToolPlane", {
     agentName: "ax_1a2b3c4d", tools: { refunds: spec }, toolApiKeys: {},
     gatewayDiscoveryUrl: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc/.well-known/openid-configuration",
-    gatewayClientId: "client-abc", gatewayAudience: "gateway/invoke", isCognito: true, isAuth0: false,
+    gatewayClientId: "client-abc", gatewayAudience: "gateway/invoke", isCognito: true,
     policyEnabled: true, policyMode: "ENFORCE", orchRoot: root,
   });
   const t = Template.fromStack(stack);
@@ -845,6 +917,76 @@ describe("a tool written in the build (tools.<key>.code)", () => {
   });
 });
 
+describe("Gateway interceptors (orchestrator.interceptors)", () => {
+  const os = require("os");
+  const fs = require("fs");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ax-icpt-"));
+  fs.mkdirSync(path.join(root, "app", "tools", "_code", "interceptor-request"), { recursive: true });
+  fs.writeFileSync(path.join(root, "app", "tools", "_code", "interceptor-request", "handler.py"),
+    "def lambda_handler(event, context):\n    return {}\n");
+  const MINE = `arn:aws:lambda:us-east-1:${ACCOUNT}:function:my-redactor`;
+  const synth = (interceptors: any) => {
+    const app = new cdk.App();
+    const stack = new cdk.Stack(app, "I", { env: { account: ACCOUNT, region: "us-east-1" } });
+    new ToolPlane(stack, "ToolPlane", {
+      agentName: "ax_1a2b3c4d", tools: { claims: LAMBDA_TOOL }, toolApiKeys: {},
+      gatewayDiscoveryUrl: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc/.well-known/openid-configuration",
+      gatewayClientId: "client-abc", gatewayAudience: "gateway/invoke", isCognito: true,
+      policyEnabled: true, policyMode: "ENFORCE", orchRoot: root, interceptors,
+    });
+    return Template.fromStack(stack);
+  };
+  const t = synth({ request: { code: { timeoutSeconds: 5 }, passRequestHeaders: true, templates: { audit: {} } },
+    response: { lambdaArn: MINE } });
+  const gateway = Object.values<any>(t.findResources("AWS::BedrockAgentCore::Gateway"))[0].Properties;
+  it("configures one interceptor per point, with its headers setting", () => {
+    const ics = gateway.InterceptorConfigurations;
+    expect(ics.map((c: any) => c.InterceptionPoints)).toEqual([["REQUEST"], ["RESPONSE"]]);
+    expect(ics.map((c: any) => c.InputConfiguration.PassRequestHeaders)).toEqual([true, false]);
+    expect(JSON.stringify(ics[0].Interceptor.Lambda.Arn)).toContain("ToolLambdainterceptorrequest");
+    expect(ics[1].Interceptor.Lambda.Arn).toBe(MINE);
+  });
+  it("deploys the one written in the build like a code tool, inside the ToolLambda- prefix", () => {
+    const fn = Object.values<any>(t.findResources("AWS::Lambda::Function"))
+      .find((f) => f.Properties.FunctionName === interceptorFunctionName("ax_1a2b3c4d", "request"));
+    expect(fn.Properties.FunctionName).toBe("ToolLambda-ax_1a2b3c4d-interceptor-request");
+    expect(fn.Properties.Timeout).toBe(5);
+    const boundary = Object.values<any>(t.findResources("AWS::IAM::ManagedPolicy"))
+      .find((p) => p.Properties.ManagedPolicyName === "ToolLambda-ax_1a2b3c4d-interceptor-request-boundary");
+    expect(JSON.stringify(boundary)).toContain("NeverFrameworkTables");
+  });
+  it("lets the Gateway's role invoke exactly the interceptors, and permits the service on both", () => {
+    const policies = Object.values<any>(t.findResources("AWS::IAM::Policy"));
+    const stmt = policies.flatMap((p) => p.Properties.PolicyDocument.Statement).find((s: any) => s.Sid === "InvokeInterceptors");
+    expect(stmt.Action).toBe("lambda:InvokeFunction");
+    expect(stmt.Resource).toHaveLength(2);
+    expect(JSON.stringify(stmt.Resource)).toContain(MINE);
+    const perms = Object.values<any>(t.findResources("AWS::Lambda::Permission"))
+      .filter((p) => JSON.stringify(p.Properties.FunctionName).match(/interceptor|my-redactor/));
+    expect(perms).toHaveLength(2);
+    expect(perms.every((p) => p.Properties.Principal === "bedrock-agentcore.amazonaws.com")).toBe(true);
+  });
+  it("leaves the Gateway as it was without any", () => {
+    const plain = Object.values<any>(synth({}).findResources("AWS::BedrockAgentCore::Gateway"))[0].Properties;
+    expect(plain.InterceptorConfigurations).toBeUndefined();
+  });
+  it("is checked at synth: exactly one of code or lambdaArn, and the handler on disk", () => {
+    const { interceptorsOf } = require("../lib/orchestrator-stack");
+    expect(() => interceptorsOf({ orchestrator: { interceptors: { request: {} } } })).toThrow(/EXACTLY ONE/);
+    expect(() => interceptorsOf({ orchestrator: { interceptors: { request: { lambdaArn: "x" } } } })).toThrow(/not a Lambda/);
+    expect(() => interceptorsOf({ orchestrator: { interceptors: { response: { code: {} } } } }, root)).toThrow(/handler.py/);
+    expect(Object.keys(interceptorsOf({ orchestrator: { interceptors: { request: { code: {} } } } }, root))).toEqual(["request"]);
+  });
+  it("mirrors Terraform", () => {
+    const tf = fs.readFileSync(path.join(ORCH_ROOT, "terraform", "interceptors.tf"), "utf8");
+    expect(tf).toContain('"InvokeInterceptors"');
+    const gw = fs.readFileSync(path.join(ORCH_ROOT, "terraform", "gateway.tf"), "utf8");
+    expect(gw).toContain('dynamic "interceptor_configuration"');
+    expect(gw).toContain("pass_request_headers");
+    expect(fs.readFileSync(path.join(ORCH_ROOT, "terraform", "tools_code.tf"), "utf8")).toContain("interceptor-");
+  });
+});
+
 // ===========================================================================
 // Every tool type × the policy engine on or off × its generated permit on or off × a
 // custom policy or none × ENFORCE or LOG_ONLY. Each combination synthesizes, registers
@@ -890,7 +1032,7 @@ describe("the tool and policy matrix", () => {
     new ToolPlane(stack, "ToolPlane", {
       agentName: "ax_1a2b3c4d", tools: { [key]: spec }, toolApiKeys: {},
       gatewayDiscoveryUrl: "https://cognito-idp.us-east-1.amazonaws.com/us-east-1_abc/.well-known/openid-configuration",
-      gatewayClientId: "c", gatewayAudience: "gateway/invoke", isCognito: true, isAuth0: false,
+      gatewayClientId: "c", gatewayAudience: "gateway/invoke", isCognito: true,
       policyEnabled: engine, policyMode: mode, orchRoot: ORCH_ROOT,
       customPolicies: engine && custom ? [{ name: "blockSecrets", statement:
         `forbid(principal, action == AgentCore::Action::"${key}___run", resource == AgentCore::Gateway::"{{gateway}}") when { context.input has secret };` }] : [],

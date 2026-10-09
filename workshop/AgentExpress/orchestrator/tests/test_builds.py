@@ -494,6 +494,19 @@ def test_terraform_outputs_are_read_into_the_deploy_record(runner):
                                       "apiUrl": "https://a", "userPoolId": ""}
 
 
+def test_each_tools_callback_url_is_kept_for_the_builder_to_show(runner, tmp_path):
+    """Each person's own account (auth "user"): the redirect URL to register at the
+    tool's provider exists only after a deploy; the Builder shows it on the tool."""
+    cb = "https://bedrock-agentcore.us-east-1.amazonaws.com/identities/oauth2/callback/abc"
+    raw = json.dumps({"agent_runtime_arn": {"value": "arn:rt"}, "tool_callback_urls": {"value": {"crm": cb}}})
+    assert runner.tf_outputs(raw)["callbackUrls"] == {"crm": cb}
+    out = tmp_path / "o.json"
+    out.write_text(json.dumps({"s": {"agentRuntimeArn": "arn:rt", "toolCallbackUrls": json.dumps({"crm": cb})}}))
+    assert runner.cdk_outputs(out, "s")["callbackUrls"] == {"crm": cb}
+    out.write_text(json.dumps({"s": {"agentRuntimeArn": "arn:rt"}}))
+    assert "callbackUrls" not in runner.cdk_outputs(out, "s")
+
+
 def test_a_destroy_deletes_only_the_log_groups_carrying_the_builds_id(runner):
     class Logs:
         def __init__(self):
@@ -670,6 +683,24 @@ def test_documents_are_uploaded_per_corpus_and_copied_into_kb_docs(env, runner, 
     call(env, "DELETE /api/builds/{id}/docs", params={"id": "pclaims01"},
          qs={"corpus": "claims", "name": "policy.pdf"})
     assert call(env, "GET /api/builds/{id}/docs", params={"id": "pclaims01"})[1] == []
+
+
+def test_a_knowledge_base_with_no_documents_is_refused_before_the_deploy_starts(env):
+    """Observed live: a corpus's documents were never uploaded, and the deploy failed
+    minutes into CodeBuild (CDK and Terraform alike) on the synth's corpus-folder check."""
+    card = "https://partner.example.com/.well-known/agent-card.json"
+    save(env, tools={"policy": {"type": "kb", "description": "Claims policy.", "corpora": ["claims"]}},
+         agents={"claims_intake": {"name": "Claims Intake", "runtime": "main", "maxTokens": 2000,
+                                   "tool": "policy", "corpus": "claims"},
+                 "partner": {"name": "Partner", "runtime": "a2a", "agentCard": card}})
+    status, err = call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    assert status == 400, err
+    assert "no documents in claims (tool policy)" in err["error"] and "Tools → policy → Documents" in err["error"]
+    assert env.cb.started == []
+    _, up = call(env, "POST /api/builds/{id}/docs", params={"id": "pclaims01"},
+                 body={"corpus": "claims", "name": "policy.md"})
+    env.s3.put_object(Bucket="console-builds", Key=up["fields"]["key"], Body=b"# Policy")
+    assert call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})[0] == 202
 
 
 def test_a_build_whose_corpus_has_no_documents_can_still_be_destroyed(runner, tmp_path, monkeypatch):
@@ -1388,3 +1419,33 @@ def test_a_failed_first_create_is_deleted_before_the_retry_and_nothing_else_is(r
         monkeypatch.setattr(boto3, "client", lambda *a, _c=cfn, **k: _c)
         runner.clear_failed_create(session, "ax-1-stack", "us-east-1", pause=0)
         assert cfn.deleted == deletes, states
+
+
+# --- AWS Agent Registry (bff/registry.py) -------------------------------------------------
+
+def test_publishing_to_the_registry_is_for_admins_and_a_skill_goes_as_its_skill_md(env, monkeypatch):
+    import registry
+    made = []
+
+    def fake_put(rid, spec, version, prior):
+        made.append((rid, spec["recordType"], spec["name"], version, bool(prior)))
+        return {"registryId": rid, "recordId": f"rec{len(made)}", "name": spec["name"], "version": version,
+                "status": "PENDING_APPROVAL"}
+    monkeypatch.setattr(registry, "put_record", fake_put)
+    monkeypatch.setattr(registry, "statuses", lambda pub: pub)
+    skills = {"refundPolicy": {"description": "When asked for money back.", "instructions": "1. Check."}}
+    save(env, skills=skills)
+    body = {"registry": "VABICydSql8rW47l", "what": "skill", "skill": "refundPolicy"}
+    status, refused = call(env, "POST /api/builds/{id}/publish", params={"id": "pclaims01"}, body=body)
+    assert status == 403 and refused["error"] == "not authorized to perform 'admin'" and not made
+    status, pub = call(env, "POST /api/builds/{id}/publish", params={"id": "pclaims01"}, body=body,
+                       groups=("operators", "admins"))
+    assert status == 200 and made == [("VABICydSql8rW47l", "SKILL", "refund-policy", "1.0.0", False)]
+    assert pub["skills"]["refundPolicy"]["status"] == "PENDING_APPROVAL"
+    # Again: the next version of the same record.
+    call(env, "POST /api/builds/{id}/publish", params={"id": "pclaims01"}, body=body, groups=("admins",))
+    assert made[-1][3:] == ("2.0.0", True)
+    # A build that is not deployed has nothing to publish yet.
+    status, err = call(env, "POST /api/builds/{id}/publish", params={"id": "pclaims01"},
+                       body={**body, "what": "build"}, groups=("admins",))
+    assert status == 409 and "deploy the build first" in err["error"]

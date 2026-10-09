@@ -176,11 +176,16 @@ GATEWAY_URL = os.getenv("GATEWAY_URL", "")
 GATEWAY_TOKEN_URL = os.getenv("GATEWAY_TOKEN_URL", "")
 GATEWAY_CLIENT_ID = os.getenv("GATEWAY_CLIENT_ID", "")
 GATEWAY_CLIENT_SECRET = os.getenv("GATEWAY_CLIENT_SECRET", "")
-# The OAuth2 `scope` (Cognito) or `audience` (Auth0) requested for the token.
+# What the token is for: the OAuth2 `scope` (Cognito), the API identifier sent as
+# `audience` (Auth0), or the `aud` the token carries (Okta: the authorization
+# server's audience; Entra: the API app's client id).
 GATEWAY_AUDIENCE = os.getenv("GATEWAY_AUDIENCE", "")
-# Which client-credentials request shape to build: "cognito" | "auth0".
-# Set by Terraform from the `idp` variable (see terraform/identity.tf). Defaults
-# to cognito so an older deployment keeps working.
+# The scope to request, where it is not the audience: Okta (a custom scope on the
+# authorization server, required) and Entra (default "<audience>/.default").
+GATEWAY_SCOPE = os.getenv("GATEWAY_SCOPE", "")
+# Which client-credentials request shape to build: "cognito" | "auth0" | "okta" |
+# "entra". Set by the IaC from the `idp` variable (see terraform/identity.tf).
+# Defaults to cognito so an older deployment keeps working.
 GATEWAY_AUTH_FLOW = os.getenv("GATEWAY_AUTH_FLOW", "cognito").lower()
 
 def step_agents(step: dict) -> list[str]:
@@ -281,6 +286,15 @@ def _load_tools() -> dict:
 
 
 TOOLS: dict = _load_tools()
+
+#: Tools that act as the PERSON using the app (auth "user": each person's own account;
+#: "obo": the person's sign-in exchanged): reached on the person Gateway with the
+#: caller's sign-in, never the agents' machine client (app/features/gateway/person.py).
+PERSON_TOOLS: frozenset = frozenset(
+    name for name, spec in (WORKFLOW.get("tools") or {}).items()
+    if isinstance(spec, dict) and str(spec.get("auth") or "").lower() in ("user", "obo"))
+#: The person Gateway's MCP endpoint ("" when no tool acts as the person).
+GATEWAY_USER_URL = os.getenv("GATEWAY_USER_URL", "")
 
 
 def tool_list(value) -> list[str]:

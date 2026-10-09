@@ -140,6 +140,334 @@ function checkCode(key: string, code: unknown, path: string, where: Where, add: 
 
 /** orchestrator.policy: the mode, and each custom Cedar policy (cedar.ts). Mirrored by
  *  bff/validate_build.py _check_policy. */
+/** An S3 location runs may name: a bucket, or bucket/prefix (no scheme, no trailing slash). */
+const ATTACH_S3_RE = /^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9](\/[^\s/]\S*[^\s/]|\/[^\s/])?$/;
+
+/** orchestrator.attachments.s3: where a run's request may point, and that some agent
+ *  reads what it brings. Mirrors _check_attachments. */
+function checkAttachments(orch: unknown, agents: Record<string, unknown>, add: Add): void {
+  const att = isObj(orch) && isObj(orch.attachments) ? orch.attachments as Record<string, unknown> : {};
+  const where: Where = { kind: "block", name: "orchestrator" };
+  const s3 = att.s3;
+  (Array.isArray(s3) ? s3 : []).forEach((loc: unknown, i: number) => {
+    const p = `orchestrator.attachments.s3[${i}]`;
+    if (!(typeof loc === "string" && ATTACH_S3_RE.test(loc))) {
+      add("error", where, p, 'must be a bucket, or bucket/folder, without s3:// — e.g. "my-docs/contracts"');
+    } else if (FRAMEWORK_BUCKET_RE.test(`s3://${loc}`)) {
+      add("error", where, p, "is one of the framework's own buckets, which a run may not read");
+    }
+  });
+  const readers = Object.entries(agents).filter(([, a]) => isObj(a) && a.attachments === true);
+  if (Array.isArray(s3) && s3.length && !readers.length) {
+    add("warning", where, "orchestrator.attachments.s3",
+      "no agent reads a run's files: set `attachments` on the agents that should");
+  }
+}
+
+const INTERCEPTOR_KEYS = ["code", "lambdaArn", "passRequestHeaders", "templates"];
+/** Each template's settings. Mirrors INTERCEPTOR_SETTINGS in bff/validate_build.py. */
+export const INTERCEPTOR_SETTINGS: Record<string, string[]> = {
+  audit: [], custom: [], blockTools: ["tools", "agents"],
+  argumentGuard: ["denyPatterns", "maxArgumentChars"], injectContext: ["arguments"],
+  redactPii: ["types", "mask"], hideTools: ["tools"], capResult: ["maxChars"],
+};
+const ARG_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const strings = (v: unknown): v is string[] => Array.isArray(v) && v.every((s) => typeof s === "string" && s !== "");
+
+function checkToolNames(names: string[], tools: Record<string, unknown>, p: string, where: Where, add: Add): void {
+  names.forEach((n, i) => {
+    if (!(n.split("___")[0] in tools)) {
+      add("warning", where, `${p}[${i}]`, `"${n}" is not a tool in this build: write "<toolKey>" or "<toolKey>___<toolName>"`);
+    }
+  });
+}
+
+function checkTemplate(name: string, s: Record<string, unknown>, ic: Record<string, unknown>,
+  tools: Record<string, unknown>, agents: Record<string, unknown>, p: string, where: Where, add: Add): void {
+  for (const k of Object.keys(s)) {
+    if (!INTERCEPTOR_SETTINGS[name].includes(k)) {
+      add("error", where, `${p}.${k}`, `unknown setting; ${name} takes: ${INTERCEPTOR_SETTINGS[name].join(", ") || "nothing"}`);
+    }
+  }
+  const headers = ic.passRequestHeaders === true;
+  if (name === "blockTools" || name === "hideTools") {
+    if (!(strings(s.tools) && s.tools.length)) {
+      add("error", where, `${p}.tools`, 'name the tools: "<toolKey>" or "<toolKey>___<toolName>"');
+    } else {
+      checkToolNames(s.tools, tools, `${p}.tools`, where, add);
+    }
+  }
+  if (name === "blockTools" && "agents" in s) {
+    if (!strings(s.agents)) {
+      add("error", where, `${p}.agents`, "must list agent ids");
+    } else {
+      s.agents.forEach((a, i) => {
+        if (!(a in agents)) add("warning", where, `${p}.agents[${i}]`, `"${a}" is not an agent in this workflow`);
+      });
+      if (s.agents.length && !headers) {
+        add("warning", where, `${p}.agents`, "needs passRequestHeaders: true — the calling agent arrives as the x-ax-agent header, and without headers every call is refused");
+      }
+    }
+  }
+  if (name === "argumentGuard") {
+    if ("denyPatterns" in s && !strings(s.denyPatterns)) add("error", where, `${p}.denyPatterns`, "must list regular expressions");
+    if ("maxArgumentChars" in s && !intIn(s.maxArgumentChars, 1, 1_000_000)) {
+      add("error", where, `${p}.maxArgumentChars`, "must be a whole number, 1 to 1000000");
+    }
+  }
+  if (name === "injectContext") {
+    const args = s.arguments;
+    const sources = vocab("interceptorContextSources");
+    if (!(isObj(args) && Object.keys(args).length)) {
+      add("error", where, `${p}.arguments`, `map each argument to set to where its value comes from: ${sources.join(", ")}`);
+    } else {
+      for (const [arg, src] of Object.entries(args)) {
+        if (!ARG_NAME_RE.test(arg)) add("error", where, `${p}.arguments.${arg}`, "is not an argument name");
+        else if (!sources.includes(src as string)) add("error", where, `${p}.arguments.${arg}`, `must be one of: ${sources.join(", ")}`);
+      }
+      if (!headers) {
+        add("warning", where, `${p}.arguments`, "needs passRequestHeaders: true — the run's session, agent and user arrive as x-ax-* headers");
+      }
+    }
+  }
+  if (name === "redactPii") {
+    const types = vocab("interceptorPiiTypes");
+    if ("types" in s && !(strings(s.types) && s.types.length && s.types.every((t) => types.includes(t)))) {
+      add("error", where, `${p}.types`, `must list one or more of: ${types.join(", ")}`);
+    }
+    if ("mask" in s && !(typeof s.mask === "string" && s.mask.length <= 40)) {
+      add("error", where, `${p}.mask`, "must be text of at most 40 characters");
+    }
+  }
+  if (name === "capResult" && "maxChars" in s && !intIn(s.maxChars, 100, 1_000_000)) {
+    add("error", where, `${p}.maxChars`, "must be a whole number, 100 to 1000000");
+  }
+}
+
+/** orchestrator.interceptors: a Gateway Lambda before each request and after each
+ *  response, written here (`code`) or yours (`lambdaArn`). Mirrors _check_interceptors. */
+function checkInterceptors(orch: unknown, tools: Record<string, unknown>, agents: Record<string, unknown>, add: Add): void {
+  const ics = isObj(orch) && isObj(orch.interceptors) ? orch.interceptors as Record<string, unknown> : {};
+  const where: Where = { kind: "block", name: "orchestrator" };
+  if ((["request", "response"] as const).some((pt) => isObj(ics[pt])) && !Object.keys(tools).length) {
+    add("warning", where, "orchestrator.interceptors", "the build has no tools, so it deploys no Gateway for these to run on");
+  }
+  for (const point of ["request", "response"] as const) {
+    const ic = ics[point];
+    if (!isObj(ic)) continue;
+    const p = `orchestrator.interceptors.${point}`;
+    for (const k of Object.keys(ic)) {
+      if (!INTERCEPTOR_KEYS.includes(k)) add("error", where, `${p}.${k}`, `unknown key; an interceptor takes: ${INTERCEPTOR_KEYS.join(", ")}`);
+    }
+    const hasCode = "code" in ic;
+    const hasArn = "lambdaArn" in ic;
+    if (hasCode === hasArn) {
+      add("error", where, p, 'needs exactly one of "code" (a function written in this build) or "lambdaArn" (a function you own)');
+    }
+    if (hasCode) {
+      if (!isObj(ic.code)) add("error", where, `${p}.code`, "must be an object: {} or its grants, timeoutSeconds, memoryMB and environment");
+      else checkCode(`interceptor-${point}`, ic.code, p, where, add);
+    }
+    if (hasArn && !(typeof ic.lambdaArn === "string" && LAMBDA_ARN_RE.test(ic.lambdaArn))) {
+      add("error", where, `${p}.lambdaArn`, "must be a Lambda function ARN: arn:aws:lambda:<region>:<account>:function:<name>");
+    }
+    if ("passRequestHeaders" in ic && typeof ic.passRequestHeaders !== "boolean") {
+      add("error", where, `${p}.passRequestHeaders`, "must be true or false");
+    }
+    if (!("templates" in ic)) continue;
+    const templates = ic.templates;
+    if (!isObj(templates)) {
+      add("error", where, `${p}.templates`, "must be an object: template name -> its settings");
+      continue;
+    }
+    if (hasArn && !hasCode && Object.keys(templates).length) {
+      add("warning", where, `${p}.templates`, "only shape code written here: a lambdaArn function runs as you deployed it");
+    }
+    const known = vocab(point === "request" ? "interceptorRequestTemplates" : "interceptorResponseTemplates");
+    for (const [name, s] of Object.entries(templates)) {
+      const tp = `${p}.templates.${name}`;
+      if (!known.includes(name)) add("error", where, tp, `not a ${point} template; one of: ${known.join(", ")}`);
+      else if (!isObj(s)) add("error", where, tp, "its settings must be an object ({} for none)");
+      else checkTemplate(name, s as Record<string, unknown>, ic as Record<string, unknown>, tools, agents, tp, where, add);
+    }
+  }
+}
+
+export const TRIGGER_COMMON = ["type", "description", "prompt", "enabled", "runAs", "approvers", "gates", "maxRunsPerHour",
+  "attachPayload", "idempotencyKey"];
+/** What each trigger type adds. Mirrors TRIGGER_TYPE_KEYS in bff/validate_build.py. */
+export const TRIGGER_TYPE_KEYS: Record<string, string[]> = {
+  webhook: ["signature"], schedule: ["expression", "timezone"], eventbridge: ["pattern", "bus"],
+  s3: ["bucket", "prefix"], sqs: ["queueArn"],
+};
+export const TRIGGER_NAME_RE = /^[A-Za-z][A-Za-z0-9]{0,31}$/;
+const SCHEDULE_RE = /^(cron\(\S+( \S+){5}\)|rate\([1-9][0-9]* (minute|minutes|hour|hours|day|days)\))$/;
+const TIMEZONE_RE = /^[A-Za-z]+(\/[A-Za-z0-9_+\-]+){0,2}$/;
+const BUS_RE = /^(arn:aws[a-z-]*:events:[a-z0-9-]+:[0-9]{12}:event-bus\/)?[A-Za-z0-9._\-/]{1,256}$/;
+const BUCKET_RE = /^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$/;
+const SQS_ARN_RE = /^arn:aws[a-z-]*:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_.\-]{1,80}$/;
+
+function s3Attachable(orch: unknown, bucket: string, prefix: string): boolean {
+  const att = isObj(orch) && isObj(orch.attachments) ? orch.attachments as Record<string, unknown> : {};
+  for (const raw of Array.isArray(att.s3) ? att.s3 : []) {
+    const e = String(raw).replace(/^\/+|\/+$/g, "");
+    if (e === bucket) return true;
+    if (e.startsWith(`${bucket}/`) && prefix && `${prefix.replace(/\/+$/, "")}/`.startsWith(`${e.slice(bucket.length + 1)}/`)) return true;
+  }
+  return false;
+}
+
+/** orchestrator.triggers: what starts a run without anyone typing it (bff/triggers.py).
+ *  Mirrors _check_triggers. */
+/** Tool auth modes that get a token from an OAuth provider (tools.<key>.oauth): the app's
+ *  own client (oauth2), each person's own account (user, 3LO), the person's sign-in (obo). */
+export const OAUTH_MODES = ["oauth2", "user", "obo"];
+/** ...and the two that act as the person, through the person Gateway. */
+export const PERSON_MODES = ["user", "obo"];
+
+/** What each sign-in provider needs (authorization.signIn), and what it does not take. */
+export const SIGN_IN_FIELDS: Record<string, string[]> = { cognito: [], okta: ["domain", "clientId"], auth0: ["domain", "clientId"],
+  entra: ["tenantId", "clientId"] };
+const SIGN_IN_OPTIONAL: Record<string, string[]> = { okta: ["authorizationServer"] };
+const SIGN_IN_LABEL: Record<string, string> = { domain: "the org's domain", clientId: "the app's client ID", tenantId: "the tenant ID" };
+export const GROUPS_CLAIM_FOR: Record<string, string> = { okta: "groups", entra: "roles" };
+
+/** authorization.signIn: the fields the chosen provider needs, and none it would ignore.
+ *  Mirrors bff/validate_build.py _check_sign_in. */
+function checkSignIn(auth: unknown, add: Add): void {
+  const s = isObj(auth) && isObj(auth.signIn) ? auth.signIn as Record<string, unknown> : null;
+  if (!s) return;
+  const where: Where = { kind: "block", name: "authorization" };
+  const provider = (s.provider as string) || "cognito";
+  if (!(provider in SIGN_IN_FIELDS)) return;
+  const need = SIGN_IN_FIELDS[provider];
+  const allowed = new Set(["provider", ...need, ...(SIGN_IN_OPTIONAL[provider] ?? [])]);
+  for (const k of Object.keys(s)) {
+    if (!allowed.has(k) && (k in SIGN_IN_LABEL || k === "authorizationServer")) {
+      add("error", where, `authorization.signIn.${k}`, `\`${k}\` does not apply to ${provider} sign-in`);
+    }
+  }
+  for (const k of need) {
+    if (!(typeof s[k] === "string" && (s[k] as string).trim())) {
+      add("error", where, `authorization.signIn.${k}`, `${provider} sign-in needs ${SIGN_IN_LABEL[k]}`);
+    }
+  }
+  const a = auth as Record<string, unknown>;
+  const claim = (a.groupsClaim as string) || "cognito:groups";
+  if (provider !== "cognito" && claim === "cognito:groups" && isObj(a.actions) && Object.keys(a.actions).length) {
+    const hint = provider in GROUPS_CLAIM_FOR ? `set groupsClaim to "${GROUPS_CLAIM_FOR[provider]}"`
+      : "set groupsClaim to the namespaced claim your post-login Action adds";
+    add("warning", where, "authorization.groupsClaim",
+      `${provider} sends no cognito:groups claim, so every restricted action would be denied: ${hint}`);
+  }
+}
+
+function checkTriggers(orch: unknown, agents: Record<string, unknown>, add: Add): void {
+  const trs = isObj(orch) && isObj(orch.triggers) ? orch.triggers as Record<string, unknown> : {};
+  const where: Where = { kind: "block", name: "orchestrator" };
+  const readers = Object.values(agents).filter((a) => isObj(a) && a.attachments === true);
+  for (const [name, t] of Object.entries(trs)) {
+    const p = `orchestrator.triggers.${name}`;
+    if (!TRIGGER_NAME_RE.test(name)) {
+      add("error", where, p, "a trigger's name is letters and digits, at most 32, starting with a letter: it names the rule, schedule or queue");
+    }
+    if (!isObj(t)) {
+      add("error", where, p, "must be an object: {type, prompt, ...}");
+      continue;
+    }
+    const ty = t.type as string;
+    const types = vocab("triggerTypes");
+    if (!types.includes(ty)) {
+      add("error", where, `${p}.type`, `must be one of: ${types.join(", ")}`);
+    } else {
+      for (const k of Object.keys(t)) {
+        if (TRIGGER_COMMON.includes(k) || TRIGGER_TYPE_KEYS[ty].includes(k)) continue;
+        if (Object.values(TRIGGER_TYPE_KEYS).some((v) => v.includes(k))) add("error", where, `${p}.${k}`, `does not apply to a ${ty} trigger`);
+        else add("error", where, `${p}.${k}`, `unknown key; a trigger takes: ${[...TRIGGER_COMMON, ...TRIGGER_TYPE_KEYS[ty]].join(", ")}`);
+      }
+    }
+    if (!(typeof t.prompt === "string" && t.prompt.trim())) {
+      add("error", where, `${p}.prompt`, "is required: the run's request, with {{placeholders}} from the delivery");
+    }
+    for (const k of ["enabled", "attachPayload"]) {
+      if (k in t && typeof t[k] !== "boolean") add("error", where, `${p}.${k}`, "must be true or false");
+    }
+    for (const [k, vname] of [["runAs", "triggerRunAs"], ["gates", "triggerGates"]] as const) {
+      if (k in t && !vocab(vname).includes(t[k] as string)) add("error", where, `${p}.${k}`, `must be one of: ${vocab(vname).join(", ")}`);
+    }
+    if ("approvers" in t && !strings(t.approvers)) add("error", where, `${p}.approvers`, "must list group names");
+    const hasApprovers = Array.isArray(t.approvers) && t.approvers.length > 0;
+    if (t.runAs === "service" && !hasApprovers) {
+      add("warning", where, `${p}.runAs`, "no group can read or decide its runs in the app: list them in approvers");
+    }
+    if (hasApprovers && t.runAs !== "service") {
+      add("warning", where, `${p}.approvers`, "only a service trigger's runs have approvers: the owner's runs are the owner's");
+    }
+    if (t.gates === "auto") add("warning", where, `${p}.gates`, "every review gate of its runs approves itself");
+    if ("maxRunsPerHour" in t && !intIn(t.maxRunsPerHour, 1, 1000)) add("error", where, `${p}.maxRunsPerHour`, "must be a whole number, 1 to 1000");
+    if ("idempotencyKey" in t && typeof t.idempotencyKey !== "string") {
+      add("error", where, `${p}.idempotencyKey`, "must be text: a template, e.g. {{headers.x-request-id}}");
+    }
+    if (t.attachPayload === true && !readers.length) {
+      add("warning", where, `${p}.attachPayload`, "no agent reads a run's files: set `attachments` on the agents that should");
+    }
+    if (ty === "webhook" && "signature" in t && !vocab("triggerSignatures").includes(t.signature as string)) {
+      add("error", where, `${p}.signature`, `must be one of: ${vocab("triggerSignatures").join(", ")}`);
+    }
+    if (ty === "schedule") {
+      if (!(typeof t.expression === "string" && SCHEDULE_RE.test(t.expression))) {
+        add("error", where, `${p}.expression`, "needs cron(minutes hours day-of-month month day-of-week year) or rate(<n> minutes|hours|days)");
+      }
+      if ("timezone" in t && !(typeof t.timezone === "string" && TIMEZONE_RE.test(t.timezone))) {
+        add("error", where, `${p}.timezone`, "must be an IANA time zone, e.g. Europe/Paris");
+      }
+    }
+    if (ty === "eventbridge") {
+      if (!(isObj(t.pattern) && Object.keys(t.pattern).length)) {
+        add("error", where, `${p}.pattern`, 'needs an event pattern, e.g. {"source": ["aws.cloudwatch"]}');
+      }
+      if ("bus" in t && !(typeof t.bus === "string" && BUS_RE.test(t.bus))) add("error", where, `${p}.bus`, "must be an event bus name or ARN");
+    }
+    if (ty === "s3") {
+      const bucket = t.bucket;
+      const prefix = typeof t.prefix === "string" ? t.prefix : "";
+      if (!(typeof bucket === "string" && BUCKET_RE.test(bucket))) {
+        add("error", where, `${p}.bucket`, "must be a bucket name");
+      } else if (!s3Attachable(orch, bucket, prefix)) {
+        add("warning", where, `${p}.bucket`, `its objects are not attached to the run: add "${bucket}" to orchestrator.attachments.s3`);
+      }
+      if ("prefix" in t && !(typeof t.prefix === "string" && !t.prefix.startsWith("/"))) {
+        add("error", where, `${p}.prefix`, "must be a key prefix, without a leading /");
+      }
+    }
+    if (ty === "sqs" && "queueArn" in t && !(typeof t.queueArn === "string" && SQS_ARN_RE.test(t.queueArn))) {
+      add("error", where, `${p}.queueArn`, "must be an SQS queue ARN, or left out for a queue the framework creates");
+    }
+  }
+}
+
+/** A custom policy naming a fixed-name tool (web search "WebSearch", knowledge base
+ *  "retrieve") by another name: AgentCore refuses it at deploy. Mirrors
+ *  validate_build.py _fixed_name_problems. */
+function fixedNameProblems(statement: unknown, tools: Record<string, unknown>): string[] {
+  if (typeof statement !== "string") return [];
+  let acts: string[] = [];
+  try { acts = cedar.parse(statement).actions; } catch { return []; }
+  const out: string[] = [];
+  for (const a of acts) {
+    const at = a.indexOf("___");
+    if (at < 0) continue;
+    const key = a.slice(0, at), name = a.slice(at + 3);
+    const tool = tools[key];
+    const t = isObj(tool) ? String(tool.type ?? "").toLowerCase() : "";
+    const fixed = FIXED_TOOL_NAMES[t];
+    if (fixed && name !== fixed) {
+      out.push(`names ${a}, but a ${t} tool's one tool is "${fixed}": write AgentCore::Action::"${key}___${fixed}"`);
+    }
+  }
+  return out;
+}
+
 function checkPolicy(orch: unknown, tools: Record<string, unknown>, add: Add): void {
   const o = isObj(orch) && isObj(orch.policy) ? orch.policy as Record<string, unknown> : {};
   const where: Where = { kind: "block", name: "orchestrator" };
@@ -166,6 +494,7 @@ function checkPolicy(orch: unknown, tools: Record<string, unknown>, add: Add): v
     } else seen.push(name);
     if ("description" in c && typeof c.description !== "string") add("error", where, `${p}.description`, "must be a string");
     for (const message of cedar.problems(c.statement, Object.keys(tools))) add("error", where, `${p}.statement`, message);
+    for (const message of fixedNameProblems(c.statement, tools)) add("error", where, `${p}.statement`, message);
   });
   if (custom.length && o.enabled === false) {
     add("warning", where, "orchestrator.policy.custom", "is not deployed: the policy engine is off (orchestrator.policy.enabled)");
@@ -223,13 +552,43 @@ function checkFeatures(core: Record<string, unknown>, path: string, where: Issue
 
 /** The optional named maps, and the block each entry is checked against. */
 export const NAMED = { guardrails: "guardrail", memories: "memory", evaluators: "evaluator",
-  identities: "identity", policies: "policy" } as const;
+  identities: "identity", policies: "policy", skills: "skill" } as const;
+/** A skill's reference file: a plain name with a text extension, and how much they may hold. */
+export const SKILL_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(md|txt|json|csv|yaml|yml)$/;
+export const SKILL_MAX_FILES = 20;
+export const SKILL_MAX_CHARS = 200_000;
 export type NamedMap = keyof typeof NAMED;
 /** What a guardrail enforces: one of these, or it is refused by Bedrock. */
 const GUARDRAIL_POLICIES = ["contentFilters", "deniedWords", "managedWordLists", "deniedTopics", "piiEntities"];
+/** Bedrock Guardrails' limits on a denied topic (standard tier): past them the deploy
+ *  fails. Mirrors validate_build.py _check_topics. */
+const TOPIC_NAME_RE = /^[0-9A-Za-z_ !?.-]{1,100}$/;
+const TOPIC_DEFINITION_MAX = 200, TOPIC_EXAMPLES_MAX = 5, TOPIC_EXAMPLE_MAX = 100;
+function checkTopics(entry: Record<string, unknown>, path: string, where: Where, add: Add): void {
+  const topics = entry.deniedTopics;
+  if (!Array.isArray(topics)) return;
+  topics.forEach((t: unknown, i: number) => {
+    if (!isObj(t)) return;
+    const p = `${path}.deniedTopics[${i}]`;
+    if (typeof t.name === "string" && !TOPIC_NAME_RE.test(t.name)) add("error", where, `${p}.name`, "1 to 100 letters, digits, spaces and - _ ! ? .");
+    const d = t.definition;
+    if (typeof d === "string" && d.length > TOPIC_DEFINITION_MAX) {
+      add("error", where, `${p}.definition`, `is ${d.length} characters; Bedrock takes at most ${TOPIC_DEFINITION_MAX}: say what the topic is in one sentence`);
+    }
+    const ex = t.examples;
+    if (Array.isArray(ex)) {
+      if (ex.length > TOPIC_EXAMPLES_MAX) add("error", where, `${p}.examples`, `at most ${TOPIC_EXAMPLES_MAX} examples`);
+      ex.forEach((e: unknown, j: number) => {
+        if (typeof e !== "string" || e.length < 1 || e.length > TOPIC_EXAMPLE_MAX) {
+          add("error", where, `${p}.examples[${j}]`, `an example is 1 to ${TOPIC_EXAMPLE_MAX} characters`);
+        }
+      });
+    }
+  });
+}
 /** A build keeps a shared (library) item as {"library": "<id>"} until it is resolved. */
 const SHARED_WHAT: Record<string, string> = { tools: "tool", guardrails: "guardrail", memories: "memory",
-  evaluators: "evaluator", identities: "identity", policies: "policy" };
+  evaluators: "evaluator", identities: "identity", policies: "policy", skills: "skill" };
 const named = (wf: Workflow, name: string): Record<string, unknown> =>
   (isObj(wf[name]) ? wf[name] : {}) as Record<string, unknown>;
 
@@ -283,6 +642,8 @@ function checkVision(a: Record<string, unknown>, aid: string, agents: Record<str
 function checkNamed(wf: Workflow, add: Add, out: Issue[]): void {
   const tools = (isObj(wf.tools) ? wf.tools : {}) as Record<string, unknown>;
   const agents = (isObj(wf.agents) ? wf.agents : {}) as Record<string, unknown>;
+  const top = (wf as Record<string, unknown>).guardrail;
+  if (isObj(top)) checkTopics(top as Record<string, unknown>, "guardrail", { kind: "block", name: "guardrail" }, add);
   for (const m of Object.keys(SHARED_WHAT)) {
     for (const [key, entry] of Object.entries(named(wf, m))) {
       if (isObj(entry) && "library" in entry) {
@@ -308,6 +669,7 @@ function checkNamed(wf: Workflow, add: Add, out: Issue[]): void {
         add("error", where, path, "a guardrail needs something to enforce: content filters, denied "
           + "words or topics, managed word lists or PII entities");
       }
+      if (m === "guardrails") checkTopics(entry, path, where, add);
       if (m === "memories") {
         if (Array.isArray(entry.strategies) && !entry.strategies.length) add("error", where, `${path}.strategies`, "name at least one strategy");
         const days = entry.expiryDays;
@@ -325,6 +687,7 @@ function checkNamed(wf: Workflow, add: Add, out: Issue[]): void {
           add("error", where, `${path}.scale`, "must be 2 to 20 {value, label, definition} points");
         }
       }
+      if (m === "skills") checkSkill(entry, path, where, add, agents, key);
       if (m === "identities" && entry.type === "oauth2") {
         const urls = [entry.discoveryUrl, entry.tokenUrl].filter((u) => u !== undefined && u !== null && u !== "");
         if (urls.length !== 1) add("error", where, path, "an oauth2 identity needs exactly one of discoveryUrl or tokenUrl");
@@ -403,6 +766,18 @@ function checkNamed(wf: Workflow, add: Add, out: Issue[]): void {
     if (names.length && engineOff) add("warning", where, `${path}.policies`, "is not deployed: the policy engine is off (orchestrator.policy.enabled)");
   }
   // --- what agents name
+  const skills = named(wf, "skills");
+  for (const [aid, a] of Object.entries(agents)) {
+    const names = isObj(a) && Array.isArray(a.skills) ? a.skills : [];
+    names.forEach((n: unknown, i: number) => {
+      if (typeof n !== "string") return;          // checkEntry names the type
+      const p = `agents.${aid}.skills[${i}]`;
+      if (!(n in skills)) {
+        add("error", { kind: "agent", id: aid }, p, `"${n}" is not a skill. Define it under Skills, or pick one of: `
+          + `${Object.keys(skills).join(", ") || "(none yet)"}`);
+      } else if (names.indexOf(n) !== i) add("error", { kind: "agent", id: aid }, p, `"${n}" is listed twice`);
+    });
+  }
   const guardrails = named(wf, "guardrails");
   const memories = named(wf, "memories");
   for (const [aid, a] of Object.entries(agents)) {
@@ -429,6 +804,32 @@ function checkNamed(wf: Workflow, add: Add, out: Issue[]): void {
         if (k in mem) add("error", where, `${path}.memory.${k}`, "the memory it uses sets this — remove it");
       }
     }
+  }
+}
+
+/** A skill's instructions and reference files. Mirrors bff/validate_build.py _check_skill. */
+function checkSkill(entry: Record<string, unknown>, path: string, where: Where, add: Add,
+  agents: Record<string, unknown>, key: string): void {
+  if (typeof entry.instructions === "string" && !entry.instructions.trim()) {
+    add("error", where, `${path}.instructions`, "is required: the steps the agent follows");
+  }
+  const files = entry.files;
+  if (files !== undefined && files !== null && isObj(files)) {
+    if (Object.keys(files).length > SKILL_MAX_FILES) add("error", where, `${path}.files`, `at most ${SKILL_MAX_FILES} reference files`);
+    let total = typeof entry.instructions === "string" ? entry.instructions.length : 0;
+    for (const [name, text] of Object.entries(files)) {
+      if (!SKILL_FILE_RE.test(name)) {
+        add("error", where, `${path}.files.${name}`, "a reference file is a plain name ending in .md, .txt, .json, .csv, .yaml or .yml");
+      }
+      if (typeof text !== "string") add("error", where, `${path}.files.${name}`, "must be the file's text");
+      else total += text.length;
+    }
+    if (total > SKILL_MAX_CHARS) {
+      add("error", where, `${path}.files`, `a skill holds at most ${SKILL_MAX_CHARS / 1000} KB of text, instructions and files together`);
+    }
+  }
+  if (!Object.values(agents).some((a) => isObj(a) && Array.isArray(a.skills) && a.skills.includes(key))) {
+    add("warning", where, path, "no agent uses it: add it to an agent's Skills");
   }
 }
 
@@ -576,6 +977,75 @@ function checkEntry(name: BlockName, entry: unknown, path: string, where: Where,
 
 /** The branch grammar. Mirrors app/common/branching.validate_spec and the placement
  *  rules in graph_builder.validate_branches. */
+const AFTER_RE = /^([1-9][0-9]*)(m|h|d)$/;
+const GATE_KEYS = ["mode", "when", "approval", "timeout"];
+
+/** steps[].hitl as an object: how its gate decides (app/common/gates.py). true and
+ *  false need nothing. Mirrors _check_hitl in bff/validate_build.py. */
+function checkHitl(step: Record<string, unknown>, i: number, add: Add): void {
+  const h = step.hitl;
+  if (!isObj(h)) return;
+  const where: Where = { kind: "step", index: i };
+  const p = `steps[${i}].hitl`;
+  for (const k of Object.keys(h)) {
+    if (!GATE_KEYS.includes(k)) add("error", where, `${p}.${k}`, `unknown key; a gate takes ${GATE_KEYS.join(", ")}`);
+  }
+  const mode = "mode" in h ? h.mode : "always";
+  if ("mode" in h && !vocab("gateModes").includes(mode as string)) {
+    add("error", where, `${p}.mode`, `must be one of: ${vocab("gateModes").join(", ")}`);
+  }
+  const when = h.when;
+  const rules = Array.isArray(when) && when.length > 0;
+  if (mode === "threshold" && !rules) add("error", where, `${p}.when`, "a threshold gate needs `when`: the rules that call for a person");
+  else if ("when" in h && !rules) add("error", where, `${p}.when`, "must be a non-empty list of rules");
+  (Array.isArray(when) ? when : []).forEach((rule: unknown, r: number) => {
+    const rp = `${p}.when[${r}]`;
+    if (!isObj(rule)) {
+      add("error", where, rp, "each rule must be an object");
+      return;
+    }
+    for (const k of Object.keys(rule)) {
+      if (!["field", ...BRANCH_OPS].includes(k)) add("error", where, rp, `unknown key \`${k}\`; a rule is a \`field\` and operators: ${BRANCH_OPS.join(", ")}`);
+    }
+    const ops = BRANCH_OPS.filter((o) => o in rule);
+    if (!ops.length) add("error", where, rp, `each rule needs an operator: ${BRANCH_OPS.join(", ")}`);
+    for (const o of ops) {
+      const v = rule[o];
+      if (o === "in" && !Array.isArray(v)) add("error", where, `${rp}.in`, "`in` takes a list");
+      if (o === "exists" && typeof v !== "boolean") add("error", where, `${rp}.exists`, "`exists` takes true or false");
+      if (["gt", "gte", "lt", "lte"].includes(o) && !(typeof v === "number" && Number.isFinite(v))) {
+        add("error", where, `${rp}.${o}`, `\`${o}\` takes a number`);
+      }
+      if (["equals", "notEquals", "contains"].includes(o) && (Array.isArray(v) || isObj(v))) {
+        add("error", where, `${rp}.${o}`, `\`${o}\` takes a single value, not a list or object`);
+      }
+    }
+  });
+  if (rules && mode !== "threshold") add("warning", where, `${p}.when`, "only a threshold gate reads `when`");
+  if ("approval" in h && !vocab("gateApprovals").includes(h.approval as string)) {
+    add("error", where, `${p}.approval`, `must be one of: ${vocab("gateApprovals").join(", ")}`);
+  }
+  if ("timeout" in h) {
+    const t = h.timeout;
+    if (!isObj(t)) {
+      add("error", where, `${p}.timeout`, 'must be {"after": "24h", "action": "approve" | "deny"}');
+    } else {
+      for (const k of Object.keys(t)) {
+        if (!["after", "action"].includes(k)) add("error", where, `${p}.timeout.${k}`, "unknown key; a timeout takes after, action");
+      }
+      const m = typeof t.after === "string" ? AFTER_RE.exec(t.after) : null;
+      if (!m) add("error", where, `${p}.timeout.after`, "must be <n>m, <n>h or <n>d, e.g. 30m, 24h, 2d");
+      else if (Number(m[1]) * ({ m: 60, h: 3600, d: 86400 } as Record<string, number>)[m[2]] > 30 * 86400) {
+        add("error", where, `${p}.timeout.after`, "is at most 30d");
+      }
+      if (!vocab("gateTimeoutActions").includes(t.action as string)) {
+        add("error", where, `${p}.timeout.action`, `must be one of: ${vocab("gateTimeoutActions").join(", ")}`);
+      }
+    }
+  }
+  if (mode === "auto") add("warning", where, `${p}.mode`, "this gate approves itself: no one reviews this stage");
+}
+
 function checkBranch(steps: StepSpec[], i: number, out: Issue[]): void {
   const step = steps[i];
   const where: Where = { kind: "step", index: i };
@@ -658,10 +1128,16 @@ export function validate(wf: Workflow): Issue[] {
   const tools = isObj(wf.tools) ? wf.tools : {};
   const steps = Array.isArray(wf.steps) ? wf.steps : [];
   checkPolicy(wf.orchestrator, tools, add);
+  checkAttachments(wf.orchestrator, agents as Record<string, unknown>, add);
+  checkInterceptors(wf.orchestrator, tools, agents as Record<string, unknown>, add);
+  checkTriggers(wf.orchestrator, agents as Record<string, unknown>, add);
+  checkSignIn(wf.authorization, add);
   checkNamed(wf, add, out);
 
   // --- tools -------------------------------------------------------------------
   const kinds: Record<string, string[]> = {};
+  const authBlock = isObj(wf.authorization) ? wf.authorization as Record<string, unknown> : {};
+  const signIn = isObj(authBlock.signIn) ? (authBlock.signIn as Record<string, unknown>).provider : undefined;
   for (const [key, tool] of Object.entries(tools)) {
     const where: Where = { kind: "tool", id: key };
     const path = `tools.${key}`;
@@ -769,13 +1245,14 @@ export function validate(wf: Workflow): Issue[] {
         }
       }
     }
-    if (tool.auth === "oauth2") {
+    const mode = tool.auth as string;
+    if (OAUTH_MODES.includes(mode)) {
       if (!vocab("oauthToolTypes").includes(type)) {
-        add("error", where, `${path}.auth`, `oauth2 is only for ${vocab("oauthToolTypes").join(", ")} tools`);
+        add("error", where, `${path}.auth`, `${mode} is only for ${vocab("oauthToolTypes").join(", ")} tools`);
       }
       const oa = tool.oauth as Record<string, unknown>;
       if (!isObj(oa)) {
-        add("error", where, `${path}.oauth`, 'auth "oauth2" needs {"clientId", "scopes", and "discoveryUrl" or "tokenUrl"}');
+        add("error", where, `${path}.oauth`, `auth "${mode}" needs {"clientId", "scopes", and "discoveryUrl" or "tokenUrl"}`);
       } else {
         if (typeof oa.clientId !== "string" || !oa.clientId.trim()) add("error", where, `${path}.oauth.clientId`, "is required: the OAuth client's id");
         if (!Array.isArray(oa.scopes) || oa.scopes.some((s) => typeof s !== "string")) {
@@ -785,14 +1262,25 @@ export function validate(wf: Workflow): Issue[] {
         if (urls.length !== 1) {
           add("error", where, `${path}.oauth`, "needs exactly one of discoveryUrl (the issuer's .well-known/openid-configuration) or tokenUrl");
         }
-        for (const k of ["discoveryUrl", "tokenUrl", "issuer"]) {
+        for (const k of ["discoveryUrl", "tokenUrl", "issuer", "authorizationUrl"]) {
           if (oa[k] !== undefined && oa[k] !== null && (typeof oa[k] !== "string" || !HTTPS_RE.test(oa[k] as string))) {
             add("error", where, `${path}.oauth.${k}`, "must be an https:// URL");
           }
         }
+        if (mode === "user" && oa.tokenUrl && !oa.authorizationUrl) {
+          add("error", where, `${path}.oauth.authorizationUrl`, "with tokenUrl, each person's sign-in needs the provider's authorizationUrl too");
+        }
+        if (mode !== "user" && "authorizationUrl" in oa) add("warning", where, `${path}.oauth.authorizationUrl`, 'is only used with auth "user"');
+        if (mode !== "obo" && "audience" in oa) add("warning", where, `${path}.oauth.audience`, 'is only used with auth "obo"');
+      }
+      if (PERSON_MODES.includes(mode) && type === "mcp" && !(Array.isArray(tool.toolSchema) && tool.toolSchema.length)) {
+        add("error", where, `${path}.toolSchema`, "an MCP tool used as the person must list its tools here: the Gateway cannot ask the server for them before anyone has signed in");
+      }
+      if (mode === "obo" && signIn === "entra") {
+        add("error", where, `${path}.auth`, "Entra ID's on-behalf-of exchange needs an access token for this app, which sign-in does not request yet: use \"user\" (each person connects their account) for now");
       }
     } else if ("oauth" in tool) {
-      add("warning", where, `${path}.oauth`, 'is only used with auth "oauth2"');
+      add("warning", where, `${path}.oauth`, 'is only used with auth "oauth2", "user" or "obo"');
     }
     if (type === "openapi" && typeof tool.schemaS3Uri === "string" && !S3_URI_RE.test(tool.schemaS3Uri)) {
       add("error", where, `${path}.schemaS3Uri`, "must be s3://<bucket>/<key> — the Gateway loads an OpenAPI schema only from S3");
@@ -951,6 +1439,7 @@ export function validate(wf: Workflow): Issue[] {
     }
     if (step.gateId && step.gateId in agents) add("error", where, `${path}.gateId`, `"${step.gateId}" is also an agent id — pick a different gate id`);
     checkBranch(steps, i, out);
+    checkHitl(step as Record<string, unknown>, i, add);
     // graph_builder.rerun_plan cannot rewind across an ungated parallel stage.
     const prev = steps[i - 1];
     if (prev?.parallel && !prev.hitl && step.hitl) {

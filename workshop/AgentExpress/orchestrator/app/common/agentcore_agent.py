@@ -23,6 +23,7 @@ from botocore.config import Config
 
 from app.common.base import Agent
 from app.common.config import RUNTIME_INVOKE
+from app.features.gateway import person
 
 _RUNTIME_ARNS: dict = json.loads(os.getenv("AGENT_RUNTIME_ARNS", "{}"))
 _REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -87,9 +88,14 @@ class AgentCoreRuntimeAgent(Agent):
             "outputs": (ctx.state or {}).get("outputs", {}) or {},
             "feedback": getattr(ctx, "feedback", "") or "",
             "session_id": ctx.session_id,
+            # The run's files, for an agent with `attachments` (it reads them itself).
+            **({"attachments": (ctx.state or {}).get("attachments") or []}
+               if getattr(self, "attachments", False) else {}),
             # Propagate the trace context so this dedicated runtime's spans join
             # the SAME CloudWatch trace as the orchestrator (distributed trace).
             "otel_context": otel.carrier(),
+            # The run's person, for tools that act as them (gateway/person.py).
+            **({"user_token": person.token()} if person.token() else {}),
         }
         # Session id must be >= 33 chars; make it deterministic per (session, agent).
         session = f"{ctx.session_id}-{self.id}".ljust(33, "0")[:33]

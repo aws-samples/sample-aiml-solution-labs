@@ -53,7 +53,7 @@ export interface BlockSpec {
 export type BlockName =
   | "agent" | "agentcore" | "tool" | "step"
   | "orchestrator" | "ui" | "guardrail" | "authorization"
-  | "memory" | "evaluator" | "identity" | "policy";
+  | "memory" | "evaluator" | "identity" | "policy" | "skill";
 
 interface Meta {
   keys: Record<string, unknown>;

@@ -21,7 +21,8 @@ export interface StepSpec {
   agent?: string;
   parallel?: string[];
   sequence?: string[];
-  hitl?: boolean;
+  /** true, or how the gate decides (app/common/gates.py). */
+  hitl?: boolean | GateSpec;
   gateId?: string;
   gateName?: string;
   branch?: { when?: Entry[]; default?: string };
@@ -60,11 +61,27 @@ export interface Project {
 }
 
 export type ToolFiles = Record<string, string>;
+/** steps[].hitl as an object (app/common/gates.py): mode, when, approval, timeout. */
+export type GateSpec = Record<string, Json>;
 
 /** The tool keys whose function is written in the build. Mirrors bff/buildstore.py. */
 export function codeTools(wf: Workflow): string[] {
   return Object.entries(wf.tools ?? {}).filter(([, t]) => String(t.type ?? "").toLowerCase() === "lambda"
     && t.code !== undefined).map(([k]) => k);
+}
+/** interceptor-<point> for each Gateway interceptor written in the build: its files are
+ *  toolCode["interceptor-<point>"]. Mirrors bff/buildstore.py code_interceptors. */
+export function codeInterceptors(wf: Workflow): string[] {
+  const orch = wf.orchestrator as Record<string, unknown> | undefined;
+  const ics = (orch && typeof orch.interceptors === "object" && orch.interceptors) as Record<string, unknown> | false;
+  return (["request", "response"] as const).filter((p) => {
+    const ic = ics ? ics[p] : undefined;
+    return !!ic && typeof ic === "object" && !Array.isArray(ic) && "code" in (ic as object);
+  }).map((p) => `interceptor-${p}`);
+}
+/** Every function written in the build: code tools, then interceptors. */
+export function codeFunctions(wf: Workflow): string[] {
+  return [...codeTools(wf), ...codeInterceptors(wf)];
 }
 
 export type StageKind = "single" | "parallel" | "sequence";
@@ -189,7 +206,7 @@ export function newProject(name: string, now = new Date()): Project {
     // idempotent, and a setting like that should not be an invisible default.
     orchestrator: {
       defaultModel: String(d.orchestrator?.defaultModel ?? ""),
-      runtimeInvoke: (d.orchestrator?.runtimeInvoke ?? { maxAttempts: 1, readTimeoutSeconds: 120 }) as Json,
+      runtimeInvoke: (d.orchestrator?.runtimeInvoke ?? { maxAttempts: 1, readTimeoutSeconds: 600 }) as Json,
     },
     // No empty strings: the BFF drops them, so the page would fall back to its own
     // text while the file claimed a value.
@@ -518,11 +535,12 @@ export interface Bundle {
 }
 
 /** What `scaffold.py apply` reads. Prompts only for agents that still exist, code only
- *  for tools still written in the build (mirrors bff/buildstore.py bundle_of). */
+ *  for tools and interceptors still written in the build (mirrors bff/buildstore.py
+ *  bundle_of). */
 export function toBundle(project: Project, now = new Date()): Bundle {
   const prompts = Object.fromEntries(Object.entries(project.prompts)
     .filter(([id]) => id in project.workflow.agents && project.workflow.agents[id].runtime !== "a2a"));
-  const coded = codeTools(project.workflow);
+  const coded = codeFunctions(project.workflow);
   const toolCode = Object.fromEntries(Object.entries(project.toolCode ?? {}).filter(([k]) => coded.includes(k)));
   return {
     format: BUNDLE_FORMAT, version: BUNDLE_VERSION,
@@ -591,7 +609,7 @@ export function replaceWorkflow(project: Project, text: string, now = new Date()
   const got = fromFile(text, project.name, now);
   const kept = Object.fromEntries(Object.entries(project.prompts)
     .filter(([id]) => id in got.workflow.agents));
-  const coded = codeTools(got.workflow);
+  const coded = codeFunctions(got.workflow);
   const code = Object.fromEntries(Object.entries({ ...(project.toolCode ?? {}), ...(got.toolCode ?? {}) })
     .filter(([k]) => coded.includes(k)));
   return { ...project, workflow: got.workflow, prompts: { ...kept, ...got.prompts },
@@ -604,7 +622,7 @@ export function replaceWorkflow(project: Project, text: string, now = new Date()
 
 /** workflow map -> library kind. A build keeps an item it uses as {"library": "<id>"}. */
 export const MAP_KIND = { tools: "tool", guardrails: "guardrail", memories: "memory",
-  evaluators: "evaluator", identities: "identity", policies: "policy" } as const;
+  evaluators: "evaluator", identities: "identity", policies: "policy", skills: "skill" } as const;
 export type NamedMapName = keyof typeof MAP_KIND;
 export interface Ref { id: string; kind: string; name: string; definition: Record<string, unknown>; files?: Record<string, string> }
 

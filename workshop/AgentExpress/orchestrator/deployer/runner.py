@@ -69,26 +69,62 @@ def run(cmd: list[str], cwd: Path, env: dict | None = None, keep: int = 60) -> l
     return list(tail)
 
 
-def cdk_context(agent: str, gateway: bool, tags: dict | None = None) -> list[str]:
-    """The same flags a developer deploys with, pinned for a build stack.
+def sign_in(workflow: dict) -> dict:
+    """authorization.signIn, or Cognito when the build says nothing: who signs its users in."""
+    s = (workflow.get("authorization") or {}).get("signIn") if isinstance(workflow, dict) else None
+    s = s if isinstance(s, dict) else {}
+    return {**s, "provider": str(s.get("provider") or "cognito")}
 
-    Its own Cognito pool (the Gateway's machine-to-machine client needs one), the tool
-    plane only when the workflow has tools, and `builder=false`: a build is a workflow,
-    not another console, so it gets no Build view, deploy project or builds store."""
-    flags = ["-c", f"agentName={agent}", "-c", "idp=cognito", "-c", "createCognito=true",
+
+#: authorization.signIn field -> CDK context key, per provider.
+SIGN_IN_CDK = {"okta": {"domain": "oktaDomain", "clientId": "oktaClientId", "authorizationServer": "oktaAuthServer"},
+               "auth0": {"domain": "auth0Domain", "clientId": "auth0ClientId"},
+               "entra": {"tenantId": "entraTenantId", "clientId": "entraClientId"}}
+#: ... and -> terraform variable field (variables.tf okta / auth0 / entra).
+SIGN_IN_TF = {"okta": {"domain": "domain", "clientId": "client_id", "authorizationServer": "authorization_server"},
+              "auth0": {"domain": "domain", "clientId": "client_id"},
+              "entra": {"tenantId": "tenant_id", "clientId": "client_id"}}
+
+
+def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dict | None = None) -> list[str]:
+    """The same flags a developer deploys with, pinned for a build stack.
+    Who signs its users in (authorization.signIn): a Cognito pool of its own by default,
+    or the build's Okta, Auth0 or Entra ID app — the agents' Gateway client is then made
+    in a pool for machines only. The tool plane only when the workflow has tools, and
+    `builder=false`: a build is a workflow, not another console, so it gets no Build view,
+    deploy project or builds store."""
+    s = signin or {"provider": "cognito"}
+    provider = s["provider"]
+    if provider == "cognito":
+        idp = ["-c", "idp=cognito", "-c", "createCognito=true"]
+    else:
+        idp = ["-c", f"idp={provider}"]
+        for field, key in SIGN_IN_CDK[provider].items():
+            if s.get(field):
+                idp += ["-c", f"{key}={s[field]}"]
+    flags = ["-c", f"agentName={agent}", *idp,
              "-c", f"enableGateway={'true' if gateway else 'false'}", "-c", "builder=false"]
+    # Whose runs a trigger with runAs "owner" starts (bff/triggers.py): the build's owner.
+    if "@" in str((tags or {}).get("agentexpress:owner") or ""):
+        flags += ["-c", f"runOwnerEmail={tags['agentexpress:owner']}"]
     if tags:
         flags += ["-c", f"tags={json.dumps(tags, separators=(',', ':'))}"]
     return flags
 
 
-def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None) -> dict:
+def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None,
+            signin: dict | None = None) -> dict:
     """terraform/variables.tf values, mirroring cdk_context()."""
-    out = {"region": region, "agent_name": agent, "idp": "cognito",
-           "cognito": {"create": True}, "enable_gateway": gateway,
+    s = signin or {"provider": "cognito"}
+    provider = s["provider"]
+    who: dict = ({"idp": "cognito", "cognito": {"create": True}} if provider == "cognito" else
+                 {"idp": provider, provider: {v: s[k] for k, v in SIGN_IN_TF[provider].items() if s.get(k)}})
+    out = {"region": region, "agent_name": agent, **who, "enable_gateway": gateway,
            "container_engine": "docker", "enable_builder": False}
     if tags:
         out["tags"] = tags
+    if "@" in str((tags or {}).get("agentexpress:owner") or ""):
+        out["run_owner_email"] = tags["agentexpress:owner"]
     return out
 
 
@@ -232,10 +268,10 @@ def check_requirements(text: str, key: str) -> None:
 
 
 def install_code_requirements(workflow: dict) -> list[str]:
-    """pip install each code tool's requirements.txt into its folder, which CDK and
-    Terraform then zip as they are (app/tools/_code/<key>/)."""
+    """pip install each code function's requirements.txt into its folder, which CDK and
+    Terraform then zip as they are (app/tools/_code/<key>/; interceptors included)."""
     done = []
-    for key in buildstore.code_tools(workflow):
+    for key in buildstore.code_functions(workflow):
         folder = ROOT / "app" / "tools" / "_code" / key
         req = folder / "requirements.txt"
         if not req.exists() or not [ln for ln in req.read_text().splitlines()
@@ -399,15 +435,24 @@ def ensure_terraform(version: str) -> str:
 
 def cdk_outputs(path: Path, stack: str) -> dict:
     out = json.loads(path.read_text()).get(stack, {})
+    try:  # tool -> the callback URL to register at its provider (auth "user"); shown on the tool
+        callbacks = json.loads(out.get("toolCallbackUrls") or "{}")
+    except ValueError:
+        callbacks = {}
     return {"runtimeArn": out.get("agentRuntimeArn", ""), "uiUrl": out.get("uiUrl", ""),
-            "apiUrl": out.get("apiEndpoint", ""), "userPoolId": out.get("cognitoUserPoolId", "")}
+            "apiUrl": out.get("apiEndpoint", ""), "userPoolId": out.get("cognitoUserPoolId", ""),
+            # The Gateway's MCP endpoint: what publishing the build to a registry names.
+            **({"gatewayUrl": out["gatewayUrl"]} if out.get("gatewayUrl") else {}),
+            **({"callbackUrls": callbacks} if callbacks else {})}
 
 
 def tf_outputs(raw: str) -> dict:
     out = {k: (v or {}).get("value") for k, v in json.loads(raw or "{}").items()}
     return {"runtimeArn": out.get("agent_runtime_arn") or "", "uiUrl": out.get("ui_url") or "",
             "apiUrl": out.get("api_endpoint") or "",
-            "userPoolId": out.get("cognito_user_pool_id") or ""}
+            "userPoolId": out.get("cognito_user_pool_id") or "",
+            **({"gatewayUrl": out["gateway_url"]} if out.get("gateway_url") else {}),
+            **({"callbackUrls": out["tool_callback_urls"]} if out.get("tool_callback_urls") else {})}
 
 
 #: A stack whose FIRST create failed: nothing in it ever worked, and CloudFormation can
@@ -455,12 +500,12 @@ def clear_failed_create(session, stack: str, region: str, attempts: int = 4,
 
 
 def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
-               tags: dict | None = None, target: Target | None = None) -> dict:
+               tags: dict | None = None, target: Target | None = None, signin: dict | None = None) -> dict:
     env = env or {}
     cdk = ROOT / "cdk"
     run(["npm", "ci", "--no-fund", "--no-audit"], cdk, env)
     stack = buildstore.stack_name(agent)
-    flags = cdk_context(agent, gateway, tags)
+    flags = cdk_context(agent, gateway, tags, signin)
     if target and action == "deploy":
         # A connected account may never have run CDK. Bootstrapping is idempotent, but
         # it is a stack update every time, so only when the account has none.
@@ -482,7 +527,7 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
 
 def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
                      sub_env: dict | None = None, tags: dict | None = None,
-                     target: Target | None = None) -> dict:
+                     target: Target | None = None, signin: dict | None = None) -> dict:
     sub_env = sub_env or {}
     tf_dir = ROOT / "terraform"
     tf = ensure_terraform(env.get("TERRAFORM_VERSION") or "1.15.8")
@@ -500,7 +545,7 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
         + ('    profile = "console"\n' if target else "")
         + '  }\n}\n')
     (tf_dir / "builder.auto.tfvars.json").write_text(
-        json.dumps(tf_vars(agent, gateway, region, tags), indent=2))
+        json.dumps(tf_vars(agent, gateway, region, tags, signin), indent=2))
     run([tf, "init", "-input=false", "-no-color"], tf_dir, sub_env)
     # The UI build FIRST, on its own — for a destroy too. The files it emits are ui.tf's
     # `for_each`, and whenever the build step is not in state (a stack's first apply, or
@@ -656,8 +701,9 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
                           env.get("CONSOLE_NAME", ""))
 
         buildstore.set_job(table, bid, phase="destroying" if action == "destroy" else "deploying")
-        outputs = (deploy_cdk(action, agent, gateway, sub_env, tags, target) if tool == "cdk"
-                   else deploy_terraform(action, agent, gateway, env, sub_env, tags, target))
+        signin = sign_in(bundle.get("workflow") or {})
+        outputs = (deploy_cdk(action, agent, gateway, sub_env, tags, target, signin) if tool == "cdk"
+                   else deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin))
 
         if action == "destroy":
             delete_leftover_logs(agent, session=remote())

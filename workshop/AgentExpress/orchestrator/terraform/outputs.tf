@@ -40,6 +40,10 @@ output "gateway_url" {
 output "gateway_id" {
   value = local.gateway_enabled ? aws_bedrockagentcore_gateway.mcp[0].gateway_id : ""
 }
+output "tool_callback_urls" {
+  description = "Tool name -> the redirect (callback) URL to register at its provider, for each tool where each person connects their own account (auth = \"user\")."
+  value       = { for n, p in aws_bedrockagentcore_oauth2_credential_provider.tool : n => p.callback_url if local.tools[n].auth == "user" }
+}
 output "knowledge_base_id" {
   description = <<-EOT
     Bedrock Knowledge Base id (empty when no tool declares type="kb").

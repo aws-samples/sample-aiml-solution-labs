@@ -291,3 +291,16 @@
 .axd-attached { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .axd-attached-item { font-size: 12px; padding: 1px 8px; border-radius: 10px;
   background: var(--awsui-color-background-container-content, #fff); border: 1px solid #d1d5db; }
+
+/* Identity > Sign-in: the few numbered steps to connect a provider. */
+.axb-steps {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* A tab's level note on one row with its own buttons (Add from registry...): note left,
+   buttons right, and the buttons wrap under the note on a narrow screen. */
+.axb-levelbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 32px; }

@@ -30,7 +30,7 @@ describe("StartRunModal", () => {
     // The subject is optional and hidden until Advanced is opened.
     expect(screen.getByText("Advanced")).toBeTruthy();
     await act(async () => { fireEvent.keyDown(box, { key: "Enter", keyCode: 13, ctrlKey: true }); });
-    expect(onStart).toHaveBeenCalledWith(request, "");
+    expect(onStart).toHaveBeenCalledWith(request, "", []);
   });
   it("won't start an empty or over-long request", async () => {
     const onStart = vi.fn().mockResolvedValue(undefined);
@@ -41,5 +41,41 @@ describe("StartRunModal", () => {
     await act(async () => { fireEvent.change(box, { target: { value: "x".repeat(REQUEST_MAX + 1) } }); });
     expect(start().disabled).toBe(true);
     expect(screen.getByText("At most 10,000 characters")).toBeTruthy();
+  });
+  it("offers no files unless an agent reads them", () => {
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={vi.fn()} />);
+    expect(screen.queryByText("Files (optional)")).toBeNull();
+  });
+  it("uploads picked files at once and starts the run with them", async () => {
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    let finish: (v: { key: string; name: string }) => void = () => undefined;
+    const upload = vi.fn(() => new Promise<{ key: string; name: string }>((r) => { finish = r; }));
+    const attach = { maxFiles: 5, maxBytes: 4_500_000, types: ["pdf", "png"], s3: ["customer-docs/contracts"] };
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={onStart} attach={attach} upload={upload} />);
+    expect(screen.getByText(/S3 paths can be in: customer-docs\/contracts/)).toBeTruthy();
+    const input = document.querySelector("input[type='file']") as HTMLInputElement;
+    expect(input.getAttribute("accept")).toBe(".pdf,.png");
+    const box = document.querySelector("textarea[aria-label='Request']") as HTMLTextAreaElement;
+    await act(async () => { fireEvent.change(box, { target: { value: "Summarise the brief" } }); });
+    const file = new File(["%PDF"], "brief.pdf", { type: "application/pdf" });
+    await act(async () => { fireEvent.change(input, { target: { files: [file] } }); });
+    expect(upload).toHaveBeenCalledWith(file);
+    const start = () => screen.getByRole("button", { name: "Start run" }) as HTMLButtonElement;
+    expect(start().disabled).toBe(true);                        // still uploading
+    await act(async () => { finish({ key: "uploads/abc/1-brief.pdf", name: "brief.pdf" }); });
+    expect(start().disabled).toBe(false);
+    await act(async () => { start().click(); });
+    expect(onStart).toHaveBeenCalledWith("Summarise the brief", "", [{ key: "uploads/abc/1-brief.pdf", name: "brief.pdf" }]);
+  });
+  it("won't start while a file failed to upload", async () => {
+    const upload = vi.fn().mockRejectedValue(new Error("upload failed (403)"));
+    const attach = { maxFiles: 5, maxBytes: 4_500_000, types: ["pdf"], s3: [] };
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={vi.fn()} attach={attach} upload={upload} />);
+    const box = document.querySelector("textarea[aria-label='Request']") as HTMLTextAreaElement;
+    await act(async () => { fireEvent.change(box, { target: { value: "go" } }); });
+    const input = document.querySelector("input[type='file']") as HTMLInputElement;
+    await act(async () => { fireEvent.change(input, { target: { files: [new File(["x"], "a.pdf")] } }); });
+    expect(screen.getByText("A file did not upload: remove it, or pick it again")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Start run" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

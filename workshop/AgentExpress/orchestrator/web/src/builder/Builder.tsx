@@ -7,6 +7,7 @@
  *  browser) and deploy from here, each as its own stack (DeployPanel.tsx). Without it,
  *  drafts stay in this browser and the bundle is exported for `scaffold.py apply`. */
 
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import ButtonDropdown from "@cloudscape-design/components/button-dropdown";
@@ -33,6 +34,15 @@ import { toolsOf } from "../lib/tools";
 import { Canvas, DND_MIME, type DragPayload, type Selection } from "./Canvas";
 import { DesignChat } from "./DesignChat";
 import { BuildPolicies, policyBlock } from "./Policies";
+import { BuildInterceptors, interceptorsOf } from "./Interceptors";
+import { BuildTriggers, triggersOf } from "./Triggers";
+import { PROVIDER_NAME, providerOf, SignInSettings } from "./SignIn";
+import { ToolAccess } from "./ToolAccess";
+import { connectionOf, fixedOf, iamNote, METHOD } from "./ToolConnect";
+
+/** Set on Identity > Sign-in, so not again in Settings. */
+const SIGN_IN_HIDDEN = Object.fromEntries(["provider", "domain", "clientId", "tenantId", "authorizationServer"]
+  .map((k) => [`signIn.${k}`, { hidden: true }]));
 import { record, redo, start, undo, type History } from "./history";
 import { EntryForm } from "./EntryForm";
 import { formatWorkflow } from "./format";
@@ -48,12 +58,18 @@ import {
 import { LibraryContext, LibraryPicker, NamedTab, ShareDialog, keptNote, publishEntries, sharedLabel, useShareEntries, type LibraryCtx } from "./Library";
 import { DeployPanel, TOOL_NAMES } from "./DeployPanel";
 import {
-  buildStatus, deploy, destroy, jobActive, lastOpened, library, localStore, setLastOpened, shareBuild,
-  type BuildStore, type BuildSummary, type LibraryItem, type Tool,
+  buildStatus, deploy, destroy, jobActive, lastOpened, library, localStore, registryApi, setLastOpened, shareBuild,
+  type BuildStore, type BuildSummary, type LibraryItem, type RegistryKind, type RegistryUpdate, type Tool,
 } from "./storage";
+import { addHits, applyUpdate, RegistryPicker } from "./RegistryPicker";
+import { RegistryPublish } from "./RegistryPublish";
 import { validate, type Issue } from "./validate";
 import { modelIssues, useModels } from "./models";
 import "./builder.css";
+
+/** A row of the Tools tab's table. Named, and given to <Table> explicitly: TypeScript 6
+ *  otherwise infers the row from the selection props alone ({ key }) and loses `t`. */
+type ToolRow = { key: string; t: Entry };
 
 const TOOL_LABELS: Record<string, string> = {
   kb: "Knowledge Base", mcp: "MCP server", openapi: "REST API (OpenAPI)",
@@ -231,6 +247,41 @@ export const AUTOSAVE_MS = 800;
 
 const defaultStore = localStore();
 
+/** The Builder's tabs, grouped by where each takes effect, in the order the left pane's
+ *  library lists the same kinds (App.tsx LIBRARY_GROUPS): what each agent uses; what
+ *  reaches the tools and who signs in; how runs start; how good the result is. */
+const TAB_ORDER = ["design", "tools", "skills", "memory", "guardrails", "identity", "policies", "interceptors",
+  "triggers", "evals", "settings", "json"];
+/** One line at the top of a tab: the level it works at, and what uses it. */
+export const TAB_LEVEL: Record<string, string> = {
+  tools: "Agent level. An agent uses the tools it lists; every call goes through the build's Gateway.",
+  skills: "Agent level. An agent uses the skills it lists in its Skills setting.",
+  memory: "Agent level. An agent remembers with the memory it names in its Memory setting.",
+  guardrails: "Agent level. Checks each agent's model input and output: the guardrail it names, else the deployment guardrail.",
+  identity: "Agent, tool and app level. The credentials agents and tools use to reach APIs, and how people sign in to the app.",
+  policies: "Gateway level. Cedar rules checked on every tool call, for every agent.",
+  interceptors: "Gateway level. Functions that run before each tool request and after each answer, for every agent.",
+  triggers: "Workflow level. What starts a run without anyone typing it.",
+  evals: "Agent level. Judges that score the output of the agents that use them.",
+};
+/** The tabs in TAB_ORDER, each with its level note on one row with the tab's own
+ *  `actions` (buttons such as Add from registry), the note left and the buttons right. */
+function inTabOrder<T extends { id: string; content: ReactNode; actions?: ReactNode }>(tabs: T[]): Omit<T, "actions">[] {
+  const at = (id: string) => (TAB_ORDER.indexOf(id) + TAB_ORDER.length + 1) % (TAB_ORDER.length + 1);
+  return [...tabs].sort((a, b) => at(a.id) - at(b.id)).map(({ actions, ...t }) => (TAB_LEVEL[t.id] || actions ? {
+    ...t,
+    content: (
+      <SpaceBetween size="s">
+        <div className="axb-levelbar">
+          <Box variant="small" color="text-body-secondary" data-testid={`tab-level-${t.id}`}>{TAB_LEVEL[t.id] ?? ""}</Box>
+          {actions ? <SpaceBetween direction="horizontal" size="xs">{actions}</SpaceBetween> : null}
+        </div>
+        {t.content}
+      </SpaceBetween>
+    ),
+  } : t));
+}
+
 export function Builder({ notify, request, onCurrent, store = defaultStore, can = () => true, onRun }: {
   notify: (type: "success" | "error" | "info", msg: string) => void;
   request?: BuildRequest | null;
@@ -254,6 +305,8 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
       Date.now(), { step }) : h));
   }, []);
   const [build, setBuild] = useState<BuildSummary | null>(null);
+  /** Publish to registry: the deployed build, or skills (admins). */
+  const [publishing, setPublishing] = useState<{ what: "build" | "skill"; skill?: string } | null>(null);
   /** The library items this build uses live, as they are now (GET /api/builds/{id} refs). */
   const [refs, setRefs] = useState<Record<string, LibraryItem>>({});
   const refsNow = useRef(refs);
@@ -277,8 +330,13 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
   /** The JSON last written, so opening a build does not re-save it unchanged. */
   const lastSaved = useRef("");
 
+  /** The newest open: one that finishes after a later one began is dropped, so a link's
+   *  build is not replaced by the last-opened one the first render asked for. */
+  const opening = useRef(0);
   const open = useCallback(async (req?: BuildRequest | null) => {
+    const mine = ++opening.current;
     const list = await store.list().catch(() => [] as BuildSummary[]);
+    if (mine !== opening.current) return;
     setBuilds(list);
     const fresh = () => {
       lastSaved.current = "";
@@ -288,6 +346,7 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
     if (req?.id === "new") return fresh();
     const id = req?.id ?? (list.some((b) => b.id === lastOpened()) ? lastOpened() : list[0]?.id);
     const got = id ? await store.load(id) : null;
+    if (mine !== opening.current) return;
     if (!got) return fresh();
     lastSaved.current = JSON.stringify(got.project);
     setRefs(got.refs ?? {});
@@ -460,17 +519,27 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
       deployed={Boolean(build?.deployed?.version)}
       deployment={store.server ? (
         <DeployPanel build={build} errors={errorCount} can={can}
-          onDeploy={onDeploy} onDestroy={onDestroy} onRun={onRun ? () => onRun(project.id) : undefined} />
+          signInWith={providerOf(project) === "cognito" ? undefined : PROVIDER_NAME[providerOf(project)]}
+          onDeploy={onDeploy} onDestroy={onDestroy} onRun={onRun ? () => onRun(project.id) : undefined}
+          onPublish={can("admin") ? () => setPublishing({ what: "build" }) : undefined} />
       ) : null}
+      onPublishSkills={store.server && can("admin") ? (skill) => setPublishing({ what: "skill", skill }) : undefined}
     />
+    {store.server && build ? (
+      <RegistryPublish visible={publishing !== null} buildId={build.id} what={publishing?.what ?? "build"}
+        skills={Object.keys((project.workflow.skills ?? {}) as object)} preselect={publishing?.skill}
+        version={build.deployed?.version} onDismiss={() => setPublishing(null)} notify={notify} />
+    ) : null}
     </LibraryContext.Provider>
   );
 }
 
 function Editor({
   project, setProject, notify, server, savedAt, saveError, onNew, onDelete, deployment, deployed = false,
-  onUndo, onRedo, onApplied, flush, raw, setRaw, refs, addRefs, build, onShared, onReload,
+  onUndo, onRedo, onApplied, flush, raw, setRaw, refs, addRefs, build, onShared, onReload, onPublishSkills,
 }: {
+  /** Admins: publish skills to an Agent Registry (RegistryPublish.tsx). */
+  onPublishSkills?: (skill?: string) => void;
   /** Resolved: what the page shows. */
   project: Project;
   /** Stored: live library items as {"library": id}. */
@@ -511,7 +580,29 @@ function Editor({
   const [showProblems, setShowProblems] = useState(false);
   const [sharing, setSharing] = useState(false);
   const [pickingTools, setPickingTools] = useState(false);
-  const [toolsSelected, setToolsSelected] = useState<{ key: string }[]>([]);
+  const [toolsSelected, setToolsSelected] = useState<ToolRow[]>([]);
+  /** Add from registry: which kind the picker is open for. */
+  const [registryKind, setRegistryKind] = useState<RegistryKind | null>(null);
+  /** Newer approved versions of items taken from a registry without "keep in sync". */
+  const [registryUpdates, setRegistryUpdates] = useState<RegistryUpdate[]>([]);
+  // On open: items kept in sync are brought to their newest approved version (as a deploy
+  // does too); the others are listed, to update when the author chooses.
+  useEffect(() => {
+    setRegistryUpdates([]);
+    if (!server || !build?.id) return;
+    let live = true;
+    registryApi.state(build.id).then((got) => {
+      const updates = Array.isArray(got?.updates) ? got.updates : [];
+      if (!live) return;
+      const auto = updates.filter((u) => u.sync);
+      if (auto.length) {
+        setRaw((p) => auto.reduce(applyUpdate, p));
+        notify("info", `Updated from the registry: ${auto.map((u) => `${u.key} ${u.from} → ${u.to}`).join(", ")}.`);
+      }
+      setRegistryUpdates(updates.filter((u) => !u.sync));
+    }, () => { /* no registry access: nothing to say on open */ });
+    return () => { live = false; };
+  }, [server, build?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const ownTool = (k: string) => k in raw.workflow.tools && !refOf(raw.workflow.tools[k]);
   const toolsToPublish = toolsSelected.map((r) => r.key).filter(ownTool);
   /** Take an item out of the library. The server gives every build that used it its own
@@ -614,7 +705,7 @@ function Editor({
     if (w.kind === "tool") setSelection({ kind: "tool", id: w.id });
     if (w.kind === "step") setSelection({ kind: "stage", index: w.index });
   };
-  const named = (kind: "guardrail" | "memory" | "evaluator" | "identity" | "policy", extra?: ReactNode) => (
+  const named = (kind: "guardrail" | "memory" | "evaluator" | "identity" | "policy" | "skill", extra?: ReactNode) => (
     <NamedTab kind={kind} project={raw} view={project} setProject={(p) => setRaw(p)} refs={refs} addRefs={addRefs}
       issues={issues} server={server} notify={notify} extra={extra}
       onUnpublish={server ? unpublish : undefined} />
@@ -625,7 +716,7 @@ function Editor({
   const manual = (
       <Tabs
         activeTabId={tab} onChange={({ detail }) => setTab(detail.activeTabId)}
-        tabs={[
+        tabs={inTabOrder([
           {
             id: "design", label: "Design",
             content: (
@@ -633,6 +724,10 @@ function Editor({
                 <div className="axb-palette">
                   <Box variant="h3">Agents</Box>
                   <PaletteItem payload={{ kind: "new-agent" }} label="+ New agent" sub="runs in this deployment" onActivate={addNewAgentAtEnd} />
+                  {server ? (
+                    <Button variant="inline-link" iconName="search" onClick={() => setRegistryKind("agent")}>
+                      Add an agent from the registry</Button>
+                  ) : null}
                   {free.map((id) => (
                     <PaletteItem key={id} payload={{ kind: "agent", id }} label={String(wf.agents[id].name ?? id)} sub="not on the canvas"
                       onActivate={() => onDropPayload({ kind: "agent", id }, { kind: "gap", index: wf.steps.length })} />
@@ -653,7 +748,8 @@ function Editor({
                   onBind={(a, t) => setProject((cur) => bindTool(cur, a, t))}
                   onUnbind={(a, t) => setProject((cur) => unbindTool(cur, a, t))} />
                 <div className="axb-inspector">
-                  <Inspector project={project} selection={selection} issues={issues} onChange={update} onSelect={setSelection} server={server} />
+                  <Inspector project={project} selection={selection} issues={issues} onChange={update} onSelect={setSelection} server={server}
+                    callbackUrls={build?.deployed?.callbackUrls} agentName={build?.agentName} />
                 </div>
               </div>
             ),
@@ -661,7 +757,7 @@ function Editor({
           {
             id: "tools", label: `Tools (${Object.keys(wf.tools).length})`,
             content: (
-              <Table
+              <Table<ToolRow>
                 header={<Header counter={`(${Object.keys(wf.tools).length})`}
                   description="Your data sources. An agent can use several; anything not declared here is refused by Cedar's default-deny."
                   actions={<SpaceBetween direction="horizontal" size="xs">
@@ -670,13 +766,14 @@ function Editor({
                     {server ? <Button disabled={!toolsSelected.length} onClick={() => void toolSharer.share(toolsSelected.map((r) => r.key))}>
                       Share{toolsSelected.length ? ` (${toolsSelected.length})` : ""}</Button> : null}
                     {server ? <Button onClick={() => setPickingTools(true)}>Add from library</Button> : null}
+                    {server ? <Button onClick={() => setRegistryKind("tool")}>Add from registry</Button> : null}
                     <Button onClick={() => setAddingTool(true)}>Add a tool</Button>
                   </SpaceBetween>}>Tools</Header>}
                 items={Object.entries(wf.tools).map(([key, t]) => ({ key, t }))} trackBy="key"
                 wrapLines
                 {...(server ? {
-                  selectionType: "multi" as const, selectedItems: toolsSelected as { key: string; t: Entry }[],
-                  onSelectionChange: ({ detail }: { detail: { selectedItems: { key: string }[] } }) => setToolsSelected(detail.selectedItems),
+                  selectionType: "multi" as const, selectedItems: toolsSelected,
+                  onSelectionChange: ({ detail }: { detail: { selectedItems: ToolRow[] } }) => setToolsSelected(detail.selectedItems),
                   ariaLabels: { selectionGroupLabel: "Select to publish or share",
                     itemSelectionLabel: (_: unknown, r: { key: string }) => `Select ${r.key}`, allItemsSelectionLabel: () => "Select all" },
                 } : {})}
@@ -684,6 +781,16 @@ function Editor({
                   { id: "key", header: "Key", isRowHeader: true,
                     cell: (r) => <span className="axb-nowrap"><Button variant="inline-link" onClick={() => { setSelection({ kind: "tool", id: r.key }); setTab("design"); }}>{r.key}</Button></span> },
                   { id: "type", header: "Type", cell: (r) => TOOL_LABELS[String(r.t.type)] ?? String(r.t.type) },
+                  // How it connects, at a glance; the link opens the tool where it is set.
+                  { id: "connects", header: "Connects with", cell: (r) => {
+                    const c = connectionOf(r.t as never, project);
+                    const label = c.method === "fixed" ? fixedOf(String(r.t.type)) : METHOD[c.method].label;
+                    // An IAM role names the role on hover; the tool's panel has it to copy.
+                    const tip = c.method === "fixed" || c.method === "aws" ? iamNote(r.t, build?.agentName) : undefined;
+                    return <span title={tip}>{c.method === "fixed" ? label : (
+                      <Button variant="inline-link" ariaLabel={`How ${r.key} connects: ${label}`}
+                        onClick={() => { setSelection({ kind: "tool", id: r.key }); setTab("design"); }}>{label}</Button>)}</span>;
+                  } },
                   { id: "from", header: "From", cell: (r) => {
                     const id = refOf(raw.workflow.tools[r.key]);
                     return id ? (refs[id] ? `Library · ${refs[id].mine === false ? refs[id].ownerEmail : "yours"}` : "Missing from the library") : "This build";
@@ -730,6 +837,14 @@ function Editor({
             content: <BuildPolicies project={project} setProject={setProject} issues={issues} server={server} notify={notify}
               deployed={deployed} list={named("policy")} />,
           },
+          {
+            id: "interceptors", label: `Interceptors (${Object.keys(interceptorsOf(wf)).length})`,
+            content: <BuildInterceptors project={project} setProject={setProject} issues={issues} server={server} deployed={deployed} notify={notify} />,
+          },
+          {
+            id: "triggers", label: `Triggers (${Object.keys(triggersOf(wf)).length})`,
+            content: <BuildTriggers project={project} setProject={setProject} issues={issues} />,
+          },
           { id: "guardrails", label: `Guardrails (${count("guardrails")})`, content: named("guardrail", (
             <Container header={<Header variant="h2" description="Applied to an agent that turns guardrails on without naming one below.">
               Deployment guardrail</Header>}>
@@ -737,9 +852,27 @@ function Editor({
                 onChange={(e) => setProject({ ...project, workflow: { ...wf, guardrail: e } })} />
             </Container>
           )) },
+          { id: "skills", label: `Skills (${count("skills")})`, content: named("skill"), actions: server ? (
+            <>
+              <Button iconName="search" onClick={() => setRegistryKind("skill")}>Add from registry</Button>
+              {onPublishSkills ? <Button iconName="share" disabled={!count("skills")} onClick={() => onPublishSkills()}>Publish to registry</Button> : null}
+            </>
+          ) : undefined },
           { id: "memory", label: `Memory (${count("memories")})`, content: named("memory") },
           { id: "evals", label: `Evals (${count("evaluators")})`, content: named("evaluator") },
-          { id: "identity", label: `Identity (${count("identities")})`, content: named("identity") },
+          {
+            id: "identity", label: `Identity (${count("identities")})`,
+            content: (
+              <Tabs ariaLabel="Identity" tabs={[
+                { id: "signin", label: "Sign-in",
+                  content: <SignInSettings project={project} setProject={setProject} appUrl={build?.deployed?.uiUrl} /> },
+                { id: "tools", label: "Tool access", content: (
+                  <ToolAccess project={project} server={server} savedLogins={named("identity")} agentName={build?.agentName}
+                    onEdit={(key) => { setSelection({ kind: "tool", id: key }); setTab("design"); }} />
+                ) },
+              ]} />
+            ),
+          },
           {
             id: "settings", label: "Settings",
             content: (
@@ -747,7 +880,8 @@ function Editor({
                 {singleBlocks.map((name) => (
                   <Container key={name} header={<Header variant="h2" description={block(name).$comment?.split(". ")[0]}>{name}</Header>}>
                     <EntryForm name={name} entry={(wf[name] ?? {}) as Entry} issues={issues} pathPrefix={name}
-                      overrides={name === "orchestrator" ? { policy: { hidden: true } } : undefined}
+                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true } }
+                        : name === "authorization" ? SIGN_IN_HIDDEN : undefined}
                       onChange={(e) => setProject(name === "ui" ? setUi(project, e as Record<string, Json>)
                         : { ...project, workflow: { ...wf, [name]: e } })} />
                   </Container>
@@ -765,7 +899,7 @@ function Editor({
               </Container>
             ),
           },
-        ]}
+        ])}
       />
   );
 
@@ -782,8 +916,10 @@ function Editor({
         </Button>}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
-            <Button iconName="undo" ariaLabel="Undo" disabled={!onUndo} onClick={() => onUndo?.()}>Undo</Button>
-            <Button iconName="redo" ariaLabel="Redo" disabled={!onRedo} onClick={() => onRedo?.()}>Redo</Button>
+            {/* Buttons with an icon and no text, so the header stays short beside Share,
+                Project and Export. */}
+            <Button iconName="undo" ariaLabel="Undo" disabled={!onUndo} onClick={() => onUndo?.()} />
+            <Button iconName="redo" ariaLabel="Redo" disabled={!onRedo} onClick={() => onRedo?.()} />
             {server && build?.id === raw.id ? (
               <Button iconName="share" onClick={() => setSharing(true)}>
                 {build?.shared ? `Shared by ${build.ownerEmail ?? "its owner"}` : `Share · ${sharedLabel(build?.shares)}`}
@@ -803,11 +939,15 @@ function Editor({
             >Project</ButtonDropdown>
             <ButtonDropdown variant="primary"
               items={[
+                // The workflow.json tab is the last of many: on most screens the tab strip
+                // scrolls before it, so it is one click away here too.
+                { id: "view", text: "View workflow.json", iconName: "file-open" },
                 { id: "bundle", text: "Bundle (workflow, prompts and code)", disabled: errors > 0,
                   disabledReason: errors ? `Fix the ${errors} error${errors > 1 ? "s" : ""} first` : undefined },
-                { id: "workflow", text: "workflow.json only" },
+                { id: "workflow", text: "Download workflow.json only" },
               ]}
               onItemClick={({ detail }) => {
+                if (detail.id === "view") { setMode("manual"); setTab("json"); }
                 if (detail.id === "workflow") download("workflow.json", json);
                 if (detail.id === "bundle") {
                   const name = `${slug(project.name)}.agentexpress.json`;
@@ -821,6 +961,33 @@ function Editor({
         <ProjectTitle name={project.name} onRename={(name) => setProject((p) => renameProject(p, name))} />
       </Header>
       {deployment}
+      {registryUpdates.length ? (
+        <Alert type="info" dismissible onDismiss={() => setRegistryUpdates([])}
+          header="Newer versions in the registry">
+          <SpaceBetween size="xxs">
+            {registryUpdates.map((u) => (
+              <SpaceBetween key={`${u.map}.${u.key}`} direction="horizontal" size="xs" alignItems="center">
+                <span>{`${u.key} (${u.map === "tools" ? "tool" : u.map === "agents" ? "agent" : "skill"}): ${u.from} → ${u.to}`}</span>
+                <Button variant="inline-link" ariaLabel={`Update ${u.key}`} onClick={() => {
+                  setRaw((p) => applyUpdate(p, u), true);
+                  setRegistryUpdates((us) => us.filter((x) => x !== u));
+                  notify("success", `${u.key} is now version ${u.to}.`);
+                }}>Update</Button>
+              </SpaceBetween>
+            ))}
+          </SpaceBetween>
+        </Alert>
+      ) : null}
+      {server ? (
+        <RegistryPicker kind={registryKind ?? "tool"} visible={registryKind !== null} onDismiss={() => setRegistryKind(null)}
+          onAdd={(hits, sync) => {
+            const { added } = addHits(raw, hits, sync);
+            setRaw((p) => addHits(p, hits, sync).project, true);
+            setRegistryKind(null);
+            notify("success", `Added from the registry: ${added.join(", ")}${sync ? " (kept in sync)" : ""}.`
+              + (registryKind === "agent" ? " Drag it onto the canvas to give it a stage." : ""));
+          }} />
+      ) : null}
       <input ref={fileInput} type="file" accept=".json,application/json" hidden
         onChange={(e) => { const f = e.target.files?.[0]; if (f) void openFile(f); e.target.value = ""; }} />
 

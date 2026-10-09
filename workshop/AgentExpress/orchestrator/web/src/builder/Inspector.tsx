@@ -31,10 +31,11 @@ import { AGENT_ID_RE, TOOL_KEY_RE, vocab } from "./meta";
 import {
   setTools, defaultPrompt, insertStage, joinStage, moveMember, moveStage, removeAgent,
   removeTool, renameAgent, renameTool, setStageKind, stageKind, stageOf, stepAgents, stepName,
-  unplace, updateEntry, updateStage, type Entry, type Json, type Project, type StepSpec,
+  unplace, updateEntry, updateStage, type Entry, type GateSpec, type Json, type Project, type StepSpec,
 } from "./model";
 import { IssueList } from "./IssueList";
 import { KbDocuments, SecretField } from "./BuildResources";
+import { ToolConnect } from "./ToolConnect";
 import { EvaluatorPicker, type CustomEvaluator } from "./Features";
 import { capsLabel, fits, needsOf, useModels } from "./models";
 
@@ -141,7 +142,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
   const models = useModels();
   const defaultModel = String((wf.orchestrator as Entry | undefined)?.defaultModel ?? "");
   const ctx = useContext(LibraryContext);
-  const used = (m: "tools" | "guardrails" | "memories" | "evaluators" | "identities") =>
+  const used = (m: "tools" | "guardrails" | "memories" | "evaluators" | "identities" | "skills") =>
     keysOf(wf, m).map((k) => ctx.liveId(m, k)).filter(Boolean) as string[];
   const core = (agent.agentcore && typeof agent.agentcore === "object" ? agent.agentcore : {}) as Record<string, Record<string, Json>>;
   // On with nothing picked yet is a real state (the user is about to pick), so kept here.
@@ -157,7 +158,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
     const next = setCore(p, id, `guardrails.${side}`, on || undefined);
     return on || core.guardrails?.[other] ? next : clearCore(next, id, "guardrails");
   };
-  const fromLib = (m: "tools" | "guardrails" | "memories" | "evaluators" | "identities", libId: string,
+  const fromLib = (m: "tools" | "guardrails" | "memories" | "evaluators" | "identities" | "skills", libId: string,
     edit: (p: Project, key: string) => Project) => {
     const item = ctx.lib.find((i) => i.id === libId);
     if (item && ctx.withItem) ctx.withItem(m, item, edit);
@@ -231,6 +232,31 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
         collapseGroups={["features"]}
         overrides={{
           agentcore: { hidden: true },
+          // Where a remote agent came from in an Agent Registry: shown on its own, not edited.
+          registry: { hidden: true },
+          skills: {
+            // The build's skills (and the library's): know-how it opens when a task needs it.
+            render: (value, set) => {
+              const cur = Array.isArray(value) ? value.map(String) : [];
+              const skillDefs = (wf.skills ?? {}) as Record<string, Record<string, Json>>;
+              const opts = pickOptions(ctx, "skill", keysOf(wf, "skills"), used("skills"),
+                (k) => `${String(skillDefs[k]?.description ?? "")}${ctx.liveId("skills", k) ? " · from the library" : ""}`);
+              return (
+                <Multiselect selectedOptions={opts.filter((o) => cur.includes(String(o.value)))} options={opts}
+                  ariaLabel="Skills" filteringType="auto"
+                  placeholder="No skills" empty="No skills yet — add one under Skills, or in the library"
+                  onChange={({ detail }) => {
+                    const vals = detail.selectedOptions.map((o) => o.value!);
+                    const own = vals.filter((v) => !v.startsWith("lib:"));
+                    const lib = vals.find((v) => v.startsWith("lib:"));
+                    if (lib) {
+                      fromLib("skills", lib.slice(4), (p, key) => updateEntry(p, "agents", id,
+                        { ...p.workflow.agents[id], skills: [...own, key] }));
+                    } else set(own.length ? own : undefined);
+                  }} />
+              );
+            },
+          },
           framework: {
             // A workflow.json key (so an uploaded file carries it), shown with what each
             // option means rather than as a bare value.
@@ -455,6 +481,7 @@ function StagePanel({ project, index, issues, onChange }: {
           {step.hitl ? "A reviewer signs off here" : "No review"}
         </Toggle>
       </FormField>
+      {step.hitl ? <GateSettings hitl={step.hitl} onChange={(h) => set({ hitl: h })} /> : null}
       {kind !== "single" ? (
         <>
           <FormField label="Gate id" description="The stage's name for branch targets. Letters, digits, underscores.">
@@ -533,9 +560,10 @@ function customEvaluatorsOf(agent: Entry): CustomEvaluator[] {
   return Array.isArray(ev?.custom) ? (ev!.custom as unknown as CustomEvaluator[]) : [];
 }
 
-function ToolPanel({ project, id, issues, onChange, onSelect, server }: {
+function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUrls, agentName }: {
   project: Project; id: string; issues: Issue[];
   onChange: (p: Project) => void; onSelect: (s: Selection) => void; server?: boolean;
+  callbackUrls?: Record<string, string>; agentName?: string;
 }) {
   const wf = project.workflow;
   const tool = wf.tools[id];
@@ -568,6 +596,9 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server }: {
           to change it for every build that uses it, edit it under Tools in the navigation.
         </Alert>
       ) : null}
+      <Container header={<Header variant="h3">How it connects</Header>}>
+        <ToolConnect project={project} id={id} onChange={onChange} server={Boolean(server)} callbackUrl={callbackUrls?.[id]} agentName={agentName} />
+      </Container>
       <IdField
         label="Tool key" value={id} pattern={TOOL_KEY_RE} taken={Object.keys(wf.tools)}
         hint="Letters and digits, starting with a letter — it names the Gateway target and the Cedar policy. Use camelCase."
@@ -575,7 +606,10 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server }: {
       />
       <EntryForm name="tool" entry={tool} issues={issues} pathPrefix={`tools.${id}`}
         // A code tool's grants and files have their own panel below (CodeTool).
-        overrides={{ code: { hidden: true },
+        // How it connects (auth, service, oauth, identity) has its own panel above (ToolConnect).
+        overrides={{ code: { hidden: true }, auth: { hidden: true }, service: { hidden: true }, oauth: { hidden: true },
+          registry: { hidden: true },
+          identity: { hidden: true },
           policies: {
             render: (value) => {
               const cur = Array.isArray(value) ? value.map(String) : [];
@@ -593,25 +627,9 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server }: {
               );
             },
           },
-          identity: {
-            render: (value) => (
-              <PickOne ctx={ctx} kind="identity" map="identities" keys={keysOf(wf, "identities")} used={usedIds("identities")}
-                value={String(value ?? "")} none="None — use auth below"
-                onPick={(k) => onChange(setToolKey(project, "identity", k))}
-                onLibrary={(lid) => fromLib("identities", lid, (p, key) => setToolKey(p, "identity", key))} />
-            ),
-          },
           // Written here: there is no ARN or shipped source to name.
           ...(tool.code !== undefined ? { lambdaArn: { hidden: true }, source: { hidden: true } } : {}) }}
         onChange={(e) => onChange(updateEntry(project, "tools", id, e))} />
-      {server && String(tool.auth ?? "") === "apikey" ? (
-        <SecretField buildId={project.id} kind="toolApiKeys" name={id} label="API key"
-          description="Vaulted in the Gateway and sent as X-API-Key; the agent never sees it. Stored encrypted with this build; never shown again." />
-      ) : null}
-      {server && String(tool.auth ?? "") === "oauth2" ? (
-        <SecretField buildId={project.id} kind="toolApiKeys" name={id} label="OAuth client secret"
-          description="For the client in `oauth`. Held by an AgentCore Identity provider, which gets the Gateway its tokens; the agent never sees it. Stored encrypted with this build; never shown again." />
-      ) : null}
       {String(tool.type) === "lambda" ? <CodeTool project={project} id={id} onChange={onChange} server={server} /> : null}
       {String(tool.type) === "openapi" ? (
         <OpenApiUpload onSchema={(schema) => {
@@ -645,11 +663,15 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server }: {
   );
 }
 
-export function Inspector({ project, selection, issues, onChange, onSelect, server }: {
+export function Inspector({ project, selection, issues, onChange, onSelect, server, callbackUrls, agentName }: {
   project: Project; selection: Selection; issues: Issue[];
   onChange: (p: Project) => void; onSelect: (s: Selection) => void;
   /** With the console's builds store: secrets and documents can be stored for the build. */
   server?: boolean;
+  /** From the last deploy: tool -> the callback URL to register at its provider. */
+  callbackUrls?: Record<string, string>;
+  /** The build's fixed AWS name (the Gateway role is named from it). */
+  agentName?: string;
 }) {
   const wf = project.workflow;
   let body;
@@ -658,7 +680,7 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
   } else if (selection?.kind === "stage" && wf.steps[selection.index]) {
     body = <StagePanel project={project} index={selection.index} issues={issues} onChange={onChange} />;
   } else if (selection?.kind === "tool" && wf.tools[selection.id]) {
-    body = <ToolPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} />;
+    body = <ToolPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} callbackUrls={callbackUrls} agentName={agentName} />;
   } else {
     const errors = issues.filter((i) => i.severity === "error").length;
     body = (
@@ -676,4 +698,74 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
     );
   }
   return <Container>{body}</Container>;
+}
+
+
+/** How a stage's review gate decides (steps[].hitl, app/common/gates.py). All defaults
+ *  write `true`, so a plain gate stays a plain gate. */
+interface Gate {
+  mode?: "always" | "threshold" | "auto";
+  when?: Json[];
+  approval?: "console" | "event";
+  timeout?: { after: string; action: "approve" | "deny" };
+}
+
+function GateSettings({ hitl, onChange }: { hitl: boolean | GateSpec; onChange: (h: boolean | GateSpec) => void }) {
+  const h = (typeof hitl === "object" ? hitl : {}) as Gate;
+  const [rules, setRules] = useState(h.when ? JSON.stringify(h.when, null, 1) : "");
+  const [rulesErr, setRulesErr] = useState<string | null>(null);
+  const write = (patch: Partial<Gate>) => {
+    const next: Record<string, unknown> = { ...h, ...patch };
+    for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+    if (next.mode === "always") delete next.mode;
+    if (next.approval === "console") delete next.approval;
+    onChange(Object.keys(next).length ? (next as GateSpec) : true);
+  };
+  const opt = (v: string, label: string) => ({ value: v, label });
+  const modes = [opt("always", "Always: a person decides"), opt("threshold", "Only when a rule matches"),
+    opt("auto", "Approves itself (logged)")];
+  const approvals = [opt("console", "In the app"), opt("event", "In the app, or by EventBridge event")];
+  const mode = h.mode ?? "always";
+  return (
+    <ExpandableSection headerText="How the gate decides" variant="footer" defaultExpanded={typeof hitl === "object"}>
+      <SpaceBetween size="s">
+        <FormField label="Who decides">
+          <Select selectedOption={modes.find((m) => m.value === mode)!} options={modes}
+            onChange={({ detail }) => write({ mode: detail.selectedOption.value as Gate["mode"] })} />
+        </FormField>
+        {mode === "threshold" ? (
+          <FormField label="Rules that call for a person" stretch errorText={rulesErr}
+            description={'Branch rules without goto, against this stage\'s output: [{"field": "riskScore", "gte": 80}, {"contains": "URGENT"}]. No match: it approves itself.'}>
+            <Textarea rows={3} value={rules} onChange={({ detail }) => setRules(detail.value)}
+              onBlur={() => {
+                if (!rules.trim()) { write({ when: undefined }); setRulesErr(null); return; }
+                try { write({ when: JSON.parse(rules) }); setRulesErr(null); }
+                catch (e) { setRulesErr(`Not valid JSON: ${(e as Error).message}`); }
+              }} />
+          </FormField>
+        ) : null}
+        {mode !== "auto" ? (
+          <>
+            <FormField label="Where it is answered" description="By event: an &quot;AgentExpress Approval Requested&quot; event is put on the account's default bus, and an &quot;AgentExpress Approval Decision&quot; event answers it (Slack, ServiceNow, your code).">
+              <Select selectedOption={approvals.find((a) => a.value === (h.approval ?? "console"))!} options={approvals}
+                onChange={({ detail }) => write({ approval: detail.selectedOption.value as Gate["approval"] })} />
+            </FormField>
+            <FormField label="Timeout" description="With no decision after this long (30m, 24h, 2d), decide it this way. Empty: wait.">
+              <SpaceBetween direction="horizontal" size="xs">
+                <Input value={h.timeout?.after ?? ""} placeholder="24h" ariaLabel="Timeout after"
+                  onChange={({ detail }) => write({ timeout: detail.value.trim()
+                    ? { after: detail.value.trim(), action: h.timeout?.action ?? "deny" } : undefined })} />
+                {h.timeout ? (
+                  <Select selectedOption={opt(h.timeout.action, h.timeout.action === "deny" ? "Deny" : "Approve")}
+                    options={[opt("deny", "Deny"), opt("approve", "Approve")]} ariaLabel="Timeout action"
+                    onChange={({ detail }) => write({ timeout: { after: h.timeout!.after,
+                      action: detail.selectedOption.value as "approve" | "deny" } })} />
+                ) : null}
+              </SpaceBetween>
+            </FormField>
+          </>
+        ) : null}
+      </SpaceBetween>
+    </ExpandableSection>
+  );
 }

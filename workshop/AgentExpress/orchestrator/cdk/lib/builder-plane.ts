@@ -103,6 +103,10 @@ export class BuilderPlane extends Construct {
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      // Every build, its versions, shares and the console's audit log live here, so no
+      // account clean-up tool or stray DeleteTable may take it: turn this off on purpose
+      // before destroying the console. Mirrors aws_dynamodb_table.builds.
+      deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
     this.table.addGlobalSecondaryIndex({
@@ -290,6 +294,26 @@ export class BuilderPlane extends Construct {
     bff.addToRolePolicy(new iam.PolicyStatement({
       actions: ["codebuild:StartBuild", "codebuild:BatchGetBuilds"],
       resources: [this.project.projectArn],
+    }));
+    // AWS Agent Registry (bff/registry.py): list the registries, find approved records to
+    // take into a build, and (an admin) publish a build or a skill for approval and
+    // deprecate it on destroy. Records only: the console never creates or deletes a
+    // registry, nor approves its own records. Mirrors terraform/builder.tf.
+    bff.addToRolePolicy(new iam.PolicyStatement({
+      sid: "AgentRegistryList",
+      actions: ["agent-registry:ListRegistries"],
+      resources: ["*"],
+    }));
+    bff.addToRolePolicy(new iam.PolicyStatement({
+      sid: "AgentRegistryRecords",
+      actions: ["agent-registry:SearchDiscoverableRegistryRecords", "agent-registry:ListDiscoverableRegistryRecords",
+        "agent-registry:GetDiscoverableRegistryRecord", "agent-registry:GetRegistry",
+        "agent-registry:CreateRegistryRecord", "agent-registry:UpdateRegistryRecord",
+        "agent-registry:GetRegistryRecord", "agent-registry:SubmitRegistryRecordForApproval",
+        "agent-registry:UpdateRegistryRecordStatus",
+        // A published record is tagged agentexpress:published (CreateRegistryRecord tags).
+        "agent-registry:TagResource"],
+      resources: [`arn:aws:agent-registry:${stack.region}:${stack.account}:registry/*`],
     }));
     bff.addToRolePolicy(new iam.PolicyStatement({
       actions: ["logs:GetLogEvents"],

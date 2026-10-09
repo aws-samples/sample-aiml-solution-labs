@@ -31,12 +31,16 @@ from app.common.config import (
     GATEWAY_AUTH_FLOW,
     GATEWAY_CLIENT_ID,
     GATEWAY_CLIENT_SECRET,
+    GATEWAY_SCOPE,
     GATEWAY_TOKEN_URL,
     GATEWAY_URL,
+    GATEWAY_USER_URL,
     MCP_TIMEOUT,
+    PERSON_TOOLS,
     TOOLS,
 )
-from app.common.errors import ToolDenied, ToolUnavailable
+from app.common.errors import ToolDenied, ToolNeedsConsent, ToolUnavailable
+from app.features.gateway import person
 
 #: One cached token per client: with orchestrator.gatewayIdentity "perAgent" each agent
 #: signs in as itself, so one shared slot would hand agent A's token to agent B.
@@ -61,8 +65,8 @@ def _credentials() -> tuple[str, str]:
 def _token_request(client_id: str = "", client_secret: str = "") -> urllib.request.Request:
     """Build the client-credentials request for the configured IdP.
 
-    The two providers differ in BOTH how the client authenticates and what it
-    asks for, which is why this is a branch rather than one shared request:
+    The providers differ in BOTH how the client authenticates and what it asks
+    for, which is why this is a branch rather than one shared request:
 
       cognito — the client authenticates with HTTP Basic (client_id:secret) and
                 requests an OAuth2 `scope`. The resulting token carries
@@ -70,13 +74,19 @@ def _token_request(client_id: str = "", client_secret: str = "") -> urllib.reque
       auth0   — the client credentials go in the form body and it requests an
                 `audience` (the API identifier). The resulting token carries
                 `aud` + `azp` and no `client_id`.
+      okta    — HTTP Basic, and a custom `scope` of the authorization server
+                (GATEWAY_SCOPE; Okta refuses client credentials without one). The
+                token carries the server's `aud` and the client as `cid`.
+      entra   — the credentials in the form body, and `scope` "<api>/.default"
+                (GATEWAY_SCOPE, else built from GATEWAY_AUDIENCE). A v2 token
+                carries the API app's client id as `aud` and the caller as `azp`.
 
     The Gateway's authorizer is configured to match (see terraform/gateway.tf).
     To add another OIDC provider, add a branch here and one in identity.tf.
 
     HTTPS is REQUIRED, and checked rather than assumed. This request carries the
-    Gateway client secret — in the Authorization header for Cognito, in the form
-    body for Auth0 — so a token URL that arrived misconfigured as `http://` would
+    Gateway client secret — in the Authorization header (Cognito, Okta) or in the
+    form body (Auth0, Entra) — so a token URL that arrived misconfigured as `http://` would
     put those credentials on the wire in plaintext, and a `file://` one would make
     this read a local path instead. The URL comes from the IaC, so this should never
     fire; it raises rather than warns because there is no safe way to continue.
@@ -87,22 +97,25 @@ def _token_request(client_id: str = "", client_secret: str = "") -> urllib.reque
             f"Gateway client secret. Got: {GATEWAY_TOKEN_URL.split('://')[0]!r}://…")
     client_id = client_id or GATEWAY_CLIENT_ID
     client_secret = client_secret or GATEWAY_CLIENT_SECRET
-    if GATEWAY_AUTH_FLOW == "auth0":
+    if GATEWAY_AUTH_FLOW in ("auth0", "entra"):
+        asked = ({"audience": GATEWAY_AUDIENCE} if GATEWAY_AUTH_FLOW == "auth0"
+                 else {"scope": GATEWAY_SCOPE or f"{GATEWAY_AUDIENCE}/.default"})
         body = urllib.parse.urlencode({
             "grant_type": "client_credentials",
             "client_id": client_id,
             "client_secret": client_secret,
-            "audience": GATEWAY_AUDIENCE,
+            **asked,
         }).encode()
         return urllib.request.Request(  # noqa: S310 - https enforced above
             GATEWAY_TOKEN_URL, data=body,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
 
-    # Default: Cognito.
+    # Cognito (the default) and Okta: HTTP Basic and a scope. Okta's is its own
+    # setting, since the audience there is the authorization server's, not a scope.
     body = urllib.parse.urlencode({
         "grant_type": "client_credentials",
-        "scope": GATEWAY_AUDIENCE,
+        "scope": GATEWAY_SCOPE if GATEWAY_AUTH_FLOW == "okta" else GATEWAY_AUDIENCE,
     }).encode()
     credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
     return urllib.request.Request(  # noqa: S310 - https enforced above
@@ -129,22 +142,80 @@ def _gateway_token() -> str:
     return tok["access_token"]
 
 
-async def _gateway_tools():
-    """Connect to the Gateway MCP endpoint with a client-credentials token and list
-    its tools. The token flow is Cognito or Auth0 per GATEWAY_AUTH_FLOW."""
+def _error_text(e: BaseException) -> str:
+    """An MCP error with everything it carries: its message, and its `data` (where the
+    Gateway puts a URL elicitation) — str() alone drops the data."""
+    parts = [str(e)]
+    err = getattr(e, "error", None)
+    data = getattr(err, "data", None) if err is not None else None
+    if data is not None:
+        parts.append(json.dumps(data, default=str))
+    code = getattr(err, "code", None) if err is not None else None
+    if code is not None:
+        parts.append(f"code {code}")
+    # An ExceptionGroup from the client carries the real error inside.
+    parts.extend(_error_text(sub) for sub in getattr(e, "exceptions", None) or [])
+    return " ".join(parts)
+
+
+def _run_headers() -> dict[str, str]:
+    """Which run, agent and user this call is for, as x-ax-* headers. The Gateway
+    ignores them; an interceptor with passRequestHeaders on reads them (the token
+    names only the machine client, never the person). Printable ASCII, capped, so a
+    value can never break the header it rides in."""
+    from app.features.observability.scope import get_scope
+    s = get_scope()
+    out = {}
+    for name, value in (("x-ax-session", s.session_id), ("x-ax-agent", s.agent_id), ("x-ax-user", s.user)):
+        clean = "".join(c for c in str(value or "") if " " <= c <= "~")[:256]
+        if clean:
+            out[name] = clean
+    return out
+
+
+async def _gateway_tools(as_person: bool = False):
+    """Connect to a Gateway MCP endpoint and list its tools: the machine Gateway with a
+    client-credentials token (shaped per GATEWAY_AUTH_FLOW, _token_request), or, for
+    tools that act as the person, the person Gateway with the caller's own sign-in."""
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
-    token = await asyncio.to_thread(_gateway_token)
+    if as_person:
+        if not GATEWAY_USER_URL:
+            raise ToolUnavailable("This tool acts as the person using the app, but this deployment has no "
+                                  "person Gateway (GATEWAY_USER_URL): deploy it again.")
+        token = person.token()
+        if not token:
+            raise ToolUnavailable("This tool acts as the person who started the run, and this step was "
+                                  "not started by them in this app (a reviewer, a trigger, a schedule, or "
+                                  "a run from the Builder console): ask them to run it in the build's own "
+                                  "app, or re-run this step themselves there.")
+        url = GATEWAY_USER_URL
+    else:
+        token = await asyncio.to_thread(_gateway_token)
+        url = GATEWAY_URL
     client = MultiServerMCPClient(
         {
             "gateway": {
-                "url": GATEWAY_URL,
+                "url": url,
                 "transport": "streamable_http",
-                "headers": {"Authorization": f"Bearer {token}"},
+                "headers": {"Authorization": f"Bearer {token}", **_run_headers()},
             }
         }
     )
     return await client.get_tools()
+
+
+async def _tools_for(tool_keys) -> list:
+    """The published tools these workflow.json keys need, from whichever Gateway(s)
+    hold them: a person tool is never listed with the machine client, nor the
+    reverse."""
+    keys = list(tool_keys)
+    out: list = []
+    if any(k not in PERSON_TOOLS for k in keys):
+        out += await _gateway_tools()
+    if any(k in PERSON_TOOLS for k in keys):
+        out += await _gateway_tools(as_person=True)
+    return out
 
 
 # How much evidence one tool call may contribute, in characters. Generous by default
@@ -352,6 +423,8 @@ def _clip(s: str, limit: int) -> str:
 # as opposed to a plain outage — so the UI can show "denied by policy".
 _DENIED_MARKERS = ("denied", "forbidden", "not authorized", "unauthorized",
                    "accessdenied", "policy")
+#: How an interceptor the Builder generated words a refusal (its _refuse()).
+_INTERCEPTOR_MARKER = "refused by interceptor"
 
 
 def _tool_arguments(tool_key: str, query: str) -> dict:
@@ -467,7 +540,9 @@ async def _query_tool_impl(tool_key: str, query: str,
             f"the `tool` binding from the agents that use it in workflow.json.")
 
     try:
-        tools = await asyncio.wait_for(_gateway_tools(), timeout=MCP_TIMEOUT)
+        tools = await asyncio.wait_for(_tools_for([tool_key]), timeout=MCP_TIMEOUT)
+    except ToolUnavailable:
+        raise
     except Exception as e:
         raise ToolUnavailable(
             f"Could not list tools on the Gateway while calling '{tool_key}': "
@@ -507,10 +582,26 @@ async def _invoke(tool, args: dict):
     try:
         return await asyncio.wait_for(tool.ainvoke(args), timeout=MCP_TIMEOUT)
     except Exception as e:
+        # The Gateway's request interceptor answered instead of the tool (the code
+        # the Builder generates says "Refused by interceptor: <reason>").
+        text = _error_text(e)
+        # Each person's own account (auth "user"), not connected yet: the person
+        # Gateway answers with where to connect it (URL elicitation, -32042). Checked
+        # first: the words in that answer ("authorization") would read as a denial.
+        url = person.consent_url(text)
+        if url or "-32042" in text:
+            raise ToolNeedsConsent(
+                f"Connect your account for '{tool.name.split('___')[0]}' first, then run this step again: {url}",
+                url=url, tool=tool.name.split("___")[0]) from e
+        at = text.lower().find(_INTERCEPTOR_MARKER)
+        if at >= 0:
+            reason = text[at + len(_INTERCEPTOR_MARKER):].strip(" :") or "no reason given"
+            raise ToolDenied(f"Tool '{tool.name}' was refused by the Gateway's request interceptor: "
+                             f"{reason[:300]}", by="interceptor") from e
         # A Cedar DENY (ENFORCE mode) surfaces as an authorization error from the
         # Gateway — distinguish it from an outage so the operator knows the policy
         # is working as configured rather than something being broken.
-        if any(k in str(e).lower() for k in _DENIED_MARKERS):
+        if any(k in text.lower() for k in _DENIED_MARKERS):
             raise ToolDenied(
                 f"Tool '{tool.name}' was denied by the Cedar policy engine for this call "
                 f"(arguments: {sorted(args)}). Widen the permit in the workflow.json `tools` "
@@ -527,7 +618,9 @@ async def published_for(tool_keys: list[str]) -> dict[str, list]:
     if not GATEWAY_URL:
         raise ToolUnavailable("The agent's tools need a Gateway, and GATEWAY_URL is empty.")
     try:
-        tools = await asyncio.wait_for(_gateway_tools(), timeout=MCP_TIMEOUT)
+        tools = await asyncio.wait_for(_tools_for(tool_keys), timeout=MCP_TIMEOUT)
+    except ToolUnavailable:
+        raise
     except Exception as e:
         raise ToolUnavailable(f"Could not list tools on the Gateway: {type(e).__name__}: {e}") from e
     out: dict[str, list] = {}

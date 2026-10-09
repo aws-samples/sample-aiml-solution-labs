@@ -143,6 +143,10 @@ resource "aws_dynamodb_table" "builds" {
   count        = local.builder_enabled ? 1 : 0
   name         = "${var.agent_name}_builds"
   billing_mode = "PAY_PER_REQUEST"
+  # Every build, its versions, shares and the console's audit log live here, so no
+  # account clean-up tool or stray DeleteTable may take it: set it false on purpose
+  # before destroying the console. Mirrors the CDK BuildsTable.
+  deletion_protection_enabled = true
   point_in_time_recovery {
     enabled = true
   }
@@ -518,6 +522,25 @@ resource "aws_iam_role_policy" "bff_builder" {
         Effect   = "Allow"
         Action   = ["logs:GetLogEvents"]
         Resource = "${aws_cloudwatch_log_group.deploy[0].arn}:*"
+      },
+      # AWS Agent Registry (bff/registry.py): list registries, find approved records, and
+      # (an admin) publish a build or skill for approval / deprecate it. Records only: the
+      # console never creates or deletes a registry. Mirrors cdk/lib/builder-plane.ts.
+      {
+        Sid      = "AgentRegistryList"
+        Effect   = "Allow"
+        Action   = ["agent-registry:ListRegistries"]
+        Resource = "*"
+      },
+      {
+        Sid    = "AgentRegistryRecords"
+        Effect = "Allow"
+        Action = ["agent-registry:SearchDiscoverableRegistryRecords", "agent-registry:ListDiscoverableRegistryRecords",
+          "agent-registry:GetDiscoverableRegistryRecord", "agent-registry:GetRegistry",
+          "agent-registry:CreateRegistryRecord", "agent-registry:UpdateRegistryRecord",
+          "agent-registry:GetRegistryRecord", "agent-registry:SubmitRegistryRecordForApproval",
+        "agent-registry:UpdateRegistryRecordStatus", "agent-registry:TagResource"]
+        Resource = "arn:aws:agent-registry:${var.region}:${local.account_id}:registry/*"
       },
       {
         Sid      = "BuildSecrets"

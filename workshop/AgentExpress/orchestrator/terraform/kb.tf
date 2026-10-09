@@ -7,7 +7,7 @@
 #
 # An agent bound to the `kb` tool retrieves from a Bedrock Knowledge Base backed by
 # S3 Vectors (serverless, no OCU floor). Retrieval is exposed as a tool through the
-# same JWT-authed AgentCore Gateway (Cognito or Auth0 — see identity.tf) via a Lambda
+# same JWT-authed AgentCore Gateway (whichever idp — see identity.tf) via a Lambda
 # target. All declarative: no vector-index bootstrap script, because the S3 Vectors
 # index is a native resource.
 

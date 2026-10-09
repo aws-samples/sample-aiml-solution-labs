@@ -29,8 +29,13 @@ from boto3.dynamodb.conditions import Key
 #: kind -> (the workflow map it goes in, the keys.json block its definition follows)
 KINDS = {"tool": ("tools", "tool"), "guardrail": ("guardrails", "guardrail"),
          "memory": ("memories", "memory"), "evaluator": ("evaluators", "evaluator"),
-         "identity": ("identities", "identity"), "policy": ("policies", "policy")}
+         "identity": ("identities", "identity"), "policy": ("policies", "policy"),
+         "skill": ("skills", "skill")}
 MAP_KIND = {m: k for k, (m, _) in KINDS.items()}
+#: Kinds a build takes a COPY of, never a live {"library": id} link: a Gateway
+#: interceptor (orchestrator.interceptors.<point>, with its files) is one per build.
+COPY_KINDS = ("interceptor",)
+ALL_KINDS = (*KINDS, *COPY_KINDS)
 ID_RE = re.compile(r"^[0-9a-f]{8}$")
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,31}$")
 LIMIT = 300
@@ -92,8 +97,8 @@ def get(item_id: str, who) -> dict:
 def list_items(who, kind: str = "") -> list[dict]:
     """The caller's own items and those shared with them, of one kind or all."""
     table, BuildError = _t()
-    if kind and kind not in KINDS:
-        raise BuildError(400, f"kind is one of: {', '.join(KINDS)}")
+    if kind and kind not in ALL_KINDS:
+        raise BuildError(400, f"kind is one of: {', '.join(ALL_KINDS)}")
     _migrate_policies(who)
     ids, kw = [], {"KeyConditionExpression": Key("pk").eq(f"USER#{who}") & Key("sk").begins_with("LIB#")}
     while True:
@@ -116,13 +121,15 @@ def _check(kind: str, name, definition, files) -> tuple[str, dict]:
     import cedar
     import validate_build
     _, BuildError = _t()
-    if kind not in KINDS:
-        raise BuildError(400, f"kind is one of: {', '.join(KINDS)}")
+    if kind not in ALL_KINDS:
+        raise BuildError(400, f"kind is one of: {', '.join(ALL_KINDS)}")
     name = str(name or "")
     if not NAME_RE.match(name):
         raise BuildError(400, "a name is a letter, then letters and digits (32 at most)")
     if not isinstance(definition, dict) or "library" in definition:
         raise BuildError(400, "definition is the entry itself: an object")
+    if kind == "interceptor":
+        return name, _check_interceptor(definition, files, BuildError)
     block = KINDS[kind][1]
     problems: list = []
     validate_build._check_entry(block, definition, KINDS[kind][0], {"kind": "library"}, problems)
@@ -131,10 +138,30 @@ def _check(kind: str, name, definition, files) -> tuple[str, dict]:
         errors += [{"path": "statement", "message": m} for m in cedar.problems(definition.get("statement"), None)]
     if errors:
         raise BuildError(400, f"{errors[0]['path']}: {errors[0]['message']}")
-    if files is not None and (kind != "tool" or not isinstance(files, dict) or not all(
+    if files is not None and (kind not in ("tool", "interceptor") or not isinstance(files, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in files.items())):
         raise BuildError(400, "files are a code tool's {filename: text}")
     return name, definition
+
+
+def _check_interceptor(definition: dict, files, BuildError) -> dict:
+    """{"point": "request" | "response", ...orchestrator.interceptors.<point>}, checked
+    with the build's own validator; written here, it brings its files."""
+    import validate_build
+    point = definition.get("point")
+    if point not in ("request", "response"):
+        raise BuildError(400, 'point: "request" or "response"')
+    ic = {k: v for k, v in definition.items() if k != "point"}
+    problems: list = []
+    validate_build._check_interceptors({"interceptors": {point: ic}}, {"t": {}}, {},
+                                       lambda sev, where, path, msg: problems.append((sev, path, msg)))
+    errors = [p for p in problems if p[0] == "error"]
+    if errors:
+        raise BuildError(400, f"{errors[0][1]}: {errors[0][2]}")
+    if "code" in ic and not (isinstance(files, dict) and isinstance(files.get("handler.py"), str)
+                             and all(isinstance(k, str) and isinstance(v, str) for k, v in files.items())):
+        raise BuildError(400, "an interceptor written here brings its files, with handler.py")
+    return definition
 
 
 def create(who, body: dict) -> dict:

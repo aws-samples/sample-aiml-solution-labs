@@ -11,13 +11,15 @@ How a turn runs:
   reply, and hands the turn to a background invocation of this function (the model can
   take longer than API Gateway's 30 seconds). The page polls `conversation()`.
 * `run_turn()` asks the model, which changes the build only through two tools:
-  `apply_changes` (targeted edits: set or update one agent, tool, block, or the steps)
-  and `undo_last_change`. An edit is applied to the LATEST draft, re-read at that
-  moment, so a manual edit made while the model was thinking is kept. The result is
-  checked by validate_build — the Build view's own rules — and errors go back to the
-  model to fix, up to MAX_FIX_ROUNDS. An error on a value only the user can give (an
-  endpoint, an ARN, a key) is reported as "needs your input" instead, and the draft is
-  saved with it: the deploy route refuses the build until it is filled in.
+  `apply_changes` (targeted edits: set or update one agent, tool, block, or the steps;
+  an interceptor; an item imported from the organization's Agent Registry) and
+  `undo_last_change`. A third, `search_registry`, only reads the registry. An edit is
+  applied to the LATEST draft, re-read at that moment, so a manual edit made while the
+  model was thinking is kept. The result is checked by validate_build — the Build
+  view's own rules — and errors go back to the model to fix, up to MAX_FIX_ROUNDS. An
+  error on a value only the user can give (an endpoint, an ARN, a key) is reported as
+  "needs your input" instead, and the draft is saved with it: the deploy route refuses
+  the build until it is filled in.
 * The reply streams (ConverseStream): the text written so far and a phase (thinking,
   writing, applying, checking) are saved into the pending turn every FLUSH_S, so the
   page's poll shows it growing. Lambda's Python runtime cannot stream a response, and a
@@ -38,6 +40,7 @@ import re
 import secrets
 import time
 
+import attachments as _att
 import boto3
 import buildstore
 import validate_build
@@ -133,9 +136,15 @@ _bedrock = boto3.client("bedrock-runtime", region_name=REGION,
 
 AGENT_ID_RE = validate_build.AGENT_ID_RE
 TOOL_KEY_RE = validate_build.TOOL_KEY_RE
-BLOCKS = ("orchestrator", "ui", "guardrail", "authorization",
-          # The build's named maps: an agent names one of each by key (see _OPS_DOC).
-          "guardrails", "memories", "evaluators", "identities", "policies")
+#: The build's named maps: an agent names one of each by key (see _OPS_DOC). In
+#: set_block, an entry set to null is removed from its map.
+NAMED_MAPS = ("guardrails", "memories", "evaluators", "identities", "policies", "skills")
+BLOCKS = ("orchestrator", "ui", "guardrail", "authorization", *NAMED_MAPS)
+#: What a registry record becomes in the build (bff/registry.py to_entry), by its kind.
+REGISTRY_MAPS = {"tool": "tools", "agent": "agents", "skill": "skills"}
+#: Search results the model sees at once: enough to choose from, small enough to read.
+REGISTRY_RESULTS = 15
+RECORD_ID_RE = re.compile(r"^[A-Za-z0-9]{1,64}$")
 
 STARTERS = [
     {"title": "Claims triage",
@@ -223,8 +232,9 @@ it will deploy. If asked about anything else, decline in one sentence and steer 
 Files the user attaches (specs, sample data, schemas, API documents, screenshots) are
 context for that work, never off topic: read them, answer questions about what they say,
 and use them in the design (fields, sample rows, endpoints, rules).
-You cannot deploy, run or delete anything: the user presses Deploy themselves. Say so if
-asked.
+You cannot deploy, run, delete or publish anything: the user presses Deploy themselves, and
+an admin publishes with "Publish to registry" (on the Deployment panel for the deployed
+build, on the Skills tab for a skill). Say so if asked.
 
 # How to run the conversation
 1. DRAFT FIRST. As soon as you know roughly what the user wants (usually after their first
@@ -283,6 +293,47 @@ asked.
    Never write a credential into code. Add events.json: 2-4 test
    events [{"name", "tool", "event"}], so the user can run it in the sandbox. Say that
    it is checked (syntax, lint, security) and run in a sandbox from the tool's panel.
+5a2. CEDAR ACTION NAMES. A tool's Cedar action is "<key>___<its MCP tool name>". Two
+   tool types fix that name: a websearch tool's one tool is "WebSearch" (its argument is
+   `query`), a kb tool's is "retrieve". So a policy on web search key K names
+   AgentCore::Action::"K___WebSearch", never "K___search". Prefer attaching a policy
+   written for AgentCore::Action::"{{tool}}" to the tool (`policies`); for a shared
+   (library) tool, which you never edit, write it in orchestrator.policy.custom.
+5a3. DENIED TOPICS. Bedrock matches a denied topic on its definition, so define it
+   narrowly (advice to one person about their own situation, not the subject in general),
+   in one sentence of at most 200 characters, with at most 5 examples of at most 100.
+5c. SKILLS. A skill is know-how an agent opens only when a task needs it: a procedure, a
+   policy, a style guide. Write it into `skills` with set_block: {"<name>": {"description":
+   when to use it (the agent decides from this), "instructions": the steps (SKILL.md's body),
+   "files": optional {"<name>.md|.txt|.json|.csv|.yaml|.yml": text}}} (at most 20 files,
+   200 KB in all), then add its name to the agent's `skills` list with update_agent. An
+   agent with tools and toolMode "model" opens a skill when it needs it; otherwise every
+   skill it lists is given in full. Skills hold text only: they never run code.
+5d. INTERCEPTORS. To check or change EVERY tool call through the Gateway, for all agents,
+   use set_interceptor rather than a tool. request (before each call) templates: audit {},
+   blockTools {tools: ["<key>" or "<key>___<tool>"], agents?: [ids]}, argumentGuard
+   {denyPatterns: [regex], maxArgumentChars}, injectContext {arguments: {<arg>: session|
+   agent|user}}, custom {}. response (after each answer): audit {}, redactPii {types:
+   [email, phone, ssn, card], mask}, hideTools {tools}, capResult {maxChars}, custom {}.
+   The server writes the code from the templates checked; for "custom", fill in its
+   function afterwards with set_tool_code on interceptor-<point> (read the generated
+   handler.py in the build first, and keep the rest of it). A user's own deployed function
+   is `lambdaArn`. Interceptors need the build to have at least one tool.
+5e. THE ORGANIZATION'S AGENT REGISTRY. When the user asks for something "from the
+   registry", or for a tool, agent or skill their organization may already have approved,
+   call search_registry first, then add the one they mean with import_from_registry and
+   its recordId. Several matches, or several registries: list them and ask which. Unless
+   the user said, ask once whether to keep it in sync with the registry (newest approved
+   version on open and before each deploy) or import it once; if you go ahead without an
+   answer, import it once and list that under "Defaults used". An imported agent is a
+   remote agent: put it in a stage (set_steps) where the user wants it, or the build will
+   not deploy. An imported MCP tool comes without auth: ask how it signs in if it needs
+   to, and bind it to the agents that use it. Never write a registry item's entry by hand,
+   and never claim to have published: publishing is an admin's button.
+   For an item ALREADY in the build (its `registry` names the record), check for a newer
+   version and take it with update_from_registry, not search_registry: it reads the record
+   itself and answers "already the newest approved version" when there is none, while
+   search can lag a minute or two behind a new approval.
 6. EVERY CHANGE GOES THROUGH `apply_changes`. A large first draft (more than about five
    agents, or tools with code) goes in several calls: a few agents with their prompts per
    call, then the steps, then the rest, so no single reply runs out of room. Make the
@@ -343,6 +394,12 @@ asked.
   EARLIER step (not a parallel peer) and should be an image agent. Its `model` must read
   images (e.g. a Claude, Amazon Nova Pro/Lite or Llama 3.2 Vision model); say which you
   chose. Give it a schema for what it reports, e.g. a score and comments.
+- An agent that must read files the USER brings when starting a run (a contract, a
+  brief, a spreadsheet, a photo) gets `attachments: true`: Start run then offers Attach
+  files (up to 5), and its model receives them with its text. If the files live in S3,
+  list the bucket or bucket/folder in `orchestrator.attachments.s3` so a request may
+  name them as s3:// paths. Not on an a2a agent. Its model must read documents (Claude,
+  Amazon Nova).
 - `framework` (plain, strands, langgraph...) only changes how the agent's code is
   written; leave it at the default unless the user asks.
 - Use only the keys below, only where they apply. A key that does not apply is rejected.
@@ -366,22 +423,41 @@ _OPS_DOC = (
     "- remove_agent {id}: delete it, and take it out of its stage.\n"
     "- rename_agent {id, to}: change its id everywhere it is referenced.\n"
     "- set_tool {key, tool} / update_tool {key, set?, unset?} / remove_tool {key}.\n"
-    "- set_tool_code {key, files}: the files of a tool whose `code` is written in the build "
+    "- set_tool_code {key, files}: the files of a tool whose `code` is written in the build, "
+    "or of an interceptor written in it (key interceptor-request or interceptor-response) "
     "(`files` maps handler.py, requirements.txt, other *.py and events.json to their text; a "
     "file you leave out is kept, a file set to null is removed).\n"
     "- set_steps {steps}: replace the ordered stage list.\n"
     "- set_block {name, value}: merge `value` into the orchestrator, ui, guardrail or "
     "authorization block, or into one of the build's named maps: guardrails, memories "
     "({name: {strategies, expiryDays, scope}}), evaluators ({name: {instructions}}), "
-    "identities ({name: {type: oauth2|apikey, clientId, scopes, tokenUrl}}) and policies "
-    "({name: {statement}}, written for AgentCore::Action::\"{{tool}}\"). Agents then use them "
-    "by name: agentcore.guardrails.use, agentcore.memory.use, Custom.<name> in "
-    "agentcore.evaluations.evaluators, agentcore.identity.outbound; a tool attaches policies "
-    "with `policies` and signs in with `identity`. An entry that is {\"library\": \"<id>\"} is "
+    "identities ({name: {type: oauth2|apikey, clientId, scopes, tokenUrl}}), policies "
+    "({name: {statement}}, written for AgentCore::Action::\"{{tool}}\") and skills ({name: "
+    "{description, instructions, files?}}). In a named map, an entry set to null is removed. "
+    "Agents then use them by name: agentcore.guardrails.use, agentcore.memory.use, "
+    "Custom.<name> in agentcore.evaluations.evaluators, agentcore.identity.outbound, the "
+    "agent's `skills` list; a tool attaches policies with `policies` and signs in with "
+    "`identity`. An entry that is {\"library\": \"<id>\"} is "
     "a shared item the user keeps in their library: use it by its key, never edit it. "
     "Long-term memory is ALWAYS a named entry in `memories` that the agent uses with "
     "agentcore.memory.use — never agentcore.memory.longTerm on the agent: that is the form "
     "the Memory tab and the agent's Memory setting show the user.\n"
+    "- set_interceptor {point, templates?, lambdaArn?, passRequestHeaders?, code?, "
+    "regenerate?}: turn on or change the Gateway interceptor at `point` (request: before "
+    "each tool call; response: after each answer). With `templates` ({templateName: "
+    "settings}) the server writes its code from them, as the Interceptors tab does; with "
+    "`lambdaArn` it runs the user's own function instead. Code the user edited by hand is "
+    "kept unless `regenerate` is true. `code` is its grants and limits (default {}).\n"
+    "- remove_interceptor {point}: turn it off, and drop its code.\n"
+    "- import_from_registry {recordId, registry?, key?, sync?}: add an approved record from "
+    "the organization's AWS Agent Registry, found with `search_registry`: an MCP server "
+    "becomes a tool, an agent card a remote (a2a) agent, a skill a skill. The server builds "
+    "the entry from the record; never write it yourself. `sync` true: kept at the "
+    "registry's newest approved version (on open and before each deploy); false (the "
+    "default): imported once. `key` only to take a second copy under another name.\n"
+    "- update_from_registry {key, map?}: bring an item that came from a registry to its "
+    "newest approved version (its endpoint, tools, card or instructions; the rest stays).\n"
+    "- set_registry_sync {key, map?, sync}: keep such an item in sync, or stop.\n"
     "- set_name {name}: rename the build (1-64 characters).")
 
 TOOLS = {"tools": [
@@ -422,6 +498,22 @@ TOOLS = {"tools": [
         "name": "undo_last_change",
         "description": "Put the build back the way it was before your last applied change.",
         "inputSchema": {"json": {"type": "object", "properties": {}}}}},
+    {"toolSpec": {
+        "name": "search_registry",
+        "description": "Find what the organization approved in its AWS Agent Registry: MCP servers "
+                       "(tools), agents and skills. Read only. Each result says what it would "
+                       "become in the build, or why it cannot be added. Add one with the "
+                       "import_from_registry edit and the recordId given here.",
+        "inputSchema": {"json": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "What to find, in words or keywords. Empty: browse the newest."},
+                "kind": {"type": "string", "enum": ["tool", "agent", "skill"],
+                         "description": "Only this kind."},
+                "registry": {"type": "string",
+                             "description": "The registry's name or id. Leave it out when there is "
+                                            "only one; the answer lists them when there are several."}}}}}},
 ]}
 
 
@@ -490,6 +582,183 @@ def _tool_list(v) -> list:
     return validate_build.tools_of(v)
 
 
+# --- the organization's AWS Agent Registry (bff/registry.py) ----------------------------
+
+def _registry_op(fn, *args):
+    """A registry call; its refusal (no access, no such registry, a throttle) as an OpError."""
+    import builds
+    try:
+        return builds.registry_call(fn, *args)
+    except builds.BuildError as e:
+        raise OpError(str(e)) from None
+
+
+def resolve_registry(value) -> dict:
+    """The registry named (by name or id), or the only one there is."""
+    import registry
+    regs = _registry_op(registry.list_registries)
+    names = ", ".join(r["name"] for r in regs) or "none"
+    v = str(value or "").strip()
+    if v:
+        hit = [r for r in regs if r["id"] == v or r["name"].lower() == v.lower()]
+        if not hit:
+            raise OpError(f"no Agent Registry {v!r} in this account and region; there are: {names}")
+        return hit[0]
+    if not regs:
+        raise OpError("there is no Agent Registry in this account and region: the user creates one "
+                      "in the AgentCore console (Registry) first")
+    if len(regs) > 1:
+        raise OpError(f"there are several registries, so ask the user which: {names}")
+    return regs[0]
+
+
+def search_registry(args: dict) -> dict:
+    """The search_registry tool: approved records, as the build would take them."""
+    import registry
+    args = args if isinstance(args, dict) else {}
+    kind = str(args.get("kind") or "")
+    if kind and kind not in REGISTRY_MAPS:
+        return {"status": "error", "error": "kind: tool, agent or skill"}
+    try:
+        reg = resolve_registry(args.get("registry"))
+        hits = _registry_op(registry.search, reg["id"], str(args.get("query") or ""), kind)
+    except OpError as e:
+        return {"status": "error", "error": str(e)}
+    records = []
+    for h in hits[:REGISTRY_RESULTS]:
+        r = {"recordId": h.get("recordId"), "name": h.get("name"), "type": h.get("type"),
+             "version": h.get("version"), "description": str(h.get("description") or "")[:300]}
+        if h.get("entry"):
+            r["becomes"] = f"{REGISTRY_MAPS[h['kind']]}.{h['key']}"
+            for extra in ("tools", "skills"):
+                if h.get(extra):
+                    r[extra] = [str(x) for x in h[extra]][:20]
+        else:
+            r["cannotAdd"] = h.get("why") or "not something a build can take"
+        records.append(r)
+    return {"status": "ok", "registry": {"id": reg["id"], "name": reg["name"]}, "records": records,
+            **({"more": len(hits) - REGISTRY_RESULTS} if len(hits) > REGISTRY_RESULTS else {})}
+
+
+def _registry_item(wf: dict, op: dict) -> tuple[str, str, dict]:
+    """(map, key, entry) of the item from a registry that an op names."""
+    key = str(op.get("key") or "")
+    m = str(op.get("map") or "")
+    m = REGISTRY_MAPS.get(m, m)
+    maps = [m] if m else list(REGISTRY_MAPS.values())
+    if m and m not in REGISTRY_MAPS.values():
+        raise OpError("`map`: tools, agents or skills")
+    found = [(mm, key, (wf.get(mm) or {})[key]) for mm in maps
+             if isinstance((wf.get(mm) or {}).get(key), dict)
+             and isinstance((wf.get(mm) or {})[key].get("registry"), dict)]
+    if not found:
+        raise OpError(f"the build has no item {key!r} that came from a registry")
+    if len(found) > 1:
+        raise OpError(f"{key!r} is in {' and '.join(f[0] for f in found)}: say which with `map`")
+    return found[0]
+
+
+def _import_from_registry(wf: dict, op: dict) -> tuple[str, str]:
+    """Add the record to the build: (map, key)."""
+    import registry
+    reg = resolve_registry(op.get("registry"))
+    record_id = str(op.get("recordId") or "")
+    if not RECORD_ID_RE.match(record_id):
+        raise OpError("`recordId`: one that search_registry returned")
+    recs = _registry_op(registry._batch, reg["id"], [record_id])
+    if not recs:
+        raise OpError(f"no approved record {record_id!r} in {reg['name']}: search_registry first")
+    mapped = registry.to_entry(recs[0], reg["id"], bool(op.get("sync")))
+    if not mapped.get("entry"):
+        raise OpError(f"{recs[0].get('name') or record_id} cannot be added: {mapped.get('why')}")
+    m = REGISTRY_MAPS[mapped["kind"]]
+    key = str(op.get("key") or mapped["key"])
+    rule = {"agents": AGENT_ID_RE, "tools": TOOL_KEY_RE, "skills": registry.KEY_RE}[m]
+    if not rule.match(key):
+        raise OpError(f"invalid {m[:-1]} key {key!r}")
+    if not isinstance(wf.get(m), dict):
+        wf[m] = {}
+    # In place: apply_ops holds the agents and tools maps for the edits that follow.
+    target = wf[m]
+    if key in target:
+        raise OpError(f"the build already has {m}.{key}: use update_from_registry to bring it to the "
+                      f"newest version, or pass another `key` for a second copy")
+    entry = copy.deepcopy(mapped["entry"])
+    if m == "agents":
+        entry["produces"] = key
+    target[key] = entry
+    return m, key
+
+
+def _update_from_registry(wf: dict, op: dict) -> tuple[str, str, str]:
+    """Bring one item to its newest approved version: (map, key, "from -> to")."""
+    import registry
+    m, key, entry = _registry_item(wf, op)
+    ups = _registry_op(registry.updates, {"workflow": {m: {key: entry}}})
+    if not ups:
+        raise OpError(f"{m}.{key} is already the newest approved version "
+                      f"({entry['registry'].get('version') or 'unknown'})")
+    got, _ = registry.apply({"workflow": {m: {key: entry}}}, ups, only_sync=False)
+    wf[m][key] = got["workflow"][m][key]          # in place, like _import_from_registry
+    return m, key, f"{ups[0]['from']} -> {ups[0]['to']}"
+
+
+def _interceptors(wf: dict) -> dict:
+    orch = wf.get("orchestrator") if isinstance(wf.get("orchestrator"), dict) else {}
+    return dict(orch.get("interceptors")) if isinstance(orch.get("interceptors"), dict) else {}
+
+
+def _set_interceptors(wf: dict, ics: dict) -> None:
+    orch = dict(wf.get("orchestrator")) if isinstance(wf.get("orchestrator"), dict) else {}
+    if ics:
+        orch["interceptors"] = ics
+    else:
+        orch.pop("interceptors", None)
+    wf["orchestrator"] = orch
+
+
+def _set_interceptor(wf: dict, code: dict, op: dict) -> str:
+    """Set one point's interceptor, and its files with it (Interceptors.tsx setInterceptor).
+    A note for the model when code edited by hand was kept, else ""."""
+    import interceptor_code
+    point = str(op.get("point") or "")
+    if point not in interceptor_code.POINTS:
+        raise OpError("`point`: request or response")
+    key = f"interceptor-{point}"
+    ics = _interceptors(wf)
+    cur = ics.get(point) if isinstance(ics.get(point), dict) else {}
+    note = ""
+    if op.get("lambdaArn") is not None:
+        ic = {"lambdaArn": str(op["lambdaArn"])}
+        if "passRequestHeaders" in op:
+            ic["passRequestHeaders"] = bool(op["passRequestHeaders"])
+        code.pop(key, None)
+    else:
+        templates = op["templates"] if "templates" in op else cur.get("templates", {"audit": {}})
+        templates = copy.deepcopy(_obj(templates, "templates"))
+        ic = {k: v for k, v in cur.items() if k != "lambdaArn"}
+        ic["code"] = copy.deepcopy(_obj(op["code"], "code")) if "code" in op else (
+            ic["code"] if isinstance(ic.get("code"), dict) else {})
+        ic["templates"] = templates
+        if "passRequestHeaders" in op:
+            ic["passRequestHeaders"] = bool(op["passRequestHeaders"])
+        elif interceptor_code.needs_headers(point, templates):
+            ic["passRequestHeaders"] = True
+        files = dict(code.get(key) or {})
+        # The code was changed by hand when it is not what its templates generate: kept, as
+        # the tab keeps it, until the user asks to generate it again.
+        edited = ("code" in cur and files.get("handler.py") is not None and files["handler.py"]
+                  != interceptor_code.files(point, cur.get("templates") or {}, wf)["handler.py"])
+        if edited and not op.get("regenerate"):
+            note = (f"{key} handler.py was edited by hand, so it was kept: its templates are saved "
+                    "but do not change it. Pass regenerate: true to write it again from them.")
+        else:
+            code[key] = {**files, **interceptor_code.files(point, templates, wf)}
+    ics[point] = ic
+    _set_interceptors(wf, ics)
+    return note
+
+
 def apply_ops(project: dict, ops: list) -> tuple[dict, dict]:
     """(new project, what changed). Raises OpError on an edit that cannot apply."""
     if not isinstance(ops, list) or not ops:
@@ -506,6 +775,13 @@ def apply_ops(project: dict, ops: list) -> tuple[dict, dict]:
     def touch(kind, key):
         if key not in changed[kind]:
             changed[kind].append(key)
+
+    def touch_item(m, key):
+        """An agent or tool by its key; a skill as its map, like the other named maps."""
+        if m in ("agents", "tools"):
+            touch(m, key)
+        else:
+            touch("blocks", m)
 
     for i, op in enumerate(ops):
         op = _obj(op, f"ops[{i}]")
@@ -586,7 +862,11 @@ def apply_ops(project: dict, ops: list) -> tuple[dict, dict]:
                 changed["removed"].append(key)
             elif kind == "set_tool_code":
                 key = str(op.get("key") or "")
-                if key not in tools or "code" not in (tools.get(key) or {}):
+                if key.startswith("interceptor-"):
+                    if key not in buildstore.code_interceptors(wf):
+                        raise OpError(f"{key!r} is not an interceptor written in the build: "
+                                      "set_interceptor with templates first")
+                elif key not in tools or "code" not in (tools.get(key) or {}):
                     raise OpError(f"tool {key!r} is not written in the build: set its `code` first")
                 files = {**code.get(key, {})}
                 for name, body in _obj(op.get("files"), "files").items():
@@ -609,8 +889,38 @@ def apply_ops(project: dict, ops: list) -> tuple[dict, dict]:
                 if name not in BLOCKS:
                     raise OpError(f"`name` must be one of {', '.join(BLOCKS)}")
                 block = wf.get(name) if isinstance(wf.get(name), dict) else {}
-                wf[name] = {**block, **copy.deepcopy(_obj(op.get("value"), "value"))}
+                merged = {**block, **copy.deepcopy(_obj(op.get("value"), "value"))}
+                if name in NAMED_MAPS:
+                    merged = {k: v for k, v in merged.items() if v is not None}
+                wf[name] = merged
                 touch("blocks", name)
+            elif kind == "set_interceptor":
+                note = _set_interceptor(wf, code, op)
+                if note:
+                    changed.setdefault("notes", []).append(note)
+                touch("blocks", "orchestrator")
+            elif kind == "remove_interceptor":
+                point = str(op.get("point") or "")
+                ics = _interceptors(wf)
+                if point not in ics:
+                    raise OpError(f"there is no {point!r} interceptor to remove")
+                del ics[point]
+                _set_interceptors(wf, ics)
+                code.pop(f"interceptor-{point}", None)
+                touch("blocks", "orchestrator")
+            elif kind == "import_from_registry":
+                m, key = _import_from_registry(wf, op)
+                touch_item(m, key)
+            elif kind == "update_from_registry":
+                m, key, moved = _update_from_registry(wf, op)
+                touch_item(m, key)
+                changed.setdefault("notes", []).append(f"{m}.{key}: {moved}")
+            elif kind == "set_registry_sync":
+                m, key, entry = _registry_item(wf, op)
+                if not isinstance(op.get("sync"), bool):
+                    raise OpError("`sync`: true or false")
+                wf[m][key] = {**entry, "registry": {**entry["registry"], "sync": op["sync"]}}
+                touch_item(m, key)
             elif kind == "set_name":
                 name = str(op.get("name") or "").strip()
                 if not 1 <= len(name) <= buildstore.NAME_MAX:
@@ -647,23 +957,16 @@ def _blocking(errors: list[dict], needs_input: list) -> list[dict]:
 
 # --- attachments: files and S3 objects a message brings as context ------------------------
 
-#: What Converse takes in one message: at most 5 documents of 4.5 MB, images of 3.75 MB.
-ATTACH_MAX = 5
-DOC_MAX_BYTES = 4_500_000
-IMAGE_MAX_BYTES = 3_750_000
-#: File extension -> (kind, Converse format). Text formats Converse has no name for
-#: (JSON, YAML, code...) are sent as plain text.
-ATTACH_FORMATS = {
-    **{e: ("document", e) for e in ("pdf", "csv", "doc", "docx", "xls", "xlsx", "html", "txt", "md")},
-    "htm": ("document", "html"), "markdown": ("document", "md"),
-    **{e: ("document", "txt") for e in ("json", "yaml", "yml", "xml", "tf", "py", "ts", "js", "sql", "log")},
-    "png": ("image", "png"), "jpg": ("image", "jpeg"), "jpeg": ("image", "jpeg"),
-    "gif": ("image", "gif"), "webp": ("image", "webp"),
-}
+#: What Converse takes in one message, and the file types: shared with a run's start
+#: (bff/attachments.py).
+ATTACH_MAX = _att.ATTACH_MAX
+DOC_MAX_BYTES = _att.DOC_MAX_BYTES
+IMAGE_MAX_BYTES = _att.IMAGE_MAX_BYTES
+ATTACH_FORMATS = _att.ATTACH_FORMATS
 #: Buckets (optionally bucket/prefix) a message may name as s3://..., set by the IaC
 #: (designerS3Buckets / designer_s3_buckets). Empty: no S3 paths at all.
 S3_ALLOWED = [p.strip().strip("/") for p in os.environ.get("DESIGNER_S3_BUCKETS", "").split(",") if p.strip()]
-S3_URI_RE = re.compile(r"s3://([a-z0-9][a-z0-9.\-]{1,61}[a-z0-9])(/[^\s\"'<>)]*)?")
+S3_URI_RE = _att.S3_URI_RE
 _s3_any = boto3.client("s3", region_name=REGION)
 
 
@@ -671,23 +974,13 @@ def _attach_prefix(build_id: str) -> str:
     return f"builds/{build_id}/attachments/"
 
 
-def _format_of(name: str):
-    return ATTACH_FORMATS.get(name.rsplit(".", 1)[-1].lower()) if "." in name else None
-
-
 def _check_one(name: str, size: int, where: str) -> dict:
     """{kind, format} for a file a message may attach, or a BuildError naming why not."""
     builds, *_ = _clients()
-    got = _format_of(name)
-    if not got:
-        raise builds.BuildError(400, f"{where}: not a file type the assistant reads "
-                                     f"({', '.join(sorted(ATTACH_FORMATS))})")
-    limit = IMAGE_MAX_BYTES if got[0] == "image" else DOC_MAX_BYTES
-    if size > limit:
-        raise builds.BuildError(400, f"{where} is {size / 1e6:.1f} MB; the most is {limit / 1e6:.2f} MB")
-    if size <= 0:
-        raise builds.BuildError(400, f"{where} is empty")
-    return {"kind": got[0], "format": got[1]}
+    why = _att.problem(name, size, where)
+    if why:
+        raise builds.BuildError(400, why)
+    return _att.kind_of(name)
 
 
 def attachment_upload(build_id: str, owner, name: str) -> dict:
@@ -710,14 +1003,7 @@ def _s3_allowed(bucket: str, key: str) -> bool:
     """Whether s3://bucket/key is inside an allowed bucket or bucket/prefix. A prefix is a
     FOLDER: `bucket/reports` allows `reports/...` and `reports` itself, never
     `reports-private/...` — a plain startswith let a sibling folder through."""
-    for p in S3_ALLOWED:
-        if p == bucket:
-            return True
-        if p.startswith(bucket + "/"):
-            folder = p[len(bucket) + 1:].rstrip("/")
-            if key == folder or key.startswith(folder + "/"):
-                return True
-    return False
+    return _att.allowed(S3_ALLOWED, bucket, key)
 
 
 def resolve_attachments(build_id: str, uploads, message: str) -> list[dict]:
@@ -768,16 +1054,7 @@ def resolve_attachments(build_id: str, uploads, message: str) -> list[dict]:
     return out
 
 
-def _doc_name(name: str, taken: set) -> str:
-    """A document name Converse accepts: letters, digits, spaces, hyphens, parentheses and
-    brackets, no runs of spaces, unique in the message."""
-    stem = name.rsplit(".", 1)[0]
-    clean = " ".join(re.sub(r"[^A-Za-z0-9\s\-()\[\]]", " ", stem).split())[:180] or "file"
-    out, n = clean, 2
-    while out.lower() in taken:
-        out, n = f"{clean} {n}", n + 1
-    taken.add(out.lower())
-    return out
+_doc_name = _att.doc_name
 
 
 def _attachment_blocks(items: list[dict]) -> list[dict]:
@@ -1142,16 +1419,46 @@ def _model_problems(workflow: dict) -> list[dict]:
         return []
 
 
-def _context(project: dict) -> str:
+def _resolved(project: dict, who, build_owner: str = "") -> dict:
+    """The project with its shared (library) items as they are now — what the Build view
+    validates and the deploy ships. A draft keeps them as {"library": "<id>"}, which the
+    validator calls "could not be loaded": checking the draft itself rejected every edit
+    to a build with a library tool, and the designer then removed or re-created it."""
+    import library
+    return library.resolve(project, library.refs_for(project, who, build_owner))
+
+
+def _library_offer(who) -> list[dict]:
+    """The caller's library items (their own and those shared with them), for the
+    designer to reuse rather than write again. Never raises: advice, like the models."""
+    try:
+        import library
+        return [{"id": i["id"], "kind": i["kind"], "name": i["name"],
+                 **({"type": (i.get("definition") or {}).get("type")} if i["kind"] == "tool" else {}),
+                 "description": str(i.get("description") or (i.get("definition") or {}).get("description")
+                                    or "")[:200]}
+                for i in library.list_items(who)
+                if i.get("kind") in ("tool", "guardrail", "memory", "evaluator", "identity", "policy", "skill")][:60]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _context(project: dict, who=None, build_owner: str = "") -> str:
     view = {"name": project.get("name"), "workflow": project.get("workflow") or {},
             "prompts": project.get("prompts") or {},
             **({"toolCode": project["toolCode"]} if project.get("toolCode") else {})}
     # Shared items the build uses, as they are now (the caller reached this build, so its
     # items too: bff/library.py refs_for gives a collaborator the owner's).
     import library
-    refs = {i: library._public(it) for i in library.ids_in(project) if (it := library._get(i))}
-    resolved = library.resolve(project, refs).get("workflow") or {}
+    if who is None:
+        refs = {i: library._public(it) for i in library.ids_in(project) if (it := library._get(i))}
+        resolved = library.resolve(project, refs).get("workflow") or {}
+    else:
+        resolved = _resolved(project, who, build_owner).get("workflow") or {}
     problems = validate_build.validate(resolved) + _model_problems(resolved)
+    used = {e["library"]: (m, k) for m in validate_build.SHARED_WHAT
+            for k, e in ((project.get("workflow") or {}).get(m) or {}).items()
+            if isinstance(e, dict) and isinstance(e.get("library"), str)}
     lines = [
         ("The build as it is right now (the user may have changed it by hand since your "
          "last reply — this is the truth):"),
@@ -1160,6 +1467,20 @@ def _context(project: dict) -> str:
         + (json.dumps([{"severity": i["severity"], "path": i["path"], "message": i["message"]}
                        for i in problems[:40]], ensure_ascii=False) if problems else "none"),
     ]
+    if used:
+        shown = {f"{m}.{k}": (resolved.get(m) or {}).get(k) for m, k in used.values()}
+        lines.append("The shared library items above, as they are now (the build keeps each as "
+                     '{"library": "<id>"}; it is live, so never edit, re-create or remove it unless '
+                     "the user asks; agents use it by its key): "
+                     + json.dumps(shown, ensure_ascii=False)[:6000])
+    offer = [i for i in _library_offer(who) if i["id"] not in used] if who is not None else []
+    if offer:
+        lines.append("The user's library (items they made or that were shared with them), not in "
+                     "this build yet. When the user asks for one of these, or for something one of "
+                     "these already does, reuse it instead of writing a new one: set_tool with "
+                     '`tool`: {"library": "<id>"} (or set_block on guardrails, memories, evaluators, '
+                     "identities, policies or skills with {\"<key>\": {\"library\": \"<id>\"}}), then "
+                     "use it by that key: " + json.dumps(offer, ensure_ascii=False))
     ids = _model_ids()
     if ids:
         lines.append("Models this account can use: " + ", ".join(ids))
@@ -1296,9 +1617,15 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
         return {"status": "error", "error": str(e), "applied": False,
                 "hint": "Nothing from this call was applied, not even its other edits. Fix that "
                         "edit and call apply_changes again with ALL of the ops."}, None
-    errors = validate_build.errors(new["workflow"]) + [
+    # Judged as the Build view and the deploy judge it: with its library items loaded.
+    try:
+        build_owner = str(builds._meta(build_id, owner).get("owner") or "")
+    except builds.BuildError:
+        build_owner = ""
+    checked = _resolved(new, owner, build_owner)
+    errors = validate_build.errors(checked["workflow"]) + [
         {"severity": "error", "path": m.split(" ", 1)[0], "message": m.split(" ", 1)[1] if " " in m else m}
-        for m in builds.code_errors(new)]
+        for m in builds.code_errors(checked)]
     blocking = _blocking(errors, needs)
     if blocking and fix_rounds[0] < MAX_FIX_ROUNDS:
         fix_rounds[0] += 1
@@ -1366,7 +1693,7 @@ def run_turn(event: dict) -> dict:
     # The caller, with their email: someone a build is shared with reaches it by that.
     build_id, owner = str(event.get("build") or ""), builds.Who(str(event.get("owner") or ""), email)
     try:
-        builds._meta(build_id, owner)
+        meta = builds._meta(build_id, owner)
     except builds.BuildError:
         return {"ok": False}
     doc = _load(build_id)
@@ -1394,7 +1721,8 @@ def run_turn(event: dict) -> dict:
     messages.append({"role": "user", "content": [
         *([{"text": "Summary of the earlier part of this conversation (older turns are not "
                     "repeated):\n" + earlier}] if earlier else []),
-        {"text": _context(builds._draft(build_id))}, {"text": user_text},
+        {"text": _context(builds._draft(build_id), owner, str(meta.get("owner") or ""))},
+        {"text": user_text},
         # A continuation: this same turn ran out of one invocation's time. The draft above
         # already has what it applied, so say what that was and ask for the rest.
         *([{"text": "You are continuing YOUR OWN reply to the message above: the previous "
@@ -1469,6 +1797,9 @@ def run_turn(event: dict) -> dict:
                                             fix_rounds)
                 elif use.get("name") == "undo_last_change":
                     result, record = _undo(build_id, owner, email, doc)
+                elif use.get("name") == "search_registry":
+                    live.phase("checking")
+                    result, record = search_registry(use.get("input") or {}), None
                 else:
                     result, record = {"status": "error", "error": "unknown tool"}, None
                 if record:

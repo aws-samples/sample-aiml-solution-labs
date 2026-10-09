@@ -23,6 +23,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { ApiError, api } from "./api";
 import { authConfig, authEnabled, initAuth, logout } from "./auth";
+import { completeConnection } from "./connect";
 import { requestTitle } from "./lib/request";
 import { isSettled, statusLabel, statusType } from "./lib/status";
 import {
@@ -40,6 +41,7 @@ import { Assistant } from "./views/Assistant";
 import { HitlGate, type Decision, type GroupDecision } from "./views/HitlGate";
 import { Observability } from "./views/Observability";
 import { RunDetail } from "./views/RunDetail";
+import { TriggersPage } from "./views/TriggersPage";
 import { RunsTable } from "./views/RunsTable";
 import { StartRunModal, type RunTarget } from "./views/StartRunModal";
 import { StepPanel } from "./views/StepPanel";
@@ -55,14 +57,22 @@ const Accounts = lazy(() => import("./builder/Accounts").then((m) => ({ default:
 const Admin = lazy(() => import("./builder/Admin").then((m) => ({ default: m.Admin })));
 const LibraryPage = lazy(() => import("./builder/Library").then((m) => ({ default: m.LibraryPage })));
 /** The library kinds, in the order the navigation lists them (builder/Library.tsx KINDS). */
-const LIBRARY_KINDS = [["tool", "Tools"], ["identity", "Identity"], ["memory", "Memory"], ["evaluator", "Evals"],
-  ["policy", "Policies"], ["guardrail", "Guardrails"]] as const;
+/** In the order of the Builder's tabs (builder/Builder.tsx TAB_ORDER). */
+/** The library, in the Builder's tab order (builder/Builder.tsx TAB_ORDER), grouped by
+ *  where each kind takes effect. */
+const LIBRARY_KINDS = [["tool", "Tools"], ["skill", "Skills"], ["memory", "Memory"], ["guardrail", "Guardrails"],
+  ["identity", "Identity"], ["policy", "Policies"], ["interceptor", "Interceptors"], ["evaluator", "Evals"]] as const;
+const LIBRARY_GROUPS: [string, readonly (typeof LIBRARY_KINDS)[number][0][]][] = [
+  ["Agent library", ["tool", "skill", "memory", "guardrail"]],
+  ["Gateway and access library", ["identity", "policy", "interceptor"]],
+  ["Quality library", ["evaluator"]],
+];
 type LibKind = (typeof LIBRARY_KINDS)[number][0];
 
 /** Where this deployment runs, from auth-config.js (both IaC paths write it). A build
  *  deployed into another region showed "us-east-1" here when this was a constant. */
 const REGION = authConfig().region || "us-east-1";
-type View = "runs" | "observability" | "build" | "activity" | "accounts" | "admin" | "library";
+type View = "runs" | "observability" | "build" | "activity" | "accounts" | "admin" | "library" | "triggers";
 
 const EMPTY_WORKFLOW: Workflow = { agents: {}, steps: [] };
 const BROWSER_STORE = localStore();
@@ -102,6 +112,14 @@ export default function App() {
   const [buildRequest, setBuildRequest] = useState<BuildRequest | null>(null);
   const [currentBuild, setCurrentBuild] = useState<string | null>(null);
   const [obsSession, setObsSession] = useState<string | null>(null);
+  /** The run Observability's Run detail shows now (picked there, or opened from the
+   *  side navigation): what the Run Assistant means by "this run" on that page. */
+  const [obsShown, setObsShown] = useState<string | null>(null);
+  useEffect(() => {
+    const on = (e: Event) => setObsShown(String((e as CustomEvent).detail || "") || null);
+    window.addEventListener("obs:session", on);
+    return () => window.removeEventListener("obs:session", on);
+  }, []);
   /** The tools drawer. Open on the FIRST visit only: a first-time reader needs to be
    *  told what the application is, and a returning one does not need it in the way. */
   const [toolsOpen, setToolsOpen] = useState(
@@ -111,9 +129,10 @@ export default function App() {
   const flashId = useRef(0);
   const notify = useCallback((type: FlashbarProps.Type, content: string) => {
     const id = String(++flashId.current);
+    // Newest first: the Flashbar stacks them and shows the first, so a new message is never hidden.
     setFlash((f) => [
-      ...f,
       { id, type, content, dismissible: true, onDismiss: () => setFlash((g) => g.filter((x) => x.id !== id)) },
+      ...f,
     ]);
   }, []);
 
@@ -146,6 +165,9 @@ export default function App() {
       // a guaranteed 401 on the way out of the page.
       if (!state) return;
       setUser(state.user);
+      // Back from connecting an account for a tool (auth "user"): bind it to this person.
+      const connected = await completeConnection();
+      if (connected) notify(connected.ok ? "success" : "error", connected.message);
       try {
         setWorkflow(await api.get<Workflow>("/api/workflow"));
       } catch (e) {
@@ -182,6 +204,18 @@ export default function App() {
     window.addEventListener(PROJECTS_EVENT, refresh);
     return () => window.removeEventListener(PROJECTS_EVENT, refresh);
   }, [booted, refreshBuilds]);
+
+  // A link (#build:<id>, #run:<id>, #library:<kind>) opens what it names: on load, and when
+  // one is pasted into the address bar of an open page. Links inside the page call
+  // navigate themselves and leave the hash alone.
+  const navRef = useRef<(href: string) => void>(() => {});
+  useEffect(() => {
+    if (!booted) return;
+    const go = () => { if (window.location.hash.length > 1) navRef.current(window.location.hash); };
+    go();
+    window.addEventListener("hashchange", go);
+    return () => window.removeEventListener("hashchange", go);
+  }, [booted]);
 
   // A deploy or destroy runs for many minutes; keep its status in the navigation current.
   const anyJob = builds.some((b) => jobActive(b));
@@ -234,8 +268,14 @@ export default function App() {
 
   const refreshRuns = useCallback(async () => {
     try {
-      setRuns(await api.get<SessionSummary[]>(
-        target ? `/api/sessions?build=${encodeURIComponent(target)}` : "/api/sessions"));
+      const mine = await api.get<SessionSummary[]>(
+        target ? `/api/sessions?build=${encodeURIComponent(target)}` : "/api/sessions");
+      // A service trigger's runs, for its approvers (bff/triggers.py): beside your own.
+      const service = !target && workflow.triggers?.some((t) => t.runAs === "service")
+        ? await api.get<SessionSummary[]>("/api/sessions?scope=triggers").catch(() => [] as SessionSummary[]) : [];
+      const seen = new Set(mine.map((r) => r.session_id));
+      setRuns([...mine, ...service.filter((r) => !seen.has(r.session_id))]
+        .sort((a, b) => String(b.created ?? "").localeCompare(String(a.created ?? ""))));
       pollFailures.current = 0;
     } catch (e) {
       pollFailures.current += 1;
@@ -293,11 +333,12 @@ export default function App() {
   const runWorkflow = snap?.workflow ?? targetWorkflow;
 
   // --- actions ------------------------------------------------------------
-  async function startRun(topic: string, subject: string) {
+  async function startRun(topic: string, subject: string, files: { key: string; name: string }[] = []) {
     try {
-      const body: Record<string, string> = { topic };
+      const body: Record<string, unknown> = { topic };
       if (subject) body.subjectId = subject;
       if (target) body.build = target;
+      if (files.length) body.attachments = files;
       const r = await api.post<{ session_id: string }>("/api/sessions", body);
       setStartOpen(false);
       // The + beside Runs can be pressed from any view, so land on the run itself.
@@ -374,6 +415,7 @@ export default function App() {
       await api.del(`/api/sessions/${id}`);
       if (openRun === id) { setOpenRun(null); setSnap(null); }
       if (obsSession === id) setObsSession(null);
+      if (obsShown === id) setObsShown(null);
       notify("success", "Run deleted.");
       void refreshRuns();
     } catch (e) {
@@ -478,6 +520,8 @@ export default function App() {
       setView("accounts");
     } else if (what === "admin") {
       setView("admin");
+    } else if (what === "triggers") {
+      setView("triggers");
     } else if (what === "library" || what === "policies") {
       setView("library");
       setLibKind(((LIBRARY_KINDS.find(([k]) => k === id)?.[0]) ?? (what === "policies" ? "policy" : "tool")) as LibKind);
@@ -485,6 +529,7 @@ export default function App() {
       setToolsOpen(true);
     }
   }
+  navRef.current = navigate;
 
   /** Every run, newest first (the API's order), with its status as an icon. Runs share a
    *  topic often (the same request, re-run), so a repeated topic carries the run id. */
@@ -541,6 +586,7 @@ export default function App() {
               setTarget(detail.selectedOption.value ?? "");
               setOpenRun(null);
               setObsSession(null);
+              setObsShown(null);
             }}
           />
         ),
@@ -553,13 +599,15 @@ export default function App() {
     }] as NavGroup[]),
   ];
 
-  const activeHref = view === "activity" ? "#activity" : view === "accounts" ? "#accounts"
+  const activeHref = view === "triggers" ? "#triggers" : view === "activity" ? "#activity" : view === "accounts" ? "#accounts"
     : view === "admin" ? "#admin" : view === "library" ? `#library:${libKind}`
     : view === "build" ? (currentBuild ? `#build:${currentBuild}` : "#build")
     : view === "observability" ? (obsSession ? `#obs:${obsSession}` : "#obs")
       : openRun ? `#run:${openRun}` : "#runs";
 
-  const content = view === "activity"
+  const content = view === "triggers" && me.admin && !controlPlane
+    ? <TriggersPage onOpenRun={(id) => { setView("runs"); setOpenRun(id); setSelectedStep(null); setTab("graph"); }} />
+    : view === "activity"
     ? <Activity canSeeEveryone={Boolean(me.permittedActions?.includes("audit"))} />
     : view === "accounts"
     ? (
@@ -671,6 +719,7 @@ export default function App() {
               if (href === "#activity") setView("activity");
               if (href === "#accounts") setView("accounts");
               if (href === "#admin") setView("admin");
+              if (href === "#triggers") setView("triggers");
               if (href.startsWith("#library")) navigate(href);
             }}
           />
@@ -684,10 +733,14 @@ export default function App() {
               // Where builds deploy; then what any build can use (the library); then
               // the log, administration and this page's own help.
               ...(me.builder ? [{ text: "AWS accounts", href: "#accounts" }, NAV_DIVIDER,
-                ...LIBRARY_KINDS.map(([k, text]) => ({ text, href: `#library:${k}` })), NAV_DIVIDER] : []),
+                ...LIBRARY_GROUPS.flatMap(([heading, kinds]) => [{ heading },
+                  ...LIBRARY_KINDS.filter(([k]) => kinds.includes(k)).map(([k, text]) => ({ text, href: `#library:${k}`, indent: true }))]),
+                NAV_DIVIDER] : []),
               // A console's log, or a build app's own (bff/audit.py).
               ...((me.audit ?? me.builder) ? [{ text: "Activity", href: "#activity" }] : []),
               ...(me.builder && me.admin ? [{ text: "Admin", href: "#admin" }] : []),
+              // A build's app with triggers: their URLs, secrets and tests (bff/triggers.py).
+              ...(!controlPlane && me.admin && workflow.triggers?.length ? [{ text: "Triggers", href: "#triggers" }] : []),
               { text: "About this application", href: "#about" },
             ]}
           />
@@ -744,6 +797,7 @@ export default function App() {
             {controlPlane ? null : (
               <StartRunModal
                 visible={startOpen} ui={targetWorkflow.ui ?? ui}
+                attach={target ? null : (targetWorkflow.attachments ?? workflow.attachments ?? null)}
                 onDismiss={() => setStartOpen(false)}
                 onStart={startRun}
                 targets={targets} target={target} onTarget={setTarget}
@@ -751,7 +805,10 @@ export default function App() {
             )}
             {booted && !controlPlane ? (
               <Assistant
-                ui={ui} chatbot={workflow.chatbot} sessionId={openRun} build={target}
+                // "This run" is the one on screen: Observability's selected run there,
+                // not the run last opened under Runs.
+                ui={ui} chatbot={workflow.chatbot} sessionId={view === "observability" ? (obsShown ?? obsSession) : openRun}
+                build={target}
                 onActed={() => { void refreshRuns(); }}
               />
             ) : null}

@@ -41,11 +41,33 @@ def _bedrock():
 
 
 class GuardrailBlocked(Exception):
-    """Raised when a guardrail blocks the content."""
+    """Raised when a guardrail blocks the content. `reasons` names what blocked it (a
+    denied topic, a content filter, a word or a PII type), for the timeline: the
+    guardrail's own message never says which rule it was."""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, reasons: list[str] | None = None):
         self.message = message
+        self.reasons = list(reasons or [])
         super().__init__(message)
+
+
+def _reasons(resp: dict) -> list[str]:
+    """What BLOCKED, by policy: "denied topic FinancialAdvice", "content filter INSULTS"."""
+    out: list[str] = []
+    for a in resp.get("assessments") or []:
+        if not isinstance(a, dict):
+            continue
+        words = a.get("wordPolicy") or {}
+        found = [
+            *((f"denied topic {t.get('name')}", t) for t in (a.get("topicPolicy") or {}).get("topics") or []),
+            *((f"content filter {f.get('type')}", f) for f in (a.get("contentPolicy") or {}).get("filters") or []),
+            *((f"word {w.get('match')}", w)
+              for w in [*(words.get("customWords") or []), *(words.get("managedWordLists") or [])]),
+            *((f"sensitive information {p.get('type')}", p)
+              for p in (a.get("sensitiveInformationPolicy") or {}).get("piiEntities") or []),
+        ]
+        out.extend(label for label, item in found if isinstance(item, dict) and item.get("action") == "BLOCKED")
+    return list(dict.fromkeys(out))
 
 
 async def check(text: str, source: str = "INPUT",
@@ -68,7 +90,43 @@ async def check(text: str, source: str = "INPUT",
 
     if resp.get("action") == "GUARDRAIL_INTERVENED":
         outputs = resp.get("outputs", [])
-        msg = outputs[0].get("text", "Blocked by guardrail") if outputs else "Blocked"
-        raise GuardrailBlocked(msg)
+        masked = outputs[0].get("text") if outputs else None
+        # A guardrail that only ANONYMIZED (sensitive information set to mask, nothing
+        # blocked) hands back the text with the PII masked: that is what to carry on
+        # with. Treating it as a block stopped every run whose request held an email
+        # address, where the guardrail was configured to mask it (observed live).
+        if masked and not _blocked(resp):
+            return masked
+        raise GuardrailBlocked(masked or "Blocked by guardrail", _reasons(resp))
 
     return text
+
+
+def _blocked(resp: dict) -> bool:
+    """Whether any policy in an ApplyGuardrail assessment BLOCKED (rather than only
+    anonymized). Unknown shapes count as a block: failing closed is the safe reading."""
+    assessments = resp.get("assessments")
+    if not isinstance(assessments, list) or not assessments:
+        return True
+
+    def walk(v) -> bool:
+        if isinstance(v, dict):
+            if v.get("action") == "BLOCKED" and v.get("detected", True) is not False:
+                return True
+            return any(walk(x) for x in v.values())
+        if isinstance(v, list):
+            return any(walk(x) for x in v)
+        return False
+
+    if walk(assessments):
+        return True
+    # Intervened with nothing blocked: it must have anonymized something to count as a mask.
+    return not _anonymized(assessments)
+
+
+def _anonymized(v) -> bool:
+    if isinstance(v, dict):
+        return v.get("action") == "ANONYMIZED" or any(_anonymized(x) for x in v.values())
+    if isinstance(v, list):
+        return any(_anonymized(x) for x in v)
+    return False

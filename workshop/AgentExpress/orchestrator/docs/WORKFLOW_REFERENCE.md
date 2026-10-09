@@ -104,6 +104,7 @@ validator that can name it.
 | `guardrail` | The Bedrock Guardrail *policy* — what is enforced. Agents opt in per agent. |
 | `authorization` | Which JWT groups may approve, re-run, cancel, evaluate, run insights, delete, deploy, destroy, see every user's activity (`audit`), and read every user's builds and runs and destroy any build (`admin`). `audit` and `admin` are closed unless a group is named; `insights` is too whenever anything is restricted. Grant all three to a group filled from the backend only (the sample's `admins`) — a deploy refuses a self-sign-up group holding any of them. |
 | `tools` | Every data source an agent may call. |
+| `skills` | Know-how an agent opens when a task needs it: a SKILL.md with optional reference files. Optional. See [`skills`](#skills). |
 | `agents` | One entry per folder under `app/subagents/<id>/`. |
 | `steps` | The topology and the human-review gates. |
 
@@ -138,7 +139,7 @@ does not turn tests red.
 |---|---|---|
 | `defaultModel` | `config.py` | Model for any agent that doesn't name its own. `-c modelId` (CDK) / `model_id` (Terraform) override it; empty uses this, else the framework default in `defaults.json`. A cross-region profile prefix (`us.`, `eu.`, `apac.`) is moved to the deployment region's geography (`vocabulary.json` `inferenceProfileGeos`), as is each agent's `model`: a `us.` id deployed in eu-west-1 calls `eu.`. `global.` and bare model ids are left alone. |
 | `runtimeInvoke.maxAttempts` | `config.py` → `agentcore_agent._agentcore` | **Total** attempts per call to a `dedicated` agent's runtime, not retries-after-the-first. Default **1, i.e. no retrying**, which is deliberate: `InvokeAgentRuntime` is synchronous, slow and **not idempotent**, so a retry does not replace the attempt it followed — the remote container is already working and cannot tell the caller stopped listening. boto3's own default (`legacy` mode, up to 5 attempts) therefore lets one transient blip run a research agent twice, bill both model calls, and return whichever answered last, with nothing in the timeline to show it: the node logs "Invoking dedicated AgentCore Runtime" once, before any retry exists. Observed on a live run — two invocations of the `web_search` runtime with different `requestId`s, 13s apart, for one node execution, $0.0158 spent on a discarded answer. For a call this long the failure that matters is a lost response to work that already succeeded, and retrying that is strictly worse than failing: an error reaches the reviewer, a duplicate just inflates the bill. Raise it only if you have made the call idempotent. |
-| `runtimeInvoke.readTimeoutSeconds` | same | How long to wait for a dedicated agent's response. Default **120**, well above boto3's 60 and the ~15–20s the shipped research agents take. With retrying off this timeout is fatal to the run, so keep it comfortably above your slowest agent — otherwise you trade a duplicate for a truncated run, which is not the trade being made here. |
+| `runtimeInvoke.readTimeoutSeconds` | same | How long to wait for a dedicated agent's response. Default **600**: a dedicated agent that makes several tool calls and writes a long answer takes minutes (120 timed out such an agent mid-answer). With retrying off this timeout is fatal to the run, so keep it comfortably above your slowest agent — otherwise you trade a duplicate for a truncated run, which is not the trade being made here. |
 | `a2aInvoke.timeoutSeconds` | `config.py` → `a2a_agent` | Per HTTP request to a `runtime: "a2a"` agent (the card fetch, each RPC call). Default **30**; the shipped sample sets **150**, because two of its remote agents synthesize a full asset rather than answering a short question. Keep it **above** the remote agent's own timeout (the shipped stand-in's Lambda is 120s) so the side that gives up first is the side that can say why — a client that abandons the request leaves no diagnosis and cannot tell a slow agent from a dead one. |
 | `a2aInvoke.pollIntervalSeconds` | same | Gap between `tasks/get` calls while a remote task is still working. Default **2**. Their rate limit is unknown to you; a busy loop is rude and may be throttled, which then looks like their agent failing. |
 | `a2aInvoke.maxPollSeconds` | same | Total wall-clock before giving up on a remote task, failing the run with the last state seen. Default **300**. Separate from `runtimeInvoke` on purpose: a dedicated runtime is yours and you know how slow it is, whereas A2A models work as a *Task* precisely so it can take minutes — so the budget that matters is not one request timeout but how long you are willing to wait overall. Bounded rather than open-ended, because a task that never leaves `working` would otherwise hold the workflow until the runtime's own 8-hour ceiling. |
@@ -155,6 +156,9 @@ does not turn tests red.
 | `chatbot.model` | `bff/chatbot.py` | Model for the assistant's tool-use loop. |
 | `chatbot.greeting` / `chatbot.placeholder` | UI | The assistant's opening message and input placeholder. Shipped in the BFF projection (`orchestrator/bff/workflow.py`); the page keeps a short generic fallback if you omit them. |
 | `chatbot.tools.<name>` | `bff/chatbot.py` | One flag per assistant capability: `status`, `sessions`, `outputs`, `costs`, `latency`, `guardrails`, `evals`, `runEval`, `rerun`, `review`. Anything unlisted defaults to **on**. |
+| `attachments.s3` | `bff/runfiles.py`; `images.tf` / `orchestrator-stack.ts` | Buckets, or `bucket/folder` locations, a run's request may name as `s3://...` for agents with `attachments`, e.g. `["customer-docs/contracts"]`. The deployment grants **the BFF** read (and list) on exactly these; it copies each file into the run, so the runtimes only read the run's own copies. None by default: uploads only. A framework bucket (`agentcore-*`) is refused. |
+| `interceptors.request` / `interceptors.response` | `tool-plane.ts` / `interceptors.tf`; `app/tools/_code/interceptor-<point>/` | A Lambda the Gateway calls before each MCP request and/or after each answer (at most one each). Exactly one of `code` (written in the build, generated from `templates`: request `audit`, `blockTools`, `argumentGuard`, `injectContext`, `custom`; response `audit`, `redactPii`, `hideTools`, `capResult`, `custom`) or `lambdaArn`. `passRequestHeaders` (default false) hands it the headers, with `x-ax-session` / `x-ax-agent` / `x-ax-user`. A refusal is `Refused by interceptor: <reason>` on the timeline. Needs the Gateway. |
+| `triggers.<name>` | `bff/triggers.py`; `triggers.tf` / `orchestrator-stack.ts` | What starts a run without anyone typing it: `type` `webhook` (`signature`), `schedule` (`expression`, `timezone`), `eventbridge` (`pattern`, `bus`), `s3` (`bucket`, `prefix`) or `sqs` (`queueArn`, or none for a created queue with a dead-letter queue). `prompt` with `{{placeholders}}` from the delivery; `enabled`, `runAs` (`owner` or `service`), `approvers`, `gates` (`inherit` or `auto`), `maxRunsPerHour` (60), `attachPayload`, `idempotencyKey`. Webhooks arrive at `POST /api/hooks/<name>`, the one route without a JWT, proven by the signature. |
 
 You never write Cedar by hand — the rules are generated from the `tools` block.
 Every tool you declare is permitted; anything not declared is refused by Cedar's
@@ -197,10 +201,13 @@ the id becomes part of an AgentCore Runtime name.
 | `corpus` | `registry.py` | For a `type: "kb"` tool: which corpus to retrieve from. Must be one of that tool's declared `corpora`. |
 | `produces` | `nodes.py` | The deliverable name, injected into the agent's task prompt. |
 | `access` | UI chip | A short human label for the data source. **Only read when the agent has no `tool`** — with a tool, the chip is derived from the tool's type. Don't set both. |
+| `attachments` | `context.py` → `app/common/attachments.py`; `bff/runfiles.py` | **`main` / `dedicated` only.** `true`: this agent's model reads the files a run is started with — uploaded on **Start run**, or named in the request as `s3://bucket/key` (or `s3://bucket/folder/`) inside a location `orchestrator.attachments.s3` allows. Every model call of the agent gets them as Converse document or image content (at most 5 files; documents 4.5 MB, images 3.75 MB; PDF, Word, Excel, CSV, HTML, text, Markdown, JSON, code, PNG, JPEG, GIF, WebP). They are checked and copied into the run's own folder when it starts, so a re-run reads the same files. The model must accept documents (Claude, Amazon Nova). Default `false`; the Start run form offers no files unless some agent reads them. |
 | `agentCard` | `a2a_agent.py` | **`runtime: "a2a"` only.** The remote agent's base URL or Agent Card URL. Must be `https://`. |
 | `auth` | `a2a_agent.py` | **`runtime: "a2a"` only.** `none` \| `bearer` \| `oauth2` \| `sigv4`. Defaults to `none`. Required to be `sigv4` with `source` — see the stand-in, below. |
 | `source` | `a2a.tf`, `orchestrator-stack.ts` | **`runtime: "a2a"` only.** The framework-deployed stand-in to reach instead of a committed URL. `a2a_lambda` is the only value. Mutually exclusive with `agentCard`. |
 | `skill` | `a2a_agent.py` (endpoint path), IaC | **With `source` only.** Which of the stand-in's published skills this agent is. An external agent advertises its skills in its own Agent Card, so this means nothing without `source` and is rejected there. |
+| `skills` | `context.py` → `app/common/skills.py` | Names in the top-level [`skills`](#skills) map this agent may use. With `toolMode: "model"` and tools it opens them itself (`use_skill`); otherwise they are added to its instructions in full. |
+| `registry` | Console only | Where an agent card came from in an AWS Agent Registry (`runtime: "a2a"`). Set by the console, never by hand; see [`skills`](#skills) for its fields. |
 
 ### `runtime` — where the agent actually runs
 
@@ -421,7 +428,7 @@ or off is a config change. Omit a block to leave the capability off.
 
 | Key | Read by | Notes |
 |---|---|---|
-| `memory.longTerm` | `context.py` | List of strategies: `semantic` extracts discrete insights into `insights/{actor}` (cross-run), `summary` maintains a running summary in `summary/{actor}/{session}` (session-scoped). Before `run()` the framework recalls past insights into the system prompt; after, it stores new ones. Namespaced per agent **and** per subject, so insights don't leak between topics. **Only `semantic` and `summary`** — those are the strategies the IaC provisions, and an unrecognised name is rejected at container start rather than silently searched as a namespace nothing writes to. **Where the recall/store runs depends on the placement:** for `main` it is the orchestrator; for `dedicated` it is inside that agent's own container, because that is where `ctx.llm` injects the insights; for `a2a` it is the orchestrator, which carries the recalled insights to the remote agent inside the A2A task (`recalledContext`, with the caveat attached) and stores its reply afterwards. |
+| `memory.longTerm` | `context.py` | List of strategies: `semantic` extracts discrete insights into `insights/{actor}` (cross-run), `summary` maintains a running summary in `summary/{actor}/{session}` (session-scoped), `userPreference` learns the requester's stated preferences into `preferences/{actor}`, and `episodic` records each run in `episodes/{actor}/{session}` with cross-run reflections in `episodes/{actor}` (what recall reads). `true` is shorthand for `["semantic"]`. Before `run()` the framework recalls past insights into the system prompt; after, it stores new ones. The actor is the agent plus `memory.scope` (default `user`: a digest of the user, and the subject when the run has one), so insights don't leak between users or subjects. `semantic` and `summary` are always provisioned; `userPreference` and `episodic` only when some agent names them (each strategy is a model call per stored event). Any other name fails the schema (`workflow.schema.json`) and is rejected at container start (`app/orchestrator/registry.py`) rather than silently searched as a namespace nothing writes to. **Where the recall/store runs depends on the placement:** for `main` it is the orchestrator; for `dedicated` it is inside that agent's own container, because that is where `ctx.llm` injects the insights; for `a2a` it is the orchestrator, which carries the recalled insights to the remote agent inside the A2A task (`recalledContext`, with the caveat attached) and stores its reply afterwards. |
 | `identity.outbound` | `context.py` | Credential providers this agent may fetch an OAuth token from, to call an external API **directly** via `ctx.get_identity_token`. Not needed for anything reached through the Gateway. |
 | `guardrails.input` | `context.py` | Run the Bedrock guardrail on the agent's input, before the model sees it. |
 | `guardrails.output` | `context.py` | Run it on the agent's output. Use this on any agent handling untrusted text. |
@@ -476,6 +483,27 @@ AgentCore Identity provider the framework creates from `oauth` — `clientId`, `
 `discoveryUrl` or `tokenUrl`) or `none`. A key or client secret goes in `tool_api_keys` (a
 build's secrets), never in workflow.json.
 
+Two more modes act as **the person using the app**, not as the app (`mcp`/`openapi` only, and
+they need a sign-in provider: not `idp=none`):
+
+| `auth` | In the Builder | What happens |
+|---|---|---|
+| `user` | User login (3LO) | OAuth authorization code. The first call for a person fails the step with a **Connect** button; they sign in at the tool's provider once, come back to the app (which binds the grant to them, `POST /api/connect`), and run the step again. AgentCore Identity keeps one grant per person. |
+| `obo` | On behalf of user (OBO) | The person's sign-in token is exchanged on their behalf (RFC 8693 token exchange) for a token to the tool. `oauth.audience` names the tool's API, if its provider needs one. **Not with Entra ID sign-in yet**: Entra's exchange needs an access token for the app, which sign-in does not request. |
+
+Both use `oauth` like `oauth2` (`clientId`, `scopes`, `discoveryUrl` or `tokenUrl`, the client
+secret in `tool_api_keys`). With `user` and a `tokenUrl`, also give `oauth.authorizationUrl`
+(where people sign in). After the first deploy, the Builder shows the tool's **callback URL**:
+register it as a redirect URL at the tool's provider. An `mcp` tool in either mode must list its
+tools in `toolSchema`, because the Gateway cannot ask the server before anyone has connected.
+
+These tools sit on a second Gateway (`<agent>-gwu`) that trusts the app's sign-in, so each call
+carries the person's own token; the agents' machine client never reaches them, and the Cedar
+permits do not cover them (the tool's provider authorizes each person). The token reaches the
+runtime only for the person who started the run, in the build's own app: a step approved by a
+reviewer, started by a trigger, or run from the Builder console fails with a message to run it
+there instead.
+
 Shared keys:
 
 | Key | Notes |
@@ -486,10 +514,11 @@ Shared keys:
 | `args` | Fixed extra arguments sent on every call. |
 | `rowFields` | Maps the roles an agent needs to the field names your payload actually uses, so an agent that *computes* from tool output stays config-driven. See [`rowFields`](#rowfields--for-an-agent-that-computes-rather-than-narrates) below. |
 | `rowPath` | Dot path to the **list** of records in the response, e.g. `result.releases`. Needed only when the list is somewhere the framework does not already probe for (`results`, `result`, `items`, `documents`, `content.result`, `content.results`) — common for a REST API you did not design. Pairs with `rowFields`: this says *where* the rows are, that says what they are called. Without it an agent that computes sees **zero** rows and reports "nothing found" for a response that was full of data, which is exactly how it was first found. |
-| `auth` | Outbound auth to the endpoint: `none`, `apikey` (vaulted, sent as `X-API-Key`), `sigv4` (the Gateway signs with its own role — no secret). |
+| `auth` | Outbound auth to the endpoint: `none`, `apikey` (vaulted, sent as `X-API-Key`), `sigv4` (the Gateway signs with its own role — no secret), `oauth2`, `user` or `obo` (above). |
 | `policy.tool` | Narrow the Cedar permit to one tool name. Omit for a target-level permit, which is what a remote MCP server needs since its tool names aren't known at deploy time. |
 | `policy.restrictTo` | Argument allow-lists, e.g. `{ "filter": ["reference"] }`. Enforced at the Gateway, so a prompt-injected attempt to widen access is refused by infrastructure rather than by prompt wording. |
 | `policy.permit` | `false` registers the target but deliberately does not permit it — useful for demonstrating default-deny. |
+| `registry` | Where an `mcp` tool came from in an AWS Agent Registry. Set by the console, never by hand; with `sync: true` its `description`, `endpoint` and `toolSchema` follow the newest approved version. The runtime ignores it. |
 
 **Secrets never live here.** An API key goes in `tool_api_keys` in
 `terraform.tfvars`, or `$TOOL_API_KEYS` for CDK, keyed by the tool name.
@@ -780,6 +809,41 @@ the agent to one payload shape.
 Omit it and nothing changes — agents that hand evidence to a model use the `text`
 each row also carries.
 
+## `skills`
+
+A skill is know-how, not a data source: a SKILL.md (when to use it, then the steps) with
+optional text reference files. An agent may use the ones it lists in `skills`.
+
+```json
+"skills": {
+  "refundPolicy": {
+    "description": "When a customer asks for money back.",
+    "instructions": "1. Check the purchase date in the order.\n2. Within 30 days with a receipt: refund. Otherwise offer store credit.\n3. Quote policy.md when you decline.",
+    "files": { "policy.md": "Refunds need a receipt and are paid to the original card." }
+  }
+},
+"agents": { "support": { "name": "Support", "skills": ["refundPolicy"], "toolMode": "model", "tool": "orders" } }
+```
+
+| Key | Notes |
+|---|---|
+| `description` | Required. What the agent reads to decide whether to open the skill. |
+| `instructions` | Required. The SKILL.md body, in Markdown. |
+| `files` | Reference files by name (`.md`, `.txt`, `.json`, `.csv`, `.yaml`, `.yml`), opened only when needed. Up to 20 files and 200 KB of text per skill, instructions included. |
+| `registry` | Where it came from in an AWS Agent Registry (`registryId`, `recordId`, `name`, `version`, `sync`). Set by Add from registry or the Assistant, never by hand. With `sync: true` the console refreshes it to the newest approved version when the build opens and before each deploy. The runtime ignores it. |
+
+How an agent gets them (`app/common/skills.py`):
+
+- **`toolMode: "model"` with tools**: the tool-calling turn sees each skill's name and
+  description and opens what it needs with a `use_skill` tool (its reference files too). That is
+  not a tool call: it uses none of `maxToolCalls` and is never evidence. Every model call after
+  that carries the skills it opened in full and the rest by name only.
+- **otherwise**: its skills are added to its instructions in full, reference files included, up
+  to 60,000 characters.
+
+Scripts are never run. In the Builder: the Skills tab (write one, or import a SKILL.md), each
+agent's Skills setting, and the library (publish, share, add from library), like other parts.
+
 ## `authorization`
 
 Answers "may *this user* do this?", which the JWT authorizer does not. Seven actions:
@@ -795,7 +859,15 @@ Answers "may *this user* do this?", which the JWT authorizer does not. Seven act
 
 `groupsClaim` is the JWT claim holding the caller's groups: `cognito:groups` for
 Cognito, or a namespaced custom claim for Auth0 (e.g. `https://your-app/roles`,
-added by a post-login Action) — Auth0 will not emit an unnamespaced one.
+added by a post-login Action) — Auth0 will not emit an unnamespaced one. Okta: `groups` (a
+groups claim on the authorization server). Entra ID: `roles` (app roles; its `groups` claim holds
+object IDs, not names).
+
+`signIn` says who signs people in: `{"provider": "okta", "domain": "acme.okta.com", "clientId":
+"…"}`, `{"provider": "entra", "tenantId": "<GUID>", "clientId": "…"}`, `{"provider": "auth0",
+"domain": "…", "clientId": "…"}`, or nothing for built-in Cognito. A Builder console deploys a
+build with it; a deployment of your own sets the same in its `idp` setting, and plan/synth stops
+when the two disagree. `authorizationServer` (Okta) defaults to `default`.
 
 Both IaC paths create a Cognito group for every group named here. *Membership* is
 not managed in IaC: it is per-person and changes far more often than a deploy.
@@ -834,7 +906,7 @@ Each entry is one of:
 - `{ "parallel": ["a", "b"] }` — fan out, join at one gate
 - `{ "sequence": ["a", "b"] }` — chain in order
 
-Add `"hitl": true` for a human-review gate after the step, and `gateId` / `gateName`
+Add `"hitl": true` for a human-review gate after the step (or an object: `mode` `always` / `threshold` / `auto`, `when` rules for a threshold, `approval` `console` / `event`, `timeout` `{"after": "24h", "action": "approve"|"deny"}`; see app/common/gates.py), and `gateId` / `gateName`
 to name it (the id is how the BFF and UI address the gate). Add `branch` to let the
 step's own output choose what runs next — see below.
 

@@ -30,6 +30,7 @@ from langgraph.types import Command
 
 from app.common.config import AGENT_ORDER, DEFAULT_TOPIC, LAST_AGENT_ID, MEMORY_ID, REGION
 from app.common.sink import WorkflowCancelled, emit, ensure_session, is_cancelled
+from app.features.gateway import person
 from app.orchestrator.graph_builder import build_graph, group_rerun_plan, rerun_plan
 
 if not MEMORY_ID:
@@ -326,6 +327,9 @@ async def _run_insights(lookback_hours: int = _DEFAULT_INSIGHTS_LOOKBACK, user: 
 @app.entrypoint
 async def invoke(payload, context=None):
     action = payload.get("action", "start")
+    # The caller's sign-in, for tools that act as the person (app/features/gateway/person.py).
+    # Set before any task is spawned, so this invocation's agents see it and no other does.
+    person.set_token(payload.get("user_token") or "")
 
     # Insights: read the latest cross-run findings (synchronous).
     if action == "get_insights":
@@ -352,6 +356,11 @@ async def invoke(payload, context=None):
         await ensure_session(session_id, topic)
         initial = {"topic": topic, "user": user,
                    "subject_id": payload.get("subject_id", ""),
+                   # Files the run was started with, already copied into its folder by
+                   # the BFF (bff/runfiles.py); read by agents with `attachments`.
+                   "attachments": list(payload.get("attachments") or []),
+                   # A trigger with `gates: "auto"` (bff/triggers.py): no gate waits.
+                   **({"gates": "auto"} if payload.get("gates") == "auto" else {}),
                    "status": {}, "outputs": {}, "decisions": {}}
         _spawn(_run(session_id, initial=initial, user=user), session_id=session_id)
         return {"session_id": session_id, "status": "started"}

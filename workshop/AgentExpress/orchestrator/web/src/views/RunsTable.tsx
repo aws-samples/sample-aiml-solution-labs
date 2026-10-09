@@ -150,6 +150,13 @@ export function RunsTable({
           width: 190,
         },
         {
+          id: "by",
+          header: "Started by",
+          // A trigger, not a person (bff/triggers.py): its name and kind.
+          cell: (r) => (r.trigger ? `${r.trigger.name} (${r.trigger.type})` : "A person"),
+          width: 170,
+        },
+        {
           id: "actions",
           header: "",
           cell: (r) =>

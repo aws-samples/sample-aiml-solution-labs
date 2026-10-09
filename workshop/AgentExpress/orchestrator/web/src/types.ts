@@ -66,6 +66,27 @@ export interface Workflow {
   authorization?: { actions?: string[] };
   chatbot?: ChatbotConfig | null;
   evalAgents?: string[];
+  /** What a run may be started with (bff/runfiles.py); absent when no agent reads files. */
+  attachments?: RunAttach | null;
+  /** What starts runs besides a person (bff/triggers.py). */
+  triggers?: { name: string; type: string; runAs: string }[] | null;
+}
+/** The Start run form's files: limits, readable types, and S3 locations it may name. */
+export interface RunAttach {
+  maxFiles: number;
+  maxBytes: number;
+  imageMaxBytes?: number;
+  types: string[];
+  s3: string[];
+}
+/** A file a run was started with, copied into its own folder. */
+export interface RunFile {
+  key: string;
+  name: string;
+  kind: "document" | "image";
+  format: string;
+  size: number;
+  uri?: string;
 }
 
 export interface NodeState {
@@ -95,6 +116,8 @@ export interface SessionSummary {
   /** Who started it (the JWT sub). Sent on every run; the admin list shows it. */
   owner?: string;
   user?: string;
+  /** Set when a trigger started it, not a person (bff/triggers.py). */
+  trigger?: { name: string; type: string; source: string; runAs: string };
 }
 
 export interface SessionSnapshot extends SessionSummary {
@@ -106,11 +129,13 @@ export interface SessionSnapshot extends SessionSummary {
   build?: { id: string; name: string; version: number };
   user?: string;
   subject_id?: string;
+  /** The files the run was started with. */
+  attachments?: RunFile[];
   nodes?: Record<string, NodeState>;
   history?: Record<string, HistoryEntry[]>;
   logs?: LogLine[];
   result?: string;
-  hitl?: { node: string; question?: string } | null;
+  hitl?: { node: string; question?: string; approval?: string; timeoutAt?: string; timeoutAction?: string } | null;
 }
 
 export interface Me {

@@ -31,7 +31,8 @@ Semantics, chosen so the default stays backwards compatible:
 
 `groupsClaim` is configurable because providers differ: Cognito issues
 `cognito:groups`, while Auth0 needs a namespaced custom claim added by an action
-(e.g. "https://your-app/roles"). Read-only endpoints are not gated here — they are
+(e.g. "https://your-app/roles"), Okta a `groups` claim on its authorization server, and
+Entra ID `roles` (app roles). Read-only endpoints are not gated here — they are
 already behind the authorizer, and hiding a run from a reviewer who can see the UI
 buys nothing.
 """

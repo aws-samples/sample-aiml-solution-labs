@@ -195,7 +195,7 @@ export function Admin({ canDestroy, notify, onOpenRun, runs: withRuns = true }: 
         {
           id: "builds", label: `Builds${builds ? ` (${builds.length})` : ""}`,
           content: (
-            <Table items={shownBuilds} loading={builds === null} loadingText="Loading builds" trackBy="id"
+            <Table<AdminBuild> items={shownBuilds} loading={builds === null} loadingText="Loading builds" trackBy="id"
               columnDefinitions={[
                 { id: "name", header: "Build", isRowHeader: true, cell: (b) => (
                   <Link href="#" onFollow={(e) => { e.preventDefault(); setViewing(b); }}>{b.name}</Link>) },

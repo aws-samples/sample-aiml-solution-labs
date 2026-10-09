@@ -33,7 +33,7 @@ locals {
 #
 # Still narrower than the orchestrator's role in every case: no Memory checkpointer, no
 # DynamoDB progress store, no Evaluations. And tool access needs no IAM at all — a
-# Gateway call carries the IdP's client-credentials token from env (Cognito or Auth0).
+# Gateway call carries the IdP's client-credentials token from env (from the configured idp).
 locals {
   # Per-agent feature flags, read once so the role and its policy agree by construction.
   subagent_features = {
@@ -280,14 +280,16 @@ resource "awscc_bedrockagentcore_runtime" "subagent" {
 
     # Gateway-backed MCP access (same as the orchestrator) for agents that use it.
     GATEWAY_URL       = local.gateway_enabled ? aws_bedrockagentcore_gateway.mcp[0].gateway_url : ""
+    GATEWAY_USER_URL  = length(aws_bedrockagentcore_gateway.person) > 0 ? aws_bedrockagentcore_gateway.person[0].gateway_url : ""
     GATEWAY_TOKEN_URL = local.gateway_enabled ? local.gateway_token_url : ""
     # This agent's own client when orchestrator.gatewayIdentity is "perAgent".
     GATEWAY_CLIENT_ID = contains(local.agent_client_ids, each.key) ? aws_cognito_user_pool_client.agent[each.key].id : local.gateway_client_id
     # Its Gateway client secret: in Secrets Manager (secrets.tf), not here.
     RUNTIME_SECRET_ARN = local.gateway_enabled ? aws_secretsmanager_secret.subagent[each.key].arn : ""
-    # Which client-credentials request shape to build ("cognito" | "auth0").
+    # Which client-credentials request shape to build (the idp: cognito | auth0 | okta | entra).
     GATEWAY_AUTH_FLOW = local.gateway_enabled ? local.gateway_auth_flow : ""
     GATEWAY_AUDIENCE  = local.gateway_audience
+    GATEWAY_SCOPE     = local.gateway_scope
     # Cedar policy mode (display-only, so the observability UI can label decisions).
     GATEWAY_POLICY_MODE = local.policy_enabled ? local.policy_mode : ""
     # The `tools` block from workflow.json: how each tool is called (its type,

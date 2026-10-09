@@ -518,6 +518,396 @@ def _check_code(key: str, code, path: str, where: dict, add) -> None:
             add("error", where, f"{p}.environment.{name}", "must be a string of at most 1000 characters")
 
 
+#: An S3 location runs may name: a bucket, or bucket/prefix (no scheme, no trailing slash).
+ATTACH_S3_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9](/[^\s/][^\s]*[^\s/]|/[^\s/])?$")
+
+
+AFTER_RE = re.compile(r"^([1-9][0-9]*)(m|h|d)$")
+GATE_KEYS = ("mode", "when", "approval", "timeout")
+
+
+def _check_hitl(step: dict, i: int, add) -> None:
+    """steps[].hitl as an object: how its gate decides (app/common/gates.py). true and
+    false need nothing. Mirrors validate.ts checkHitl."""
+    h = step.get("hitl")
+    if not _is_obj(h):
+        return
+    where = {"kind": "step", "index": i}
+    p = f"steps[{i}].hitl"
+    for k in h:
+        if k not in GATE_KEYS:
+            add("error", where, f"{p}.{k}", f"unknown key; a gate takes {', '.join(GATE_KEYS)}")
+    mode = h.get("mode", "always")
+    if "mode" in h and mode not in vocab("gateModes"):
+        add("error", where, f"{p}.mode", f"must be one of: {', '.join(vocab('gateModes'))}")
+    when = h.get("when")
+    if mode == "threshold" and not (isinstance(when, list) and when):
+        add("error", where, f"{p}.when", "a threshold gate needs `when`: the rules that call for a person")
+    elif "when" in h and not (isinstance(when, list) and when):
+        add("error", where, f"{p}.when", "must be a non-empty list of rules")
+    for r, rule in enumerate(when if isinstance(when, list) else []):
+        rp = f"{p}.when[{r}]"
+        if not _is_obj(rule):
+            add("error", where, rp, "each rule must be an object")
+            continue
+        for k in rule:
+            if k not in ["field", *BRANCH_OPS]:
+                add("error", where, rp,
+                    f"unknown key `{k}`; a rule is a `field` and operators: {', '.join(BRANCH_OPS)}")
+        ops = [o for o in BRANCH_OPS if o in rule]
+        if not ops:
+            add("error", where, rp, f"each rule needs an operator: {', '.join(BRANCH_OPS)}")
+        for o in ops:
+            v = rule[o]
+            if o == "in" and not isinstance(v, list):
+                add("error", where, f"{rp}.in", "`in` takes a list")
+            if o == "exists" and not isinstance(v, bool):
+                add("error", where, f"{rp}.exists", "`exists` takes true or false")
+            if o in ("gt", "gte", "lt", "lte") and not _num(v):
+                add("error", where, f"{rp}.{o}", f"`{o}` takes a number")
+            if o in ("equals", "notEquals", "contains") and (isinstance(v, list) or _is_obj(v)):
+                add("error", where, f"{rp}.{o}", f"`{o}` takes a single value, not a list or object")
+    if isinstance(when, list) and when and mode != "threshold":
+        add("warning", where, f"{p}.when", "only a threshold gate reads `when`")
+    if "approval" in h and h["approval"] not in vocab("gateApprovals"):
+        add("error", where, f"{p}.approval", f"must be one of: {', '.join(vocab('gateApprovals'))}")
+    if "timeout" in h:
+        t = h["timeout"]
+        if not _is_obj(t):
+            add("error", where, f"{p}.timeout", 'must be {"after": "24h", "action": "approve" | "deny"}')
+        else:
+            for k in t:
+                if k not in ("after", "action"):
+                    add("error", where, f"{p}.timeout.{k}", "unknown key; a timeout takes after, action")
+            m = AFTER_RE.match(t["after"]) if isinstance(t.get("after"), str) else None
+            if not m:
+                add("error", where, f"{p}.timeout.after", "must be <n>m, <n>h or <n>d, e.g. 30m, 24h, 2d")
+            elif int(m.group(1)) * {"m": 60, "h": 3600, "d": 86400}[m.group(2)] > 30 * 86400:
+                add("error", where, f"{p}.timeout.after", "is at most 30d")
+            if t.get("action") not in vocab("gateTimeoutActions"):
+                add("error", where, f"{p}.timeout.action", f"must be one of: {', '.join(vocab('gateTimeoutActions'))}")
+    if mode == "auto":
+        add("warning", where, f"{p}.mode", "this gate approves itself: no one reviews this stage")
+
+
+def _check_attachments(orch, agents: dict, add) -> None:
+    """orchestrator.attachments.s3: where a run's request may point, and that some agent
+    reads what it brings. Mirrors validate.ts checkAttachments."""
+    att = orch.get("attachments") if _is_obj(orch) and _is_obj(orch.get("attachments")) else {}
+    where = {"kind": "block", "name": "orchestrator"}
+    s3 = att.get("s3")
+    for i, loc in enumerate(s3 if isinstance(s3, list) else []):
+        p = f"orchestrator.attachments.s3[{i}]"
+        if not (isinstance(loc, str) and ATTACH_S3_RE.match(loc)):
+            add("error", where, p, 'must be a bucket, or bucket/folder, without s3:// — e.g. "my-docs/contracts"')
+        elif FRAMEWORK_BUCKET_RE.match("s3://" + loc):
+            add("error", where, p, "is one of the framework's own buckets, which a run may not read")
+    readers = [aid for aid, a in agents.items() if _is_obj(a) and a.get("attachments") is True]
+    if isinstance(s3, list) and s3 and not readers:
+        add("warning", where, "orchestrator.attachments.s3",
+            "no agent reads a run's files: set `attachments` on the agents that should")
+
+
+INTERCEPTOR_KEYS = ("code", "lambdaArn", "passRequestHeaders", "templates")
+#: Each template's settings, and what they hold. Mirrors INTERCEPTOR_SETTINGS in validate.ts.
+INTERCEPTOR_SETTINGS = {
+    "audit": (), "custom": (), "blockTools": ("tools", "agents"),
+    "argumentGuard": ("denyPatterns", "maxArgumentChars"), "injectContext": ("arguments",),
+    "redactPii": ("types", "mask"), "hideTools": ("tools",), "capResult": ("maxChars",),
+}
+ARG_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+
+
+def _strings(v) -> bool:
+    return isinstance(v, list) and all(isinstance(s, str) and s for s in v)
+
+
+def _check_tool_names(names, tools: dict, p: str, where: dict, add) -> None:
+    """Gateway tool names a template refers to: "<toolKey>" or "<toolKey>___<toolName>"."""
+    for i, n in enumerate(names):
+        if n.split("___")[0] not in tools:
+            add("warning", where, f"{p}[{i}]", f'"{n}" is not a tool in this build: write "<toolKey>" or '
+                '"<toolKey>___<toolName>"')
+
+
+def _check_template(point: str, name: str, s: dict, ic: dict, tools: dict, agents: dict,
+                    p: str, where: dict, add) -> None:
+    for k in s:
+        if k not in INTERCEPTOR_SETTINGS[name]:
+            allowed = ", ".join(INTERCEPTOR_SETTINGS[name]) or "nothing"
+            add("error", where, f"{p}.{k}", f"unknown setting; {name} takes: {allowed}")
+    headers = ic.get("passRequestHeaders") is True
+    if name in ("blockTools", "hideTools"):
+        if not (_strings(s.get("tools")) and s["tools"]):
+            add("error", where, f"{p}.tools", 'name the tools: "<toolKey>" or "<toolKey>___<toolName>"')
+        else:
+            _check_tool_names(s["tools"], tools, f"{p}.tools", where, add)
+    if name == "blockTools" and "agents" in s:
+        if not _strings(s["agents"]):
+            add("error", where, f"{p}.agents", "must list agent ids")
+        else:
+            for i, a in enumerate(s["agents"]):
+                if a not in agents:
+                    add("warning", where, f"{p}.agents[{i}]", f'"{a}" is not an agent in this workflow')
+            if s["agents"] and not headers:
+                add("warning", where, f"{p}.agents", "needs passRequestHeaders: true — the calling agent "
+                    "arrives as the x-ax-agent header, and without headers every call is refused")
+    if name == "argumentGuard":
+        if "denyPatterns" in s and not _strings(s["denyPatterns"]):
+            add("error", where, f"{p}.denyPatterns", "must list regular expressions")
+        if "maxArgumentChars" in s and not _int_in(s["maxArgumentChars"], 1, 1_000_000):
+            add("error", where, f"{p}.maxArgumentChars", "must be a whole number, 1 to 1000000")
+    if name == "injectContext":
+        args = s.get("arguments")
+        sources = vocab("interceptorContextSources")
+        if not (_is_obj(args) and args):
+            add("error", where, f"{p}.arguments", "map each argument to set to where its value comes from: "
+                + ", ".join(sources))
+        else:
+            for arg, src in args.items():
+                if not ARG_NAME_RE.match(arg):
+                    add("error", where, f"{p}.arguments.{arg}", "is not an argument name")
+                elif src not in sources:
+                    add("error", where, f"{p}.arguments.{arg}", f"must be one of: {', '.join(sources)}")
+            if not headers:
+                add("warning", where, f"{p}.arguments", "needs passRequestHeaders: true — the run's session, "
+                    "agent and user arrive as x-ax-* headers")
+    if name == "redactPii":
+        types = vocab("interceptorPiiTypes")
+        if "types" in s and not (_strings(s["types"]) and s["types"] and all(t in types for t in s["types"])):
+            add("error", where, f"{p}.types", f"must list one or more of: {', '.join(types)}")
+        if "mask" in s and not (isinstance(s["mask"], str) and len(s["mask"]) <= 40):
+            add("error", where, f"{p}.mask", "must be text of at most 40 characters")
+    if name == "capResult" and "maxChars" in s and not _int_in(s["maxChars"], 100, 1_000_000):
+        add("error", where, f"{p}.maxChars", "must be a whole number, 100 to 1000000")
+
+
+def _check_interceptors(orch, tools: dict, agents: dict, add) -> None:
+    """orchestrator.interceptors: a Gateway Lambda before each request and after each
+    response, written here (`code`) or yours (`lambdaArn`). Mirrors validate.ts
+    checkInterceptors."""
+    ics = orch.get("interceptors") if _is_obj(orch) and _is_obj(orch.get("interceptors")) else {}
+    where = {"kind": "block", "name": "orchestrator"}
+    if any(_is_obj(ics.get(pt)) for pt in ("request", "response")) and not tools:
+        add("warning", where, "orchestrator.interceptors",
+            "the build has no tools, so it deploys no Gateway for these to run on")
+    for point in ("request", "response"):
+        ic = ics.get(point)
+        if not _is_obj(ic):
+            continue
+        p = f"orchestrator.interceptors.{point}"
+        for k in ic:
+            if k not in INTERCEPTOR_KEYS:
+                add("error", where, f"{p}.{k}", f"unknown key; an interceptor takes: {', '.join(INTERCEPTOR_KEYS)}")
+        has_code, has_arn = "code" in ic, "lambdaArn" in ic
+        if has_code == has_arn:
+            add("error", where, p, 'needs exactly one of "code" (a function written in this build) or '
+                '"lambdaArn" (a function you own)')
+        if has_code:
+            if not _is_obj(ic["code"]):
+                add("error", where, f"{p}.code", "must be an object: {} or its grants, timeoutSeconds, "
+                    "memoryMB and environment")
+            else:
+                _check_code(f"interceptor-{point}", ic["code"], p, where, add)
+        if has_arn and not (isinstance(ic["lambdaArn"], str) and LAMBDA_ARN_RE.match(ic["lambdaArn"])):
+            add("error", where, f"{p}.lambdaArn", "must be a Lambda function ARN: "
+                "arn:aws:lambda:<region>:<account>:function:<name>")
+        if "passRequestHeaders" in ic and not isinstance(ic["passRequestHeaders"], bool):
+            add("error", where, f"{p}.passRequestHeaders", "must be true or false")
+        if "templates" not in ic:
+            continue
+        templates = ic["templates"]
+        if not _is_obj(templates):
+            add("error", where, f"{p}.templates", "must be an object: template name -> its settings")
+            continue
+        if has_arn and not has_code and templates:
+            add("warning", where, f"{p}.templates", "only shape code written here: a lambdaArn function "
+                "runs as you deployed it")
+        known = vocab("interceptorRequestTemplates" if point == "request" else "interceptorResponseTemplates")
+        for name, s in templates.items():
+            tp = f"{p}.templates.{name}"
+            if name not in known:
+                add("error", where, tp, f"not a {point} template; one of: {', '.join(known)}")
+            elif not _is_obj(s):
+                add("error", where, tp, "its settings must be an object ({} for none)")
+            else:
+                _check_template(point, name, s, ic, tools, agents, tp, where, add)
+
+
+TRIGGER_COMMON = ("type", "description", "prompt", "enabled", "runAs", "approvers", "gates", "maxRunsPerHour",
+                  "attachPayload", "idempotencyKey")
+#: What each trigger type adds. Mirrors TRIGGER_TYPE_KEYS in validate.ts.
+TRIGGER_TYPE_KEYS = {"webhook": ("signature",), "schedule": ("expression", "timezone"),
+                     "eventbridge": ("pattern", "bus"), "s3": ("bucket", "prefix"), "sqs": ("queueArn",)}
+TRIGGER_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,31}$")
+SCHEDULE_RE = re.compile(r"^(cron\(\S+( \S+){5}\)|rate\([1-9][0-9]* (minute|minutes|hour|hours|day|days)\))$")
+TIMEZONE_RE = re.compile(r"^[A-Za-z]+(/[A-Za-z0-9_+\-]+){0,2}$")
+BUS_RE = re.compile(r"^(arn:aws[a-z-]*:events:[a-z0-9-]+:[0-9]{12}:event-bus/)?[A-Za-z0-9._\-/]{1,256}$")
+BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$")
+SQS_ARN_RE = re.compile(r"^arn:aws[a-z-]*:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_.\-]{1,80}$")
+
+
+def _s3_attachable(orch, bucket: str, prefix: str) -> bool:
+    """Whether orchestrator.attachments.s3 lets a run read objects under bucket/prefix."""
+    att = orch.get("attachments") if _is_obj(orch) and _is_obj(orch.get("attachments")) else {}
+    for e in att.get("s3") if isinstance(att.get("s3"), list) else []:
+        e = str(e).strip("/")
+        if e == bucket:
+            return True
+        if e.startswith(f"{bucket}/") and prefix and f"{prefix.rstrip('/')}/".startswith(f"{e[len(bucket) + 1:]}/"):
+            return True
+    return False
+
+
+#: Tool auth modes that get a token from an OAuth provider (tools.<key>.oauth): the app's
+#: own client (oauth2), each person's own account (user, 3LO), the person's sign-in (obo).
+OAUTH_MODES = ("oauth2", "user", "obo")
+#: ...and the two of them that act as the person: such a tool is reached through the
+#: person Gateway, with the caller's own sign-in (bff/handler.py, gateway/client.py).
+PERSON_MODES = ("user", "obo")
+
+#: What each sign-in provider needs (authorization.signIn), and what it does not take.
+SIGN_IN_FIELDS = {"cognito": [], "okta": ["domain", "clientId"], "auth0": ["domain", "clientId"],
+                  "entra": ["tenantId", "clientId"]}
+SIGN_IN_OPTIONAL = {"okta": ["authorizationServer"]}
+SIGN_IN_LABEL = {"domain": "the org's domain", "clientId": "the app's client ID", "tenantId": "the tenant ID"}
+GROUPS_CLAIM_FOR = {"okta": "groups", "entra": "roles"}
+
+
+def _check_sign_in(auth, add) -> None:
+    """authorization.signIn: the fields the chosen provider needs, and none it would ignore.
+    Mirrors validate.ts checkSignIn."""
+    s = auth.get("signIn") if _is_obj(auth) and _is_obj(auth.get("signIn")) else None
+    if s is None:
+        return
+    where = {"kind": "block", "name": "authorization"}
+    keys = block("authorization")["keys"]
+    provider = s["provider"] if s.get("provider") else keys["signIn.provider"]["default"]
+    if provider not in SIGN_IN_FIELDS:
+        return                      # the vocabulary check has said so
+    need = SIGN_IN_FIELDS[provider]
+    allowed = {"provider", *need, *SIGN_IN_OPTIONAL.get(provider, [])}
+    for k in s:
+        if k not in allowed and k in {*SIGN_IN_LABEL, "authorizationServer"}:
+            add("error", where, f"authorization.signIn.{k}", f"`{k}` does not apply to {provider} sign-in")
+    for k in need:
+        if not (isinstance(s.get(k), str) and s[k].strip()):
+            add("error", where, f"authorization.signIn.{k}", f"{provider} sign-in needs {SIGN_IN_LABEL[k]}")
+    cognito_claim = keys["groupsClaim"]["default"]
+    claim = auth["groupsClaim"] if auth.get("groupsClaim") else cognito_claim
+    if provider != "cognito" and claim == cognito_claim and _is_obj(auth.get("actions")) and auth["actions"]:
+        hint = (f'set groupsClaim to "{GROUPS_CLAIM_FOR[provider]}"' if provider in GROUPS_CLAIM_FOR
+                else "set groupsClaim to the namespaced claim your post-login Action adds")
+        add("warning", where, "authorization.groupsClaim",
+            f"{provider} sends no cognito:groups claim, so every restricted action would be denied: {hint}")
+
+
+def _check_triggers(orch, agents: dict, add) -> None:
+    """orchestrator.triggers: what starts a run without anyone typing it (bff/triggers.py).
+    Mirrors validate.ts checkTriggers."""
+    trs = orch.get("triggers") if _is_obj(orch) and _is_obj(orch.get("triggers")) else {}
+    where = {"kind": "block", "name": "orchestrator"}
+    readers = [a for a in agents.values() if _is_obj(a) and a.get("attachments") is True]
+    for name, t in trs.items():
+        p = f"orchestrator.triggers.{name}"
+        if not TRIGGER_NAME_RE.match(name):
+            add("error", where, p, "a trigger's name is letters and digits, at most 32, starting with a letter: "
+                "it names the rule, schedule or queue")
+        if not _is_obj(t):
+            add("error", where, p, "must be an object: {type, prompt, ...}")
+            continue
+        ty = t.get("type")
+        types = vocab("triggerTypes")
+        if ty not in types:
+            add("error", where, f"{p}.type", f"must be one of: {', '.join(types)}")
+        else:
+            for k in t:
+                if k in TRIGGER_COMMON or k in TRIGGER_TYPE_KEYS[ty]:
+                    continue
+                if any(k in v for v in TRIGGER_TYPE_KEYS.values()):
+                    add("error", where, f"{p}.{k}", f"does not apply to a {ty} trigger")
+                else:
+                    add("error", where, f"{p}.{k}", "unknown key; a trigger takes: "
+                        + ", ".join([*TRIGGER_COMMON, *TRIGGER_TYPE_KEYS[ty]]))
+        if not (isinstance(t.get("prompt"), str) and t["prompt"].strip()):
+            add("error", where, f"{p}.prompt",
+                "is required: the run's request, with {{placeholders}} from the delivery")
+        for k in ("enabled", "attachPayload"):
+            if k in t and not isinstance(t[k], bool):
+                add("error", where, f"{p}.{k}", "must be true or false")
+        for k, vname in (("runAs", "triggerRunAs"), ("gates", "triggerGates")):
+            if k in t and t[k] not in vocab(vname):
+                add("error", where, f"{p}.{k}", f"must be one of: {', '.join(vocab(vname))}")
+        if "approvers" in t and not _strings(t["approvers"]):
+            add("error", where, f"{p}.approvers", "must list group names")
+        has_approvers = isinstance(t.get("approvers"), list) and len(t["approvers"]) > 0
+        if t.get("runAs") == "service" and not has_approvers:
+            add("warning", where, f"{p}.runAs",
+                "no group can read or decide its runs in the app: list them in approvers")
+        if has_approvers and t.get("runAs") != "service":
+            add("warning", where, f"{p}.approvers", "only a service trigger's runs have approvers: the owner's runs "
+                "are the owner's")
+        if t.get("gates") == "auto":
+            add("warning", where, f"{p}.gates", "every review gate of its runs approves itself")
+        if "maxRunsPerHour" in t and not _int_in(t["maxRunsPerHour"], 1, 1000):
+            add("error", where, f"{p}.maxRunsPerHour", "must be a whole number, 1 to 1000")
+        if "idempotencyKey" in t and not isinstance(t["idempotencyKey"], str):
+            add("error", where, f"{p}.idempotencyKey", "must be text: a template, e.g. {{headers.x-request-id}}")
+        if t.get("attachPayload") is True and not readers:
+            add("warning", where, f"{p}.attachPayload",
+                "no agent reads a run's files: set `attachments` on the agents that should")
+        if ty == "webhook" and "signature" in t and t["signature"] not in vocab("triggerSignatures"):
+            add("error", where, f"{p}.signature", f"must be one of: {', '.join(vocab('triggerSignatures'))}")
+        if ty == "schedule":
+            if not (isinstance(t.get("expression"), str) and SCHEDULE_RE.match(t["expression"])):
+                add("error", where, f"{p}.expression", "needs cron(minutes hours day-of-month month day-of-week year) "
+                    "or rate(<n> minutes|hours|days)")
+            if "timezone" in t and not (isinstance(t["timezone"], str) and TIMEZONE_RE.match(t["timezone"])):
+                add("error", where, f"{p}.timezone", "must be an IANA time zone, e.g. Europe/Paris")
+        if ty == "eventbridge":
+            if not (_is_obj(t.get("pattern")) and t["pattern"]):
+                add("error", where, f"{p}.pattern", 'needs an event pattern, e.g. {"source": ["aws.cloudwatch"]}')
+            if "bus" in t and not (isinstance(t["bus"], str) and BUS_RE.match(t["bus"])):
+                add("error", where, f"{p}.bus", "must be an event bus name or ARN")
+        if ty == "s3":
+            bucket = t.get("bucket")
+            prefix = t.get("prefix") if isinstance(t.get("prefix"), str) else ""
+            if not (isinstance(bucket, str) and BUCKET_RE.match(bucket)):
+                add("error", where, f"{p}.bucket", "must be a bucket name")
+            elif not _s3_attachable(orch, bucket, prefix):
+                add("warning", where, f"{p}.bucket",
+                    f'its objects are not attached to the run: add "{bucket}" to orchestrator.attachments.s3')
+            if "prefix" in t and not (isinstance(t["prefix"], str) and not t["prefix"].startswith("/")):
+                add("error", where, f"{p}.prefix", "must be a key prefix, without a leading /")
+        if ty == "sqs" and "queueArn" in t and not (isinstance(t["queueArn"], str) and SQS_ARN_RE.match(t["queueArn"])):
+            add("error", where, f"{p}.queueArn",
+                "must be an SQS queue ARN, or left out for a queue the framework creates")
+
+
+def _fixed_name_problems(statement, tools: dict) -> list[str]:
+    """A custom policy naming a tool whose one name the framework fixes (a web search's
+    "WebSearch", a knowledge base's "retrieve") by any other name: AgentCore refuses it
+    at deploy ("unrecognized action"). Observed live: a policy on a
+    library web search tool, written as orchestrator.policy.custom, named "___search".
+    Mirrors validate.ts fixedNameProblems."""
+    if not isinstance(statement, str):
+        return []
+    try:
+        acts = cedar.parse(statement)["actions"]
+    except Exception:  # noqa: BLE001 - cedar.problems names a parse error
+        return []
+    out = []
+    for a in acts:
+        key, sep, name = a.partition(cedar.SEP)
+        tool = tools.get(key) if sep and _is_obj(tools) else None
+        t = str(tool.get("type") or "").lower() if _is_obj(tool) else ""
+        fixed = _FIXED_TOOL_NAMES.get(t)
+        if fixed and name != fixed:
+            out.append(f'names {a}, but a {t} tool\'s one tool is "{fixed}": write '
+                       f'AgentCore::Action::"{key}{cedar.SEP}{fixed}"')
+    return out
+
+
 def _check_policy(orch, tools: dict, add) -> None:
     """orchestrator.policy: the mode, and each custom Cedar policy (bff/cedar.py).
     Mirrors validate.ts checkPolicy."""
@@ -547,6 +937,8 @@ def _check_policy(orch, tools: dict, add) -> None:
             add("error", where, f"{p}.description", "must be a string")
         for message in cedar.problems(c.get("statement"), list(tools)):
             add("error", where, f"{p}.statement", message)
+        for message in _fixed_name_problems(c.get("statement"), tools):
+            add("error", where, f"{p}.statement", message)
     if custom and pol.get("enabled") is False:
         add("warning", where, "orchestrator.policy.custom",
             "is not deployed: the policy engine is off (orchestrator.policy.enabled)")
@@ -554,17 +946,52 @@ def _check_policy(orch, tools: dict, add) -> None:
 
 #: The optional named maps, and the block each entry is checked against.
 NAMED = {"guardrails": "guardrail", "memories": "memory", "evaluators": "evaluator",
-         "identities": "identity", "policies": "policy"}
+         "identities": "identity", "policies": "policy", "skills": "skill"}
+#: A skill's reference file: a plain name with a text extension, and how much they may hold.
+SKILL_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.(md|txt|json|csv|yaml|yml)$")
+SKILL_MAX_FILES = 20
+SKILL_MAX_CHARS = 200_000
 #: What a guardrail enforces: one of these, or it is refused by Bedrock.
 GUARDRAIL_POLICIES = ("contentFilters", "deniedWords", "managedWordLists", "deniedTopics", "piiEntities")
 #: A build keeps a shared (library) item as {"library": "<id>"} until it is resolved.
 SHARED_WHAT = {"tools": "tool", "guardrails": "guardrail", "memories": "memory",
-               "evaluators": "evaluator", "identities": "identity", "policies": "policy"}
+               "evaluators": "evaluator", "identities": "identity", "policies": "policy", "skills": "skill"}
 
 
 def _named(wf: dict, name: str) -> dict:
     v = wf.get(name)
     return v if _is_obj(v) else {}
+
+
+#: Bedrock Guardrails' limits on a denied topic (standard topic tier). Past them the
+#: deploy fails in CreateGuardrail/UpdateGuardrail ("One or more of your guardrail topic
+#: definitions exceeds the maximum allowed length"), seen live.
+TOPIC_NAME_RE = re.compile(r"^[0-9A-Za-z_ !?.-]{1,100}$")
+TOPIC_DEFINITION_MAX, TOPIC_EXAMPLES_MAX, TOPIC_EXAMPLE_MAX = 200, 5, 100
+
+
+def _check_topics(entry, path: str, where: dict, add) -> None:
+    """A guardrail's deniedTopics within Bedrock's limits. Mirrors validate.ts checkTopics."""
+    topics = entry.get("deniedTopics") if _is_obj(entry) else None
+    if not isinstance(topics, list):
+        return
+    for i, t in enumerate(topics):
+        if not _is_obj(t):
+            continue
+        p = f"{path}.deniedTopics[{i}]"
+        if isinstance(t.get("name"), str) and not TOPIC_NAME_RE.match(t["name"]):
+            add("error", where, f"{p}.name", "1 to 100 letters, digits, spaces and - _ ! ? .")
+        d = t.get("definition")
+        if isinstance(d, str) and len(d) > TOPIC_DEFINITION_MAX:
+            add("error", where, f"{p}.definition", f"is {len(d)} characters; Bedrock takes at most "
+                f"{TOPIC_DEFINITION_MAX}: say what the topic is in one sentence")
+        ex = t.get("examples")
+        if isinstance(ex, list):
+            if len(ex) > TOPIC_EXAMPLES_MAX:
+                add("error", where, f"{p}.examples", f"at most {TOPIC_EXAMPLES_MAX} examples")
+            for j, e in enumerate(ex):
+                if not isinstance(e, str) or not 1 <= len(e) <= TOPIC_EXAMPLE_MAX:
+                    add("error", where, f"{p}.examples[{j}]", f"an example is 1 to {TOPIC_EXAMPLE_MAX} characters")
 
 
 def _check_named(wf: dict, add, out: list) -> None:
@@ -573,6 +1000,8 @@ def _check_named(wf: dict, add, out: list) -> None:
     validate.ts checkNamed."""
     tools = wf.get("tools") if _is_obj(wf.get("tools")) else {}
     agents = wf.get("agents") if _is_obj(wf.get("agents")) else {}
+    if _is_obj(wf.get("guardrail")):
+        _check_topics(wf["guardrail"], "guardrail", {"kind": "block", "name": "guardrail"}, add)
     for m in SHARED_WHAT:
         for key, entry in _named(wf, m).items():
             if _is_obj(entry) and "library" in entry:
@@ -596,6 +1025,8 @@ def _check_named(wf: dict, add, out: list) -> None:
             if m == "guardrails" and not any(_truthy(entry.get(k)) for k in GUARDRAIL_POLICIES):
                 add("error", where, path, "a guardrail needs something to enforce: content filters, denied "
                     "words or topics, managed word lists or PII entities")
+            if m == "guardrails":
+                _check_topics(entry, path, where, add)
             if m == "memories":
                 if isinstance(entry.get("strategies"), list) and not entry["strategies"]:
                     add("error", where, f"{path}.strategies", "name at least one strategy")
@@ -610,6 +1041,8 @@ def _check_named(wf: dict, add, out: list) -> None:
                         not _is_obj(s) or not _num(s.get("value")) or not isinstance(s.get("label"), str)
                         or not isinstance(s.get("definition"), str) for s in scale)):
                     add("error", where, f"{path}.scale", "must be 2 to 20 {value, label, definition} points")
+            if m == "skills":
+                _check_skill(entry, path, where, add, agents, key)
             if m == "identities" and entry.get("type") == "oauth2":
                 urls = [u for u in (entry.get("discoveryUrl"), entry.get("tokenUrl")) if u not in (None, "")]
                 if len(urls) != 1:
@@ -691,6 +1124,18 @@ def _check_named(wf: dict, add, out: list) -> None:
             add("warning", where, f"{path}.policies",
                 "is not deployed: the policy engine is off (orchestrator.policy.enabled)")
     # --- what agents name
+    skills = _named(wf, "skills")
+    for aid, a in agents.items():
+        names = a.get("skills") if _is_obj(a) and isinstance(a.get("skills"), list) else []
+        for i, n in enumerate(names):
+            if not isinstance(n, str):
+                continue          # _check_entry names the type
+            p = f"agents.{aid}.skills[{i}]"
+            if n not in skills:
+                add("error", {"kind": "agent", "id": aid}, p, f'"{n}" is not a skill. Define it under Skills, '
+                    f'or pick one of: {", ".join(skills) or "(none yet)"}')
+            elif names.index(n) != i:
+                add("error", {"kind": "agent", "id": aid}, p, f'"{n}" is listed twice')
     guardrails, memories = _named(wf, "guardrails"), _named(wf, "memories")
     for aid, a in agents.items():
         if not _is_obj(a) or not _is_obj(a.get("agentcore")):
@@ -716,6 +1161,30 @@ def _check_named(wf: dict, add, out: list) -> None:
             for k in ("longTerm", "scope", "custom"):
                 if k in mem:
                     add("error", where, f"{path}.memory.{k}", "the memory it uses sets this — remove it")
+
+
+def _check_skill(entry: dict, path: str, where: dict, add, agents: dict, key: str) -> None:
+    """A skill's instructions and reference files. Mirrors validate.ts checkSkill."""
+    if isinstance(entry.get("instructions"), str) and not entry["instructions"].strip():
+        add("error", where, f"{path}.instructions", "is required: the steps the agent follows")
+    files = entry.get("files")
+    if files is not None and _is_obj(files):
+        if len(files) > SKILL_MAX_FILES:
+            add("error", where, f"{path}.files", f"at most {SKILL_MAX_FILES} reference files")
+        total = len(entry.get("instructions") or "") if isinstance(entry.get("instructions"), str) else 0
+        for name, text in files.items():
+            if not SKILL_FILE_RE.match(name):
+                add("error", where, f"{path}.files.{name}", "a reference file is a plain name ending in .md, .txt, "
+                    ".json, .csv, .yaml or .yml")
+            if not isinstance(text, str):
+                add("error", where, f"{path}.files.{name}", "must be the file's text")
+            else:
+                total += len(text)
+        if total > SKILL_MAX_CHARS:
+            add("error", where, f"{path}.files", f"a skill holds at most {SKILL_MAX_CHARS // 1000} KB of text, "
+                "instructions and files together")
+    if not any(_is_obj(a) and isinstance(a.get("skills"), list) and key in a["skills"] for a in agents.values()):
+        add("warning", where, path, "no agent uses it: add it to an agent's Skills")
 
 
 def _check_features(core: dict, path: str, where: dict, add, shared: list | None = None) -> None:
@@ -782,10 +1251,16 @@ def validate(wf: dict) -> list[dict]:
     tools = wf.get("tools") if _is_obj(wf.get("tools")) else {}
     steps = wf.get("steps") if isinstance(wf.get("steps"), list) else []
     _check_policy(wf.get("orchestrator"), tools, add)
+    _check_attachments(wf.get("orchestrator"), agents, add)
+    _check_interceptors(wf.get("orchestrator"), tools, agents, add)
+    _check_triggers(wf.get("orchestrator"), agents, add)
+    _check_sign_in(wf.get("authorization"), add)
     _check_named(wf, add, out)
 
     # --- tools
     kinds: dict[str, list[str]] = {}
+    auth_block = wf.get("authorization") if _is_obj(wf.get("authorization")) else {}
+    sign_in = (auth_block.get("signIn") or {}).get("provider") if _is_obj(auth_block.get("signIn")) else None
     for key, tool in tools.items():
         where = {"kind": "tool", "id": key}
         path = f"tools.{key}"
@@ -884,14 +1359,15 @@ def validate(wf: dict) -> list[dict]:
                 if _is_obj(doc.get("components")) and doc["components"].get("securitySchemes"):
                     add("error", where, f"{path}.schema.components.securitySchemes",
                         "is not supported by the Gateway: set `auth` on the tool instead")
-        if tool.get("auth") == "oauth2":
+        mode = tool.get("auth")
+        if mode in OAUTH_MODES:
             if t not in vocab("oauthToolTypes"):
                 add("error", where, f"{path}.auth",
-                    f"oauth2 is only for {', '.join(vocab('oauthToolTypes'))} tools")
+                    f"{mode} is only for {', '.join(vocab('oauthToolTypes'))} tools")
             oa = tool.get("oauth")
             if not _is_obj(oa):
                 add("error", where, f"{path}.oauth",
-                    'auth "oauth2" needs {"clientId", "scopes", and "discoveryUrl" or "tokenUrl"}')
+                    f'auth "{mode}" needs {{"clientId", "scopes", and "discoveryUrl" or "tokenUrl"}}')
             else:
                 if not isinstance(oa.get("clientId"), str) or not oa["clientId"].strip():
                     add("error", where, f"{path}.oauth.clientId", "is required: the OAuth client's id")
@@ -901,11 +1377,27 @@ def validate(wf: dict) -> list[dict]:
                 if len(urls) != 1:
                     add("error", where, f"{path}.oauth",
                         "needs exactly one of discoveryUrl (the issuer's .well-known/openid-configuration) or tokenUrl")
-                for k in ("discoveryUrl", "tokenUrl", "issuer"):
+                for k in ("discoveryUrl", "tokenUrl", "issuer", "authorizationUrl"):
                     if oa.get(k) is not None and (not isinstance(oa[k], str) or not HTTPS_RE.match(oa[k])):
                         add("error", where, f"{path}.oauth.{k}", "must be an https:// URL")
+                if mode == "user" and oa.get("tokenUrl") and not oa.get("authorizationUrl"):
+                    add("error", where, f"{path}.oauth.authorizationUrl",
+                        "with tokenUrl, each person's sign-in needs the provider's authorizationUrl too")
+                if mode != "user" and "authorizationUrl" in oa:
+                    add("warning", where, f"{path}.oauth.authorizationUrl", 'is only used with auth "user"')
+                if mode != "obo" and "audience" in oa:
+                    add("warning", where, f"{path}.oauth.audience", 'is only used with auth "obo"')
+            listed = isinstance(tool.get("toolSchema"), list) and tool["toolSchema"]
+            if mode in PERSON_MODES and t == "mcp" and not listed:
+                add("error", where, f"{path}.toolSchema",
+                    "an MCP tool used as the person must list its tools here: the Gateway cannot ask the "
+                    "server for them before anyone has signed in")
+            if mode == "obo" and sign_in == "entra":
+                add("error", where, f"{path}.auth",
+                    "Entra ID's on-behalf-of exchange needs an access token for this app, which sign-in does not "
+                    "request yet: use \"user\" (each person connects their account) for now")
         elif "oauth" in tool:
-            add("warning", where, f"{path}.oauth", 'is only used with auth "oauth2"')
+            add("warning", where, f"{path}.oauth", 'is only used with auth "oauth2", "user" or "obo"')
         if t == "openapi" and isinstance(tool.get("schemaS3Uri"), str) and not S3_URI_RE.search(tool["schemaS3Uri"]):
             add("error", where, f"{path}.schemaS3Uri",
                 "must be s3://<bucket>/<key> — the Gateway loads an OpenAPI schema only from S3")
@@ -1085,6 +1577,7 @@ def validate(wf: dict) -> list[dict]:
             add("error", where, f"{path}.gateId",
                 f'"{step["gateId"]}" is also an agent id — pick a different gate id')
         _check_branch(steps, i, out)
+        _check_hitl(step, i, add)
         prev = steps[i - 1] if i > 0 else None
         if _is_obj(prev) and _jst(prev.get("parallel")) and not _jst(prev.get("hitl")) and _jst(step.get("hitl")):
             add("warning", where, path,

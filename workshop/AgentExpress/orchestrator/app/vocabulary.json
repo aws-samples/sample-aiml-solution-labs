@@ -17,8 +17,8 @@
   },
 
   "toolAuthModes": {
-    "$comment": "A tool target's `auth`. \"\" means unset. oauth2 = OAuth client credentials through an AgentCore Identity provider the framework creates (mcp, openapi only: an API Gateway target takes apikey, sigv4 or none).",
-    "values": ["", "none", "apikey", "sigv4", "oauth2"]
+    "$comment": "A tool target's `auth`. \"\" means unset. oauth2 = OAuth client credentials through an AgentCore Identity provider the framework creates; user = each person's own account (OAuth authorization code); obo = the person's sign-in exchanged on-behalf-of. The three OAuth modes are mcp and openapi only: an API Gateway target takes apikey, sigv4 or none.",
+    "values": ["", "none", "apikey", "sigv4", "oauth2", "user", "obo"]
   },
 
   "httpMethods": {
@@ -180,5 +180,53 @@
   "gatewayIdentityModes": {
     "$comment": "How agents authenticate to the Gateway (orchestrator.gatewayIdentity): shared = one machine client for every agent (the default); perAgent = one client per agent that has a tool, so the Gateway knows WHICH agent called. perAgent needs the Cognito pool the deployment creates itself: with your own IdP there is no client to create.",
     "values": ["shared", "perAgent"]
+  },
+  "signInProviders": {
+    "$comment": "Who signs people in to an app (authorization.signIn.provider): cognito = the user pool the deployment creates; okta, auth0, entra = your own provider, through its single-page application. Each maps to the IaC's idp setting.",
+    "values": ["cognito", "okta", "auth0", "entra"]
+  },
+  "interceptorRequestTemplates": {
+    "$comment": "What a REQUEST interceptor written in the build may be generated from (orchestrator.interceptors.request.templates): audit logs each call, blockTools refuses named tools, argumentGuard refuses arguments matching a pattern or over a size, injectContext sets arguments from the run (session, agent, user), custom is your own code.",
+    "values": ["audit", "blockTools", "argumentGuard", "injectContext", "custom"]
+  },
+  "interceptorResponseTemplates": {
+    "$comment": "What a RESPONSE interceptor written in the build may be generated from (orchestrator.interceptors.response.templates): audit logs each answer, redactPii masks personal data in tool results, hideTools removes tools from tools/list, capResult truncates long results, custom is your own code.",
+    "values": ["audit", "redactPii", "hideTools", "capResult", "custom"]
+  },
+  "interceptorPiiTypes": {
+    "$comment": "What the redactPii interceptor template masks (templates.redactPii.types). Pattern-based, so it is a backstop rather than a guarantee: a Bedrock guardrail is the managed check.",
+    "values": ["email", "phone", "ssn", "card"]
+  },
+  "triggerTypes": {
+    "$comment": "What starts a run without anyone typing it (orchestrator.triggers.<name>.type): webhook = a signed POST to the app's /api/hooks/<name>; schedule = EventBridge Scheduler, cron or rate; eventbridge = an event pattern on a bus (AWS services, your own applications, SaaS partners); s3 = an object created in a bucket; sqs = a message on a queue.",
+    "values": ["webhook", "schedule", "eventbridge", "s3", "sqs"]
+  },
+  "triggerSignatures": {
+    "$comment": "How a webhook trigger's sender proves a delivery (orchestrator.triggers.<name>.signature): agentexpress = HMAC-SHA256 of '<timestamp>.<body>' in X-AX-Signature with X-AX-Timestamp; github = X-Hub-Signature-256; slack = X-Slack-Signature over v0:<timestamp>:<body>; stripe = Stripe-Signature; token = the secret itself in X-AX-Token, for a sender that can set a header but not sign.",
+    "values": ["agentexpress", "github", "slack", "stripe", "token"]
+  },
+  "triggerRunAs": {
+    "$comment": "Whose run a trigger starts (orchestrator.triggers.<name>.runAs): owner = the build's owner, as if they had typed it; service = the trigger's own identity, whose runs its `approvers` groups read and decide.",
+    "values": ["owner", "service"]
+  },
+  "triggerGates": {
+    "$comment": "How a triggered run's review gates behave (orchestrator.triggers.<name>.gates): inherit = as each step's `hitl` says; auto = every gate approves itself, and each approval is in the activity log.",
+    "values": ["inherit", "auto"]
+  },
+  "gateModes": {
+    "$comment": "How a review gate decides (steps[].hitl.mode): always = a person, every time; threshold = a person only when one of its `when` rules matches the gated output, else it approves itself; auto = it approves itself. Every self-approval is on the run's timeline and in the activity log.",
+    "values": ["always", "threshold", "auto"]
+  },
+  "gateApprovals": {
+    "$comment": "Where a review gate is answered (steps[].hitl.approval): console = the run page; event = also asked for as an \"AgentExpress Approval Requested\" event on the account's default bus, and answerable with an \"AgentExpress Approval Decision\" event (bff/gates.py).",
+    "values": ["console", "event"]
+  },
+  "gateTimeoutActions": {
+    "$comment": "What a review gate decides when nobody has by its timeout (steps[].hitl.timeout.action).",
+    "values": ["approve", "deny"]
+  },
+  "interceptorContextSources": {
+    "$comment": "Where the injectContext interceptor template takes an argument's value from (templates.injectContext.arguments): the run's session id, the calling agent's id, or the run's user, sent by the runtime as the x-ax-session / x-ax-agent / x-ax-user headers.",
+    "values": ["session", "agent", "user"]
   }
 }

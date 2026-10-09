@@ -13,6 +13,7 @@
  *  run buries the one guardrail line a reader came for. */
 
 import { useCollection } from "@cloudscape-design/collection-hooks";
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import Container from "@cloudscape-design/components/container";
@@ -32,6 +33,7 @@ import { requestTitle } from "../lib/request";
 import { isSettled, statusIndicator } from "../lib/status";
 import type { Action, NodeStatus, SessionSnapshot, Workflow } from "../types";
 import { Graph } from "./Graph";
+import { ConnectAccount } from "./ConnectAccount";
 import { toolsLabel } from "../lib/tools";
 
 /** One row of the Steps table. FLATTENED on purpose: a sortable column needs a scalar
@@ -57,6 +59,33 @@ interface EventRow {
 
 const EVENT_PAGE = 20;
 
+/** Why a finished run stopped where it did, read from its timeline: a branch rule that
+ *  sent it to END, a guardrail block, or an agent that failed. Null for a run that ran
+ *  to its last step (or has not finished). Before this, the reason was only on the
+ *  Timeline tab, so a run that ended early looked like one that produced nothing. */
+export function endReason(snap: SessionSnapshot, workflow?: Workflow): { type: "info" | "error"; text: string } | null {
+  const overall = String(snap.overall ?? "");
+  const logs = (snap.logs ?? []).slice().reverse();
+  if (overall === "done") {
+    // nodes.py make_branch_node: "Branch after <agent>: <rule> -> END · skipping a, b"
+    for (const l of logs) {
+      const m = /^Branch after (.+?): (.+) -> END(?: · skipping (.+))?$/.exec(l.msg);
+      if (!m) continue;
+      const agents = (workflow ?? snap.workflow)?.agents ?? {};
+      const name = (id: string) => agents[id]?.name ?? id;
+      const skipped = m[3] ? m[3].split(", ").map((id) => name(id.trim())).join(", ") : "";
+      return { type: "info", text: `Ended early: after ${name(m[1])}, the branch rule "${m[2]}" sent the run to END`
+        + (skipped ? `, so ${skipped} did not run.` : ".") };
+    }
+    return null;
+  }
+  if (overall === "failed") {
+    const why = logs.find((l) => / blocked by guardrail: | failed: /.test(l.msg));
+    return { type: "error", text: why ? why.msg : "The run failed. The Timeline tab has each step's events." };
+  }
+  return null;
+}
+
 export function RunDetail({
   snap, workflow, selected, onSelect, can, onCancel, activeTab, onTabChange, onRerun,
 }: {
@@ -78,6 +107,7 @@ export function RunDetail({
     () => (workflow.steps ?? []).flatMap((s) => s.parallel ?? s.sequence ?? [s.agent!]),
     [workflow]);
   const doneCount = ids.filter((i) => nodes[i]?.status === "done").length;
+  const ended = useMemo(() => endReason(snap, workflow), [snap, workflow]);
 
   const stageOf = (id: string): number => {
     const i = (workflow.steps ?? []).findIndex(
@@ -162,6 +192,13 @@ export function RunDetail({
         </ExpandableSection>
       ) : null}
 
+      <ConnectAccount snap={snap} canRerun={settled && can("rerun")} onRerun={onRerun} />
+      {ended ? (
+        <Alert type={ended.type} header={ended.type === "error" ? "Why the run stopped" : "Why the run ended here"}
+          action={<Button onClick={() => onTabChange("timeline")}>Open the Timeline</Button>}>
+          {ended.text}
+        </Alert>
+      ) : null}
       <Container header={<Header variant="h2">Details</Header>}>
         <KeyValuePairs
           columns={4}
@@ -173,6 +210,21 @@ export function RunDetail({
             { label: "Run ID", value: <Box variant="code" fontSize="body-s">{snap.session_id}</Box> },
             { label: "Started by", value: snap.user || "—" },
             { label: "Subject", value: snap.subject_id || "—" },
+            ...(snap.attachments?.length ? [{
+              label: "Files",
+              value: (
+                <SpaceBetween size="xxxs">
+                  {snap.attachments.map((f) => (
+                    <Box key={f.key} fontSize="body-s">
+                      📎 <span title={f.uri ?? f.name}>{f.name}</span>
+                      {" "}<Box variant="span" color="text-body-secondary" fontSize="body-s">
+                        ({(f.size / 1e6 >= 0.1 ? `${(f.size / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1e3))} KB`)}{f.uri ? ", from S3" : ""})
+                      </Box>
+                    </Box>
+                  ))}
+                </SpaceBetween>
+              ),
+            }] : []),
             { label: "Awaiting", value: awaiting },
           ]}
         />
@@ -351,7 +403,7 @@ export function RunDetail({
                     </ExpandableSection>
                   ))}
                   {ids.every((i) => !nodes[i]?.output) ? (
-                    <Box color="text-status-inactive">No outputs yet.</Box>
+                    <Box color="text-status-inactive">{ended && settled ? ended.text : "No outputs yet."}</Box>
                   ) : null}
                 </SpaceBetween>
               </Container>

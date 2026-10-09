@@ -86,6 +86,8 @@ export function HitlGate({
         <Alert type="info" statusIconAriaLabel="Info">
           The run is paused at this gate and will stay paused until you decide. Durable
           state is checkpointed, so this survives a reload.
+          {snap.hitl?.approval === "event" ? " It can also be decided by an AgentExpress Approval Decision event." : ""}
+          {snap.hitl?.timeoutAt ? ` With no decision by ${snap.hitl.timeoutAt} (UTC) it is ${snap.hitl.timeoutAction === "approve" ? "approved" : "denied"} automatically.` : ""}
         </Alert>
 
         {denyReason ? <Alert type="warning">{denyReason}</Alert> : null}

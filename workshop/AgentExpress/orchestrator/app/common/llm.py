@@ -98,7 +98,8 @@ async def run_llm(name: str, system: str, user: str,
                   model: str | None = None, temperature: float = 0,
                   max_tokens: int = 300, top_p: float | None = None,
                   stop_sequences: list[str] | None = None,
-                  images: list[dict] | None = None) -> tuple[str, bool]:
+                  images: list[dict] | None = None,
+                  files: list[dict] | None = None) -> tuple[str, bool]:
     """Call the model and return (text, hit_token_ceiling).
 
     The second value is the one that is easy to lose and expensive to lose. When a
@@ -115,8 +116,11 @@ async def run_llm(name: str, system: str, user: str,
     # `images` ({key, format, bytes}, from images.load_for) go to the model as Converse
     # image content after the text. The logs and telemetry name them, never carry them.
     images = list(images or [])
+    # `files`: the run's attachments (attachments.load_for), as document or image content.
+    files = list(files or [])
     shown = user + (f"\n\n[{len(images)} image(s): {', '.join(i['key'] for i in images)}]"
-                    if images else "")
+                    if images else "") + (
+        f"\n\n[{len(files)} attached file(s): {', '.join(f['name'] for f in files)}]" if files else "")
     # Capture this call's prompt (system + the real source inputs) so the agent's
     # AGENT span carries it as gen_ai.task.input for AgentCore Evaluations, and so
     # per-prompt evaluation can find it. No-op outside an agent run.
@@ -139,11 +143,13 @@ async def run_llm(name: str, system: str, user: str,
                                       config=_client_config(), **sampling,
                                       **({"stop_sequences": list(stop_sequences)}
                                          if stop_sequences else {}))
-            if images:
+            if images or files:
                 from langchain_core.messages import HumanMessage, SystemMessage
+
+                from app.common import attachments as _att
                 # A block with no "type" is passed to Converse as it is.
                 blocks = [{"image": {"format": i["format"], "source": {"bytes": i["bytes"]}}}
-                          for i in images]
+                          for i in images] + _att.blocks(files)
                 text = f"{system}\n\n{user}" if system_in_user else user
                 messages = ([] if system_in_user else [SystemMessage(content=system)]) + [
                     HumanMessage(content=[{"type": "text", "text": text}, *blocks])]

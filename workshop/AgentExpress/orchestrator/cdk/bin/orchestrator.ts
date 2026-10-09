@@ -16,8 +16,8 @@ const agentName = ctx("agentName", "multiagent_orchestrator");
 const region = ctx("region") || process.env.CDK_DEFAULT_REGION || "us-east-1";
 
 const idp = ctx("idp", "cognito");
-if (!["cognito", "auth0", "none"].includes(idp)) {
-  throw new Error(`idp must be one of "cognito", "auth0", "none" (got "${idp}")`);
+if (!["cognito", "auth0", "okta", "entra", "none"].includes(idp)) {
+  throw new Error(`idp must be one of "cognito", "auth0", "okta", "entra", "none" (got "${idp}")`);
 }
 // idp=none deploys the UI and /api/* with NO sign-in on a public CloudFront URL, where
 // anyone who finds it can run agents on this account's Bedrock budget. Say so twice.
@@ -71,6 +71,10 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   //   -c idp=cognito   (default) Cognito; add -c createCognito=true to have CDK
   //                    provision the pool, or pass the cognito* ids below.
   //   -c idp=auth0     existing Auth0 tenant: -c auth0Domain=... -c auth0ClientId=...
+  //   -c idp=okta      existing Okta org: -c oktaDomain=... -c oktaClientId=...
+  //                    [-c oktaAuthServer=default]
+  //   -c idp=entra     existing Microsoft Entra ID tenant: -c entraTenantId=<GUID>
+  //                    -c entraClientId=...
   //   -c idp=none      NO authentication — the UI and /api/* deploy open.
   idp: idp,
   cognitoUserPoolId: ctx("cognitoUserPoolId", ""),
@@ -78,6 +82,11 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   cognitoDomainPrefix: ctx("cognitoDomainPrefix", ""),
   auth0Domain: ctx("auth0Domain", ""),
   auth0ClientId: ctx("auth0ClientId", ""),
+  oktaDomain: ctx("oktaDomain", ""),
+  oktaClientId: ctx("oktaClientId", ""),
+  oktaAuthServer: ctx("oktaAuthServer", "default"),
+  entraTenantId: ctx("entraTenantId", ""),
+  entraClientId: ctx("entraClientId", ""),
   // Only meaningful for idp=cognito.
   createCognito: idp === "cognito" && String(app.node.tryGetContext("createCognito")) === "true",
   // Open registration on the Hosted UI (email verified); new users join selfSignUpGroup.
@@ -94,6 +103,8 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   // where CDK creates the resource server + confidential client itself).
   gatewayClientId: ctx("gatewayClientId", ""),
   gatewayAudience: ctx("gatewayAudience", ""),
+  // Okta: the custom scope to request (required); Entra: default "<gatewayAudience>/.default".
+  gatewayScope: ctx("gatewayScope", ""),
   // Secret comes from the ENVIRONMENT, never a context key: `cdk.context.json`
   // is committed, and -c values land in cdk.out. Mirrors TF_VAR_gateway_client_secret.
   gatewayClientSecret: process.env.GATEWAY_CLIENT_SECRET ?? "",

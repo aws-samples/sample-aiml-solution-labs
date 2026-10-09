@@ -17,7 +17,7 @@ import copy
 import json
 
 import pytest
-from test_builds import CTX, call, env, save  # noqa: F401
+from test_builds import CTX, call, env, project, save  # noqa: F401
 
 moto = pytest.importorskip("moto")
 
@@ -738,3 +738,71 @@ def test_an_allowed_s3_prefix_is_a_folder_not_a_string_prefix(env, monkeypatch):
     assert not designer._s3_allowed("other-bucket", "reports/q3.pdf")
     monkeypatch.setattr(designer, "S3_ALLOWED", ["docs-bucket"])
     assert designer._s3_allowed("docs-bucket", "anything/at/all")
+
+
+# --- library items: kept, and reused --------------------------------------------------
+
+DOCS_TOOL = {"type": "mcp", "description": "Docs server.", "endpoint": "https://docs.example.com/mcp"}
+
+
+def _published(env, sub="u1", name="docs"):
+    """A tool in the caller's library, and the build using it live (Publish to library)."""
+    _, it = call(env, "POST /api/library", sub=sub,
+                 body={"kind": "tool", "name": name, "definition": DOCS_TOOL})
+    return it
+
+
+def test_an_edit_to_a_build_with_a_library_tool_is_applied_not_rejected(env, model):
+    """Observed live: after Publish to library, every Assistant edit came back
+    "a shared tool that could not be loaded", because the draft was checked with its
+    library links unresolved; the Assistant then said it could not reach the library
+    tools, or re-created them."""
+    it = _published(env)
+    p = project()
+    p["workflow"]["tools"] = {"docs": {"library": it["id"]}}
+    p["workflow"]["agents"]["claims_intake"]["tool"] = "docs"
+    assert call(env, "PUT /api/builds/{id}", params={"id": "pclaims01"}, body={"project": p})[0] == 200
+    script = model(tool_use(add_fraud()), says("Added the fraud check."))
+    send(env, "Add a fraud check after intake")
+    run_background(env)
+    result = script.calls[1]["messages"][-1]["content"][0]["toolResult"]["content"][0]["json"]
+    assert result["status"] == "applied" and result["remaining_problems"] == []
+    wf = draft(env)["workflow"]
+    assert wf["tools"] == {"docs": {"library": it["id"]}} and "fraud_check" in wf["agents"]
+    # The model saw what the library tool is, and that it must leave it alone.
+    context = script.calls[0]["messages"][-1]["content"][0]["text"]
+    assert '"tools.docs": {"type": "mcp"' in context and "never edit, re-create or remove it" in context
+
+
+def test_the_users_library_is_offered_and_reused_by_its_id(env, model):
+    it = _published(env)
+    _, theirs = call(env, "POST /api/library", sub="u2",
+                     body={"kind": "tool", "name": "secret", "definition": DOCS_TOOL})
+    save(env)
+    use = ("apply_changes", {"summary": "Intake reads the docs server from your library", "ops": [
+        {"op": "set_tool", "key": "docs", "tool": {"library": it["id"]}},
+        {"op": "update_agent", "id": "claims_intake", "set": {"tool": "docs"}}]})
+    script = model(tool_use(use), says("Done."))
+    send(env, "Let intake use my docs tool")
+    run_background(env)
+    context = script.calls[0]["messages"][-1]["content"][0]["text"]
+    assert f'"id": "{it["id"]}"' in context and '"type": "mcp"' in context
+    assert theirs["id"] not in context                       # someone else's, not shared
+    result = script.calls[1]["messages"][-1]["content"][0]["toolResult"]["content"][0]["json"]
+    assert result["status"] == "applied"
+    assert draft(env)["workflow"]["tools"]["docs"] == {"library": it["id"]}
+
+
+def test_a_library_item_not_shared_with_the_caller_is_not_loaded(env, model):
+    _, theirs = call(env, "POST /api/library", sub="u2",
+                     body={"kind": "tool", "name": "secret", "definition": DOCS_TOOL})
+    save(env)
+    sneak = ("apply_changes", {"summary": "x", "ops": [
+        {"op": "set_tool", "key": "docs", "tool": {"library": theirs["id"]}},
+        {"op": "update_agent", "id": "claims_intake", "set": {"tool": "docs"}}]})
+    script = model(tool_use(sneak), says("Could not."))
+    send(env, "Use that tool")
+    run_background(env)
+    result = script.calls[1]["messages"][-1]["content"][0]["toolResult"]["content"][0]["json"]
+    assert result["status"] == "rejected"
+    assert any(e["path"] == "tools.docs" and "could not be loaded" in e["message"] for e in result["errors"])

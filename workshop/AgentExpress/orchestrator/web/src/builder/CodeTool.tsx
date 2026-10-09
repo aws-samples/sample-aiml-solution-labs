@@ -29,7 +29,7 @@ type Grants = {
   secret?: string; table?: string; tableAccess?: string; s3Prefix?: string; s3Access?: string;
   vpc?: { subnetIds: string[]; securityGroupIds: string[] };
 };
-interface Code { grants?: Grants; timeoutSeconds?: number; memoryMB?: number; environment?: Record<string, string> }
+export interface Code { grants?: Grants; timeoutSeconds?: number; memoryMB?: number; environment?: Record<string, string> }
 
 const ACCESS = [{ value: "read", label: "Read" }, { value: "readwrite", label: "Read and write" }];
 
@@ -52,7 +52,7 @@ export function starterFiles(key: string, tool: Entry): ToolFiles {
   };
 }
 
-function GrantsForm({ code, onChange }: { code: Code; onChange: (c: Code) => void }) {
+export function GrantsForm({ code, onChange }: { code: Code; onChange: (c: Code) => void }) {
   const g = code.grants ?? {};
   const set = (patch: Partial<Grants>) => {
     const next: Grants = { ...g, ...patch };
@@ -124,7 +124,7 @@ function GrantsForm({ code, onChange }: { code: Code; onChange: (c: Code) => voi
   );
 }
 
-function Files({ files, onChange }: { files: ToolFiles; onChange: (f: ToolFiles) => void }) {
+export function Files({ files, onChange }: { files: ToolFiles; onChange: (f: ToolFiles) => void }) {
   const names = ["handler.py", "requirements.txt", "events.json",
     ...Object.keys(files).filter((n) => !["handler.py", "requirements.txt", "events.json"].includes(n)).sort()];
   const [active, setActive] = useState("handler.py");
@@ -162,7 +162,7 @@ function Files({ files, onChange }: { files: ToolFiles; onChange: (f: ToolFiles)
   );
 }
 
-function CheckResult({ result }: { result: CodeCheck }) {
+export function CheckResult({ result }: { result: CodeCheck }) {
   const errors = result.problems.filter((p) => p.severity === "error");
   const sb = result.sandbox;
   return (

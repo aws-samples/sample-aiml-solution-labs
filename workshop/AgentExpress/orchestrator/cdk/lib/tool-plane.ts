@@ -65,6 +65,30 @@ export interface CodeSpec {
   environment?: Record<string, string>;
 }
 
+/** Where the Gateway calls an interceptor: before a request reaches a tool, or after
+ *  the tool answers. */
+export type InterceptionPoint = "request" | "response";
+export const INTERCEPTION_POINTS: InterceptionPoint[] = ["request", "response"];
+/** orchestrator.interceptors.<point> (validated by bff/validate_build.py
+ *  _check_interceptors before a deploy, and by interceptorsOf at synth). */
+export interface InterceptorSpec {
+  /** A function written in the build: app/tools/_code/interceptor-<point>/. */
+  code?: CodeSpec;
+  /** A function you own. */
+  lambdaArn?: string;
+  /** Hand the interceptor the request headers (default false): the caller's token,
+   *  and the x-ax-session / x-ax-agent / x-ax-user the runtime sends. */
+  passRequestHeaders?: boolean;
+  /** What the Builder generated the code from. Read only by the Builder. */
+  templates?: Record<string, unknown>;
+}
+/** The function name of an interceptor written in the build. The ToolLambda- prefix
+ *  keeps it inside the deploy role's scoped grants, like a code tool. Mirrors
+ *  local.code_functions in terraform/tools_code.tf. */
+export function interceptorFunctionName(agentName: string, point: InterceptionPoint): string {
+  return `ToolLambda-${agentName}-interceptor-${point}`;
+}
+
 /** What no code tool may reach, in any account: the framework's own tables, secrets and
  *  buckets. An explicit Deny in every code tool's permissions boundary, so a grant can
  *  never widen into them. Mirrors local.code_boundary_deny in terraform/tools.tf and the
@@ -187,8 +211,10 @@ export interface ToolSpec {
   stage?: string;
   toolFilters?: { path: string; methods: string[] }[];
   toolOverrides?: { path: string; method: string; name: string; description?: string }[];
-  /** auth=oauth2: OAuth client credentials (the client secret is in toolApiKeys). */
-  oauth?: { clientId: string; scopes?: string[]; discoveryUrl?: string; tokenUrl?: string; issuer?: string };
+  /** auth=oauth2 | user | obo: the OAuth client (its secret is in toolApiKeys). `authorizationUrl`
+   *  for "user" with a tokenUrl; `audience` for "obo": the API the exchanged token is for. */
+  oauth?: { clientId: string; scopes?: string[]; discoveryUrl?: string; tokenUrl?: string; issuer?: string;
+    authorizationUrl?: string; audience?: string };
   /**
    * Which field of this target's result ROWS carries which role, for an agent that
    * consumes the tool's data rather than its prose rendering (ctx.call_tool_rows).
@@ -316,7 +342,7 @@ export interface ToolSpec {
    *              secret. Only works behind a service that verifies SigV4:
    *              AgentCore Runtime/Gateway, API Gateway, Lambda Function URLs.
    */
-  auth?: "none" | "apikey" | "sigv4" | "oauth2";
+  auth?: "none" | "apikey" | "sigv4" | "oauth2" | "user" | "obo";
   /** SigV4 signing name; auto-detected from the hostname when omitted. */
   service?: string;
   /** Cedar shape. Omit for a target-level permit (all the target's tools). */
@@ -332,6 +358,8 @@ export interface ToolSpec {
 
 export interface ToolPlaneProps {
   agentName: string;
+  /** orchestrator.interceptors, as interceptorsOf returned it. */
+  interceptors?: Partial<Record<InterceptionPoint, InterceptorSpec>>;
   /** The parsed `tools` block from workflow.json. */
   tools: Record<string, ToolSpec>;
   /** API keys by tool name, from $TOOL_API_KEYS. Never from workflow.json. */
@@ -342,8 +370,17 @@ export interface ToolPlaneProps {
   /** Each agent's own client, with orchestrator.gatewayIdentity "perAgent". */
   agentClientIds?: string[];
   gatewayAudience: string;
+  /** Cognito pins the caller by `client_id` (allowedClients); every other idp by the
+   *  token's `aud` plus the claim naming the client (clientClaim). */
   isCognito: boolean;
-  isAuth0: boolean;
+  /** The claim carrying the calling client on a non-Cognito token: "azp" (Auth0,
+   *  Entra, the default) or "cid" (Okta). */
+  clientClaim?: string;
+  /** For tools that act as the PERSON (auth "user" / "obo"): the sign-in provider's
+   *  discovery URL and the app's client id, which the person Gateway trusts. */
+  personAuth?: { discoveryUrl: string; audience: string };
+  /** Where a person is sent back after connecting their account (the app's address). */
+  returnUrl?: string;
   /** Cedar policy engine on/off (workflow.json orchestrator.policy.enabled). */
   policyEnabled: boolean;
   /** "ENFORCE" | "LOG_ONLY". */
@@ -371,6 +408,11 @@ export interface ToolPlaneProps {
  * customer adds a data source by adding a JSON block — no TypeScript edits.
  */
 export class ToolPlane extends Construct {
+  /** The person Gateway's MCP endpoint (GATEWAY_USER_URL), or "" when no tool acts as the person. */
+  public readonly personGatewayUrl: string;
+  /** tool name -> the redirect (callback) URL to register at its provider, for each
+   *  tool where each person connects their own account (auth "user"). */
+  public readonly callbackUrls: Record<string, string> = {};
   /** MCP endpoint the runtimes call (GATEWAY_URL). */
   public readonly gatewayUrl: string;
   public readonly gatewayId: string;
@@ -558,12 +600,46 @@ export class ToolPlane extends Construct {
     this.policyModeEnv = props.policyEnabled ? props.policyMode : "";
 
     // ======================================================================
+    // Interceptors (orchestrator.interceptors): a Lambda the Gateway calls before each
+    // request and/or after each response. One written in the build is deployed like a
+    // code tool; one you own is only registered. The Gateway invokes it with its own
+    // role, so the role may invoke exactly these. Mirrors terraform/interceptors.tf.
+    // ======================================================================
+    const interceptorArns: Partial<Record<InterceptionPoint, string>> = {};
+    for (const point of INTERCEPTION_POINTS) {
+      const ic = props.interceptors?.[point];
+      if (!ic) continue;
+      interceptorArns[point] = ic.code !== undefined
+        ? this.codeFunction(`interceptor-${point}`, ic.code, agentName, orchRoot).functionArn
+        : ic.lambdaArn!;
+    }
+    const interceptorList = INTERCEPTION_POINTS.filter((p) => interceptorArns[p]);
+    if (interceptorList.length) {
+      gatewayRole.addToPolicy(new iam.PolicyStatement({
+        sid: "InvokeInterceptors", actions: ["lambda:InvokeFunction"],
+        resources: interceptorList.map((p) => interceptorArns[p]!),
+      }));
+      for (const point of interceptorList) {
+        const ic = props.interceptors![point]!;
+        // Same-account only: a function's resource policy is edited from its account.
+        if (ic.code === undefined && !cdk.Token.isUnresolved(account) && ic.lambdaArn!.split(":")[4] !== account) continue;
+        new lambda.CfnPermission(this, `InterceptorPermission-${point}`, {
+          functionName: interceptorArns[point]!,
+          action: "lambda:InvokeFunction",
+          principal: "bedrock-agentcore.amazonaws.com",
+          sourceAccount: account,
+        });
+      }
+    }
+
+    // ======================================================================
     // Gateway
     // ======================================================================
     // Inbound auth is provider-specific because the token formats differ:
     // Cognito client-credentials tokens carry `client_id` + `scope` and no
     // `aud`, so pin allowedClients. Auth0 M2M tokens are the mirror image —
     // `aud` + `azp`, no `client_id` — so pin the audience and the `azp` claim.
+    // Okta (`aud` + `cid`) and Entra v2 (`aud` + `azp`) take the Auth0 shape.
     const gateway = new agentcore.CfnGateway(this, "Gateway", {
       name: `${dashName}-gw`,
       roleArn: gatewayRole.roleArn,
@@ -573,12 +649,12 @@ export class ToolPlane extends Construct {
         customJwtAuthorizer: {
           discoveryUrl: props.gatewayDiscoveryUrl,
           ...(props.isCognito ? { allowedClients: [props.gatewayClientId, ...(props.agentClientIds ?? [])] } : {}),
-          ...(props.isAuth0
+          ...(!props.isCognito
             ? {
                 allowedAudience: [props.gatewayAudience],
                 customClaims: [
                   {
-                    inboundTokenClaimName: "azp",
+                    inboundTokenClaimName: props.clientClaim || "azp",
                     inboundTokenClaimValueType: "STRING",
                     authorizingClaimMatchValue: {
                       claimMatchOperator: "EQUALS",
@@ -598,12 +674,65 @@ export class ToolPlane extends Construct {
             },
           }
         : {}),
+      ...(interceptorList.length
+        ? {
+            interceptorConfigurations: interceptorList.map((point) => ({
+              interceptionPoints: [point.toUpperCase()],
+              interceptor: { lambda: { arn: interceptorArns[point]! } },
+              inputConfiguration: { passRequestHeaders: props.interceptors![point]!.passRequestHeaders === true },
+            })),
+          }
+        : {}),
     });
     gateway.node.addDependency(gatewayRole);
-
     this.gatewayUrl = gateway.attrGatewayUrl;
     this.gatewayId = gateway.attrGatewayIdentifier;
     this.gatewayArn = gateway.attrGatewayArn;
+
+    // ======================================================================
+    // Person Gateway: tools that act as the PERSON using the app
+    // ======================================================================
+    // auth "user" (each person's own account, OAuth authorization code) and "obo" (the
+    // person's sign-in exchanged on-behalf-of) need the PERSON's token at the Gateway:
+    // AgentCore Identity keeps a 3LO grant per person, keyed by that token's subject, and
+    // exchanges that token for OBO. The machine Gateway above only ever sees the agents'
+    // shared client, so these tools get a Gateway of their own that trusts the app's
+    // sign-in instead. MCP 2025-11-25 is what lets it answer "connect your account first"
+    // (URL elicitation, -32042). No Cedar engine or interceptors here: the tool's own
+    // provider authorizes each person.
+    const personTools = entries.filter(([, s]) => s.auth === "user" || s.auth === "obo");
+    let personGateway: agentcore.CfnGateway | undefined;
+    if (personTools.length) {
+      if (!props.personAuth?.discoveryUrl || !props.personAuth.audience) {
+        throw new Error(`tools ${personTools.map(([n]) => n).join(", ")} act as the person, which needs the app's ` +
+          "sign-in: deploy with a sign-in provider (not idp=none).");
+      }
+      personGateway = new agentcore.CfnGateway(this, "PersonGateway", {
+        name: `${dashName}-gwu`,
+        roleArn: gatewayRole.roleArn,
+        protocolType: "MCP",
+        protocolConfiguration: { mcp: { supportedVersions: ["2025-11-25"] } },
+        authorizerType: "CUSTOM_JWT",
+        authorizerConfiguration: {
+          customJwtAuthorizer: {
+            discoveryUrl: props.personAuth.discoveryUrl,
+            allowedAudience: [props.personAuth.audience],
+          },
+        },
+      });
+      personGateway.node.addDependency(gatewayRole);
+      gatewayRole.addToPolicy(new iam.PolicyStatement({
+        sid: "PersonGatewayTokens",
+        actions: ["bedrock-agentcore:GetResourceOauth2Token", "bedrock-agentcore:GetWorkloadAccessToken",
+          "bedrock-agentcore:GetWorkloadAccessTokenForJWT"],
+        resources: [
+          `arn:aws:bedrock-agentcore:${region}:${account}:token-vault/*`,
+          `arn:aws:acps:${region}:${account}:token-vault/*`,
+          `arn:aws:bedrock-agentcore:${region}:${account}:workload-identity-directory/*`,
+        ],
+      }));
+    }
+    this.personGatewayUrl = personGateway?.attrGatewayUrl ?? "";
 
 
 
@@ -1055,47 +1184,7 @@ export class ToolPlane extends Construct {
       // secrets and buckets, so nothing added to the role later reaches further.
       // Mirrors aws_lambda_function.tool_code in terraform/tools.tf.
       for (const [name, spec] of lambdaTools.filter(([, s]) => s.code)) {
-        const code = spec.code!;
-        const fnName = `ToolLambda-${agentName}-${name}`;
-        const toStatement = (s: any) => new iam.PolicyStatement({
-          sid: s.sid, effect: s.effect === "Deny" ? iam.Effect.DENY : iam.Effect.ALLOW,
-          actions: s.actions, resources: s.resources, ...(s.conditions ? { conditions: s.conditions } : {}),
-        });
-        const grants = codeToolStatements(fnName, code, region, account);
-        const boundary = new iam.ManagedPolicy(this, `ToolCodeBoundary-${name}`, {
-          managedPolicyName: `${fnName}-boundary`,
-          description: `The most ${fnName} may ever do: its grants in workflow.json, and never the framework's own data.`,
-          statements: [...grants, ...CODE_BOUNDARY_DENY.map((d) => ({ ...d, effect: "Deny" }))].map(toStatement),
-        });
-        const role = new iam.Role(this, `ToolCodeRole-${name}`, {
-          roleName: fnName,
-          assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-          permissionsBoundary: boundary,
-          inlinePolicies: { grants: new iam.PolicyDocument({ statements: grants.map(toStatement) }) },
-        });
-        const fn = new lambda.Function(this, `ToolLambda-${name}`, {
-          logGroup: new logs.LogGroup(this, `ToolLambdaLogGroup-${name}`, {
-            logGroupName: `/aws/lambda/${fnName}`,
-            retention: LOG_RETENTION,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-          }),
-          functionName: fnName,
-          role,
-          runtime: lambda.Runtime.PYTHON_3_12,
-          handler: "handler.lambda_handler",
-          code: lambda.Code.fromAsset(path.join(props.orchRoot, "app", "tools", "_code", name),
-            { exclude: ["__pycache__", ".from-builder", "events.json"] }),
-          timeout: cdk.Duration.seconds(code.timeoutSeconds ?? 30),
-          memorySize: code.memoryMB ?? 256,
-          environment: codeToolEnvironment(code),
-        });
-        if (code.grants?.vpc) {
-          // By id: a VPC lookup would need this account's context at synth time.
-          (fn.node.defaultChild as lambda.CfnFunction).vpcConfig = {
-            subnetIds: code.grants.vpc.subnetIds, securityGroupIds: code.grants.vpc.securityGroupIds,
-          };
-        }
-        this.builtinLambdaArns[name] = fn.functionArn;
+        this.builtinLambdaArns[name] = this.codeFunction(name, spec.code!, agentName, props.orchRoot).functionArn;
       }
 
       // Every declared lambda tool's effective ARN, whichever way it was supplied,
@@ -1149,13 +1238,14 @@ export class ToolPlane extends Construct {
       const apiKey = props.toolApiKeys[name];
       let credProviderArn: string | undefined;
       let oauthProviderArn: string | undefined;
-      if (spec.auth === "oauth2") {
+      const person = spec.auth === "user" || spec.auth === "obo";
+      if (spec.auth === "oauth2" || person) {
         // OAuth client credentials: the client SECRET arrives like an API key (the
         // build's secrets -> TOOL_API_KEYS), the rest from `oauth`. Mirrors
         // aws_bedrockagentcore_oauth2_credential_provider.tool in terraform/tools.tf.
         if (!apiKey) {
           throw new Error(
-            `tools.${name} has auth "oauth2" but no client secret: set it in the build's secrets ` +
+            `tools.${name} has auth "${spec.auth}" but no client secret: set it in the build's secrets ` +
               `(tool_api_keys.${name}), the same place as an API key.`
           );
         }
@@ -1174,14 +1264,22 @@ export class ToolPlane extends Construct {
                     authorizationServerMetadata: {
                       issuer,
                       tokenEndpoint: String(oa.tokenUrl),
-                      // Unused by client credentials, but required by the API.
-                      authorizationEndpoint: String(oa.tokenUrl),
+                      // Each person's sign-in goes there; unused by client credentials and
+                      // the exchange, but required by the API.
+                      authorizationEndpoint: String(oa.authorizationUrl ?? oa.tokenUrl),
                     },
                   },
+              // OBO: the person's sign-in token is the subject; the provider authenticates
+              // this client and needs no separate actor token.
+              ...(spec.auth === "obo"
+                ? { onBehalfOfTokenExchangeConfig: { grantType: "TOKEN_EXCHANGE",
+                    tokenExchangeGrantTypeConfig: { actorTokenContent: "NONE" } } }
+                : {}),
             },
           },
         });
         oauthProviderArn = cp.attrCredentialProviderArn;
+        if (spec.auth === "user") this.callbackUrls[name] = cp.attrCallbackUrl;
       } else if (apiKey && spec.auth !== "sigv4" && vocab.API_KEY_TOOL_TYPES.includes(spec.type)) {
         const cp = new agentcore.CfnApiKeyCredentialProvider(this, `Cred-${name}`, {
           name: `bedrock-agentcore-${dashName}-${name}`,
@@ -1201,7 +1299,16 @@ export class ToolPlane extends Construct {
                 oauthCredentialProvider: {
                   providerArn: oauthProviderArn,
                   scopes: spec.oauth?.scopes ?? [],
-                  grantType: "CLIENT_CREDENTIALS",
+                  ...(spec.auth === "user"
+                    // The person connects once; then back to the app, which binds the
+                    // grant to them (POST /api/connect).
+                    ? { grantType: "AUTHORIZATION_CODE", defaultReturnUrl: props.returnUrl ?? "" }
+                    : spec.auth === "obo"
+                    ? { grantType: "TOKEN_EXCHANGE", customParameters: {
+                        // The subject is the app's sign-in: an ID token (bff -> runtime).
+                        subject_token_type: "urn:ietf:params:oauth:token-type:id_token",
+                        ...(spec.oauth?.audience ? { audience: spec.oauth.audience } : {}) } }
+                    : { grantType: "CLIENT_CREDENTIALS" }),
                 },
               },
             },
@@ -1233,7 +1340,11 @@ export class ToolPlane extends Construct {
           ? [
               {
                 credentialProviderType: "GATEWAY_IAM_ROLE",
-                ...(spec.auth === "sigv4" && (spec.service || spec.type === "apigateway")
+                // Signing for a named AWS service (mcp / openapi `service`). An API Gateway
+                // target takes the role alone: AgentCore refuses an iamCredentialProvider
+                // there ("not supported for this target type", seen live) and signs for
+                // execute-api itself.
+                ...(spec.auth === "sigv4" && spec.service && spec.type !== "apigateway"
                   ? {
                       credentialProvider: {
                         iamCredentialProvider: {
@@ -1248,7 +1359,7 @@ export class ToolPlane extends Construct {
           : undefined;
 
       const target = new agentcore.CfnGatewayTarget(this, `Target-${name}`, {
-        gatewayIdentifier: this.gatewayId,
+        gatewayIdentifier: person ? personGateway!.attrGatewayIdentifier : this.gatewayId,
         name, // MUST equal the agent's `tool` label in workflow.json
         // workflow.json descriptions are written to explain the tool to whoever
         // edits the config, so they can be long; CloudFormation caps this field
@@ -1281,6 +1392,7 @@ export class ToolPlane extends Construct {
     if (policyEngine) {
       for (const [name, spec] of entries) {
         if ((spec.policy?.permit ?? keyDefault<boolean>("tool", "policy.permit")) === false) continue;
+        if (spec.auth === "user" || spec.auth === "obo") continue;   // on the person Gateway, which has no engine
         const policy = new agentcore.CfnPolicy(this, `Policy-${name}`, {
           name: cedarPolicyName(name, agentName),
           description: `Generated from workflow.json tools.${name}. Anything not permitted here is denied by Cedar's default-deny.`,
@@ -1318,6 +1430,57 @@ export class ToolPlane extends Construct {
     }
 
     dependOnDefaultPolicy(gateway, gatewayRole);
+  }
+
+  /** A function written in the build: a code tool (tools.<name>.code) or an interceptor
+   *  (name interceptor-<point>). Its files are app/tools/_code/<name>/ (scaffold.py
+   *  apply wrote them from the bundle; the runner pip-installed its requirements into
+   *  the same folder). Its role is logs plus ONLY the grants the build names — and the
+   *  same statements are its permissions boundary, with an explicit Deny on the
+   *  framework's own tables, secrets and buckets, so nothing added to the role later
+   *  reaches further. Mirrors terraform/tools_code.tf. */
+  private codeFunction(name: string, code: CodeSpec, agentName: string, orchRoot: string): lambda.Function {
+    const { region, account } = cdk.Stack.of(this);
+    const fnName = `ToolLambda-${agentName}-${name}`;
+    const toStatement = (s: any) => new iam.PolicyStatement({
+      sid: s.sid, effect: s.effect === "Deny" ? iam.Effect.DENY : iam.Effect.ALLOW,
+      actions: s.actions, resources: s.resources, ...(s.conditions ? { conditions: s.conditions } : {}),
+    });
+    const grants = codeToolStatements(fnName, code, region, account);
+    const boundary = new iam.ManagedPolicy(this, `ToolCodeBoundary-${name}`, {
+      managedPolicyName: `${fnName}-boundary`,
+      description: `The most ${fnName} may ever do: its grants in workflow.json, and never the framework's own data.`,
+      statements: [...grants, ...CODE_BOUNDARY_DENY.map((d) => ({ ...d, effect: "Deny" }))].map(toStatement),
+    });
+    const role = new iam.Role(this, `ToolCodeRole-${name}`, {
+      roleName: fnName,
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      permissionsBoundary: boundary,
+      inlinePolicies: { grants: new iam.PolicyDocument({ statements: grants.map(toStatement) }) },
+    });
+    const fn = new lambda.Function(this, `ToolLambda-${name}`, {
+      logGroup: new logs.LogGroup(this, `ToolLambdaLogGroup-${name}`, {
+        logGroupName: `/aws/lambda/${fnName}`,
+        retention: LOG_RETENTION,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+      functionName: fnName,
+      role,
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: "handler.lambda_handler",
+      code: lambda.Code.fromAsset(path.join(orchRoot, "app", "tools", "_code", name),
+        { exclude: ["__pycache__", ".from-builder", "events.json"] }),
+      timeout: cdk.Duration.seconds(code.timeoutSeconds ?? 30),
+      memorySize: code.memoryMB ?? 256,
+      environment: codeToolEnvironment(code),
+    });
+    if (code.grants?.vpc) {
+      // By id: a VPC lookup would need this account's context at synth time.
+      (fn.node.defaultChild as lambda.CfnFunction).vpcConfig = {
+        subnetIds: code.grants.vpc.subnetIds, securityGroupIds: code.grants.vpc.securityGroupIds,
+      };
+    }
+    return fn;
   }
 
   /** The `mcp` target configuration for one tool, by type. */
@@ -1400,6 +1563,11 @@ export class ToolPlane extends Construct {
           mcpServer: {
             endpoint: spec.endpoint,
             listingMode: spec.listingMode ?? keyDefault<string>("tool", "listingMode"),
+            // Used as the person: its tools are given here, since the Gateway cannot list
+            // them from the server before anyone has connected an account.
+            ...((spec.auth === "user" || spec.auth === "obo") && spec.toolSchema?.length
+              ? { mcpToolSchema: { inlinePayload: JSON.stringify(inlineTools(spec.toolSchema)) } }
+              : {}),
           },
         };
 
@@ -1454,28 +1622,7 @@ export class ToolPlane extends Construct {
         return {
           lambda: {
             lambdaArn,
-            toolSchema: {
-              inlinePayload: spec.toolSchema.map((t) => ({
-                name: t.name,
-                description: truncate(t.description ?? t.name, 190),
-                inputSchema: {
-                  type: "object",
-                  properties: Object.fromEntries(
-                    Object.entries(t.properties ?? {}).map(([p, def]) => [
-                      p,
-                      { type: def.type ?? "string", description: def.description ?? p },
-                    ])
-                  ),
-                  // JSON Schema puts `required` on the OBJECT as a list of names,
-                  // while the config (and the Terraform provider's flattened
-                  // `property` block) put it on each property. Collect them here so
-                  // both paths accept the same JSON.
-                  required: Object.entries(t.properties ?? {})
-                    .filter(([, def]) => def.required)
-                    .map(([p]) => p),
-                },
-              })),
-            },
+            toolSchema: { inlinePayload: inlineTools(spec.toolSchema) },
           },
         };
       }
@@ -1596,6 +1743,30 @@ export function knowledgeBaseName(dashName: string, dims: number, nonFilterable:
 }
 
 /** Clip a string to `max` characters, for fields with a CloudFormation limit. */
+/** workflow.json `toolSchema` as the Gateway's inline tool definitions (a Lambda's, or an
+ *  MCP tool's used as the person). */
+function inlineTools(tools: LambdaToolDef[]) {
+  return tools.map((t) => ({
+    name: t.name,
+    description: truncate(t.description ?? t.name, 190),
+    inputSchema: {
+      type: "object",
+      properties: Object.fromEntries(
+        Object.entries(t.properties ?? {}).map(([p, def]) => [
+          p,
+          { type: def.type ?? "string", description: def.description ?? p },
+        ])
+      ),
+      // JSON Schema puts `required` on the OBJECT as a list of names, while the config
+      // (and the Terraform provider's flattened `property` block) put it on each
+      // property. Collect them here so both paths accept the same JSON.
+      required: Object.entries(t.properties ?? {})
+        .filter(([, def]) => def.required)
+        .map(([p]) => p),
+    },
+  }));
+}
+
 function truncate(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1).trimEnd() + "\u2026";
 }

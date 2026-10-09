@@ -27,13 +27,29 @@ class ToolUnavailable(DependencyUnavailable):
     """A Gateway tool could not be called, or is not published by its target."""
 
 
+class ToolNeedsConsent(ToolUnavailable):
+    """A tool that uses each person's own account (auth "user") has no grant from this
+    person yet: they connect it once at `url`, then run the step again. The message
+    carries the URL, so the run's error shows it; the app turns it into a button."""
+
+    def __init__(self, message: str = "", url: str = "", tool: str = ""):
+        super().__init__(message)
+        self.url = url
+        self.tool = tool
+
+
 class ToolDenied(DependencyUnavailable):
-    """The Cedar policy engine refused the tool call.
+    """The Cedar policy engine, or the Gateway's request interceptor, refused the call.
 
     Distinct from ToolUnavailable: this is the authorization layer working as
     configured, not an outage. It still fails the run, because the agent cannot
-    produce grounded output without the evidence it was denied.
+    produce grounded output without the evidence it was denied. `by` says which
+    layer refused: "policy" or "interceptor".
     """
+
+    def __init__(self, message: str = "", by: str = "policy"):
+        super().__init__(message)
+        self.by = by
 
 
 class RemoteAgentUnavailable(DependencyUnavailable):

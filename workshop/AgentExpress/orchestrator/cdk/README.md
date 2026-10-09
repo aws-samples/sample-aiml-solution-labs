@@ -101,7 +101,7 @@ Outputs include `uiUrl` (CloudFront), `apiEndpoint`, `agentRuntimeArn`, `memoryI
 ## Test
 
 ```bash
-npm test        # 282 tests in 7 files; no AWS credentials
+npm test        # 287 tests in 7 files; no AWS credentials
 ```
 
 Synthesizing the stack builds the UI bundle (see Prerequisites), so `stack.test.ts` and
@@ -132,15 +132,26 @@ cdk deploy -c idp=cognito \
 cdk deploy -c idp=auth0 \
   -c auth0Domain=your-tenant.us.auth0.com \
   -c auth0ClientId=YOUR_SPA_CLIENT_ID
+# Okta (existing org, through a custom authorization server — nothing is created in Okta)
+cdk deploy -c idp=okta \
+  -c oktaDomain=acme.okta.com -c oktaClientId=YOUR_SPA_CLIENT_ID [-c oktaAuthServer=default] \
+  -c enableGateway=true -c gatewayClientId=YOUR_M2M_CLIENT_ID \
+  -c gatewayAudience=api://default -c gatewayScope=gateway.invoke   # GATEWAY_CLIENT_SECRET in the env
+# Microsoft Entra ID (existing tenant, by id — nothing is created in Entra)
+cdk deploy -c idp=entra \
+  -c entraTenantId=YOUR_TENANT_GUID -c entraClientId=YOUR_SPA_APP_CLIENT_ID \
+  -c enableGateway=true -c gatewayClientId=YOUR_CLIENT_APP_ID \
+  -c gatewayAudience=YOUR_API_APP_CLIENT_ID   # scope defaults to <audience>/.default
 
 # No login — the UI/API deploy OPEN. Personal sandbox only.
 cdk deploy -c idp=none -c allowUnauthenticated=true   # refused without the second flag
 ```
 
 With `-c createCognito=true` the callback and sign-out URLs are wired to the CloudFront
-domain by the stack. On **Auth0**, or a **bring-your-own** Cognito client, add the `uiUrl`
-output to the application's Allowed Callback URLs, Allowed Logout URLs and Allowed Web
-Origins yourself. No localhost callback is registered; for local development add one with
+domain by the stack. On **Auth0**, **Okta**, **Entra ID**, or a **bring-your-own** Cognito
+client, add the `uiUrl` output to the application's callback (redirect) and sign-out URLs yourself
+(Auth0: also Allowed Web Origins; Entra ID: under the Single-page application platform). The
+provider setup for each is in [DEPLOYMENT.md](../../DEPLOYMENT.md#identity-provider). No localhost callback is registered; for local development add one with
 `-c extraCallbackUrls=https://localhost:5173` (comma-separated).
 
 `-c idp=none` is **rejected at synth** while `authorization.actions` is non-empty: with no
@@ -183,16 +194,22 @@ Set in `cdk.json` or via `-c key=value`:
 | `designerSummaryModel` | `""` | The model that condenses long Assistant conversations; empty is the default model |
 | `designerEffort` | `medium` | The Assistant's reasoning effort: `low`, `medium`, `high`, or `model` (the model's own default) |
 | `memoryEventExpiryDays` | `30` | AgentCore Memory event retention |
-| `idp` | `cognito` | `cognito`, `auth0`, or `none` |
+| `idp` | `cognito` | `cognito`, `auth0`, `okta`, `entra`, or `none` |
 | `createCognito` | `false` | With `idp=cognito`, provision the User Pool + SPA client |
 | `cognitoUserPoolId` | `""` | Existing Cognito User Pool ID |
 | `cognitoClientId` | `""` | Existing Cognito App Client ID (public, for SPA) |
 | `cognitoDomainPrefix` | `""` | Existing Cognito Hosted UI domain prefix |
 | `auth0Domain` | `""` | Auth0 tenant domain (no scheme, no trailing slash) |
 | `auth0ClientId` | `""` | Auth0 SPA application client ID |
+| `oktaDomain` | `""` | Okta org host (no scheme, no path), e.g. `acme.okta.com` |
+| `oktaClientId` | `""` | Okta Single-Page App integration client ID |
+| `oktaAuthServer` | `default` | Okta custom authorization server id |
+| `entraTenantId` | `""` | Entra ID Directory (tenant) ID, a GUID |
+| `entraClientId` | `""` | Entra ID app registration (Single-page application platform) client ID |
 | `enableGateway` | `false` | Create the Gateway + Knowledge Base + Cedar policy |
 | `gatewayClientId` | `""` | Bring-your-own M2M client id (unneeded with `createCognito=true`) |
-| `gatewayAudience` | `""` | OAuth2 scope (Cognito) or API identifier (Auth0) for the M2M token |
+| `gatewayAudience` | `""` | OAuth2 scope (Cognito), API identifier (Auth0), authorization server audience (Okta) or API app client ID (Entra ID) for the M2M token |
+| `gatewayScope` | `""` | Scope requested for the M2M token: required on Okta; Entra ID default `<gatewayAudience>/.default` |
 | `transactionSearchIndexingPercentage` | `100` | Percentage of spans indexed by Transaction Search |
 | `selfSignUp` | `false` | With a created pool, open registration on the Hosted UI |
 | `selfSignUpGroup` | `members` | The group each self-signed-up user joins |

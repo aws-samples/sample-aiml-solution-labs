@@ -316,10 +316,11 @@ function LogView({ id }: { id: string }) {
 }
 
 /** The owner's temporary password for the build's own console, fetched only when asked. */
-function AppLoginView({ build }: { build: BuildSummary }) {
+function AppLoginView({ build, signInWith }: { build: BuildSummary; signInWith?: string }) {
   const [login, setLogin] = useState<AppLogin | null>(null);
   const [error, setError] = useState<string | null>(null);
   const user = build.deployed?.appUser;
+  if (signInWith) return <>People sign in with {signInWith} (Identity, Sign-in).</>;
   if (!user) return <>It has a login of its own.</>;
   if (login) {
     return (
@@ -344,8 +345,12 @@ function AppLoginView({ build }: { build: BuildSummary }) {
   );
 }
 
-export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun }: {
+export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, signInWith, onPublish }: {
   build: BuildSummary | null;
+  /** Publish the deployed build to an Agent Registry (admins; RegistryPublish.tsx). */
+  onPublish?: () => void;
+  /** Its app signs people in with this provider (Identity > Sign-in), not a login of its own. */
+  signInWith?: string;
   errors: number;
   can: (a: Action) => boolean;
   onDeploy: (tool: Tool, account: string, region: string) => Promise<void>;
@@ -374,6 +379,9 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun }: 
               {build?.deployed?.uiUrl && !active ? (
                 <Button href={build.deployed.uiUrl} target="_blank" iconName="external" iconAlign="right">Open app</Button>
               ) : null}
+              {onPublish && build?.deployed?.version && !active ? (
+                <Button iconName="share" onClick={onPublish}>Publish to registry</Button>
+              ) : null}
               {onRun && build?.deployed && !build.deployed.account && !active
                 ? <Button iconName="caret-right-filled" onClick={onRun}>Run here</Button> : null}
               {build?.tool && !active ? (
@@ -397,7 +405,7 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun }: 
           <Box variant="small" color="text-body-secondary">
             Its app: <Link href={build.deployed.uiUrl} external>{build.deployed.uiUrl}</Link>
             {build.deployed.account ? <> — in AWS account {build.deployed.account} ({build.deployed.region}).</> : "."}{" "}
-            <AppLoginView build={build} />
+            <AppLoginView build={build} signInWith={signInWith} />
             {onRun && !build.deployed.account ? <> Or run it from here with <b>Run here</b>, or pick it in the Runs list.</> : null}
             {!onRun ? <> Its runs, observability and assistant are in its app.</> : null}
           </Box>

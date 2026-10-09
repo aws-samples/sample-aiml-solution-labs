@@ -312,24 +312,26 @@ def save(build_id: str, owner: str, project: dict, email: str = "", on_create=No
 
 
 def code_hashes(project: dict) -> dict:
-    """A fingerprint of each code tool's files: what the log compares between saves."""
+    """A fingerprint of each code function's files: what the log compares between saves."""
     import hashlib
-    coded = buildstore.code_tools(project.get("workflow") or {})
+    coded = buildstore.code_functions(project.get("workflow") or {})
     return {k: hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()[:16]
             for k, files in (project.get("toolCode") or {}).items() if k in coded}
 
 
 def code_errors(project: dict) -> list[str]:
-    """What stops a code tool from deploying: the static checks' errors (bff/codecheck.py)."""
+    """What stops a code function from deploying: the static checks' errors (bff/codecheck.py)."""
     out = []
     tools = (project.get("workflow") or {}).get("tools") or {}
-    for key in buildstore.code_tools(project.get("workflow") or {}):
-        names = [s.get("name") for s in tools[key].get("toolSchema") or [] if isinstance(s, dict)]
+    for key in buildstore.code_functions(project.get("workflow") or {}):
+        names = [s.get("name") for s in (tools.get(key) or {}).get("toolSchema") or [] if isinstance(s, dict)]
+        where = (f"orchestrator.interceptors.{key.split('-', 1)[1]}" if key.startswith("interceptor-")
+                 else f"tools.{key}")
         files = (project.get("toolCode") or {}).get(key)
         for p in codecheck.static(files, names):
             if p["severity"] == "error":
                 at = f" line {p['line']}" if p["line"] else ""
-                out.append(f"tools.{key} {p['file']}{at}: {p['message']}")
+                out.append(f"{where} {p['file']}{at}: {p['message']}")
     return out
 
 
@@ -340,12 +342,17 @@ def test_tool(build_id: str, owner: str, key: str, tool: str, event) -> dict:
     if not deployed.get("version"):
         raise BuildError(409, "this build is not deployed: deploy it, then test its tools")
     wf = _version_workflow(build_id, int(deployed["version"]))
-    if key not in buildstore.code_tools(wf):
+    interceptor = key in buildstore.code_interceptors(wf)
+    if key not in buildstore.code_tools(wf) and not interceptor:
         raise BuildError(404, f"the deployed version has no tool {key!r} written in the build")
-    names = [s.get("name") for s in wf["tools"][key].get("toolSchema") or [] if isinstance(s, dict)]
-    tool = tool or (names[0] if names else "")
-    if tool not in names:
-        raise BuildError(400, f"{tool!r} is not one of its tools ({', '.join(map(str, names))})")
+    if interceptor:
+        # An interceptor is called with the Gateway's own payload, not a tool's arguments.
+        tool = ""
+    else:
+        names = [s.get("name") for s in wf["tools"][key].get("toolSchema") or [] if isinstance(s, dict)]
+        tool = tool or (names[0] if names else "")
+        if tool not in names:
+            raise BuildError(400, f"{tool!r} is not one of its tools ({', '.join(map(str, names))})")
     if not isinstance(event, dict) or len(json.dumps(event)) > 256_000:
         raise BuildError(400, "the event is a JSON object, at most 256 KB")
     fn = f"ToolLambda-{item['agentName']}-{key}"
@@ -361,7 +368,9 @@ def test_tool(build_id: str, owner: str, key: str, tool: str, event) -> dict:
     except client.exceptions.ResourceNotFoundException:
         raise BuildError(404, f"{fn} is not deployed") from None
     except ReadTimeoutError:
-        limit = (wf["tools"][key].get("code") or {}).get("timeoutSeconds")
+        spec = (((wf.get("orchestrator") or {}).get("interceptors") or {}).get(key.split("-", 1)[1])
+                if interceptor else wf["tools"][key]) or {}
+        limit = (spec.get("code") or {}).get("timeoutSeconds")
         raise BuildError(504, (
             f"{fn} did not answer within {TEST_TOOL_TIMEOUT_S}s, the most a console test can "
             f"wait (API Gateway ends every console request at 30s). It may still be running"
@@ -449,6 +458,12 @@ def deploy(build_id: str, owner: str, tool: str, user: str, account: str = "",
     import library
     draft = _draft(build_id)
     project = library.resolve(draft, library.refs_for(draft, owner, str(item.get("owner") or "")))
+    # Items kept in sync with an Agent Registry, at their newest approved version: frozen
+    # into this version like the library's (bff/registry.py). Never stops a deploy.
+    import registry
+    project, synced = registry.sync(project)
+    if synced:
+        print(f"[deploy] {build_id}: from the registry: {'; '.join(synced)}")
     wf = project.get("workflow") or {}
     if not wf.get("agents") or not wf.get("steps"):
         raise BuildError(400, "this build has no agents or no steps to deploy")
@@ -473,6 +488,13 @@ def deploy(build_id: str, owner: str, tool: str, user: str, account: str = "",
         raise BuildError(400, f"web search ({', '.join(search)}) is only available in "
                               f"{', '.join(web_regions)}, not {region}. Pick one of those "
                               f"regions, or remove the tool.")
+    empty = empty_corpora(build_id, owner, wf)
+    if empty:
+        # Otherwise the synth fails minutes in, CDK and Terraform alike: "corpora names
+        # folder(s) that do not exist under orchestrator/kb_docs/" (observed live).
+        named = "; ".join(f"{c} (tool {k})" for k, c in empty)
+        raise BuildError(400, f"the knowledge base has no documents in {named}. Upload at least one "
+                              f"under Build manually → Tools → {empty[0][0]} → Documents, then deploy.")
     # `versions` counts SUCCESSFUL deploys (set by the runner on success), so a failed
     # attempt does not use up a number: the retry deploys the same version again, from
     # a freshly frozen bundle. Only a version that deployed stays as it was.
@@ -499,6 +521,11 @@ def destroy(build_id: str, owner: str, user: str, delete_after: bool = False) ->
     version = _destroy_version(item)
     if version < 1:
         raise BuildError(409, "this build has nothing deployed")
+    # Published to an Agent Registry: its records leave discovery with it (best effort;
+    # its skills are not the deployment's and stay).
+    if (item.get("registry") or {}).get("records"):
+        import registry
+        registry.deprecate(item["registry"], f"{item.get('name') or build_id} was destroyed")
     # The tool AND the account the build was DEPLOYED with, never ones the caller names.
     return _start(item, "destroy", tool, version, user, delete_after,
                   account=str(item.get("account") or ""), region=str(item.get("region") or ""))
@@ -712,6 +739,21 @@ def list_docs(build_id: str, owner: str) -> list[dict]:
     return out
 
 
+def empty_corpora(build_id: str, owner: str, workflow: dict) -> list[tuple[str, str]]:
+    """(tool key, corpus) for each corpus a knowledge base deployed from uploads names
+    that has no document uploaded for this build. The console's deploy source carries no
+    sample documents (observed live: "Found: (none)"), so an upload is the only way a
+    corpus gets one. A knowledge base on the customer's own bucket (`s3Uri`) or an
+    existing one (`knowledgeBaseId`) is not checked: its corpora are values in their
+    metadata."""
+    kbs = [(k, t) for k, t in (workflow.get("tools") or {}).items()
+           if isinstance(t, dict) and t.get("type") == "kb" and not t.get("s3Uri") and not t.get("knowledgeBaseId")]
+    if not kbs:
+        return []
+    have = {d["corpus"] for d in list_docs(build_id, owner)}
+    return [(k, str(c)) for k, t in kbs for c in t.get("corpora") or [] if str(c) not in have]
+
+
 def delete_doc(build_id: str, owner: str, corpus: str, name: str) -> None:
     _meta(build_id, owner)
     _s3.delete_object(Bucket=BUILDS_BUCKET, Key=_doc_key(build_id, corpus, name))
@@ -799,3 +841,72 @@ def link_run(build_id: str, session_id: str) -> None:
 def unlink_run(build_id: str, session_id: str) -> None:
     _table.delete_item(Key=buildstore.run_key(session_id))
     _table.delete_item(Key=buildstore.link_key(build_id, session_id))
+
+
+# --- AWS Agent Registry (bff/registry.py) ---------------------------------------------
+
+def registry_call(fn, *args):
+    """A registry call, its refusal said plainly: no access, no such registry, or a throttle."""
+    try:
+        return fn(*args)
+    except BuildError:
+        raise
+    except Exception as e:
+        err = getattr(e, "response", {}).get("Error", {}) if hasattr(e, "response") else {}
+        code = err.get("Code") or type(e).__name__
+        status = 403 if "AccessDenied" in code else 404 if "NotFound" in code else 502
+        raise BuildError(status, f"the Agent Registry answered {code}: {str(err.get('Message') or e)[:300]}") from e
+
+
+def registry_state(build_id: str, owner: str) -> dict:
+    """For the Builder: a newer approved version of each item this build took from a
+    registry, and where the build is published (R2)."""
+    import registry
+    item = _meta(build_id, owner)
+    draft = _draft(build_id)
+    ups = registry_call(registry.updates, draft) if registry._linked(draft) else []
+    published = item.get("registry") or {}
+    return {"updates": ups,
+            "published": registry_call(registry.statuses, published) if published else {}}
+
+
+def publish(build_id: str, owner: str, body: dict, user: str) -> dict:
+    """Publish to an Agent Registry, for approval there: the deployed build (`what`
+    "build": its workflow, and its Gateway's tools) or one of its skills ("skill"). The
+    route lets only an admin call this. Publishing again submits the next version of the
+    same record(s)."""
+    import library
+    import registry
+    rid = registry._registry_id(body.get("registry"))
+    what = str(body.get("what") or "")
+    item = _meta(build_id, owner)
+    pub = json.loads(json.dumps(item.get("registry") or {}, default=str))
+    if what == "build":
+        dep = item.get("deployed") or {}
+        if not dep.get("version"):
+            raise BuildError(409, "deploy the build first: what is published is the deployed version")
+        version = int(dep["version"])
+        specs = registry.build_records(item, _version_workflow(build_id, version))
+        records = dict(pub.get("records") or {})
+        for key, spec in specs.items():
+            records[key] = registry_call(registry.put_record, rid, spec, f"{version}.0.0", records.get(key))
+        pub.update(registryId=rid, version=version, at=buildstore.now(), by=user, records=records)
+    elif what == "skill":
+        name = str(body.get("skill") or "")
+        draft = _draft(build_id)
+        project = library.resolve(draft, library.refs_for(draft, owner, str(item.get("owner") or "")))
+        skill = ((project.get("workflow") or {}).get("skills") or {}).get(name)
+        if not isinstance(skill, dict) or "library" in skill or not str(skill.get("instructions") or "").strip():
+            raise BuildError(404, f"this build has no skill {name!r} with instructions to publish")
+        skills = dict(pub.get("skills") or {})
+        prior = skills.get(name) or {}
+        n = int(prior.get("n") or 0) + 1
+        rec = registry_call(registry.put_record, rid, registry.skill_record(name, skill), f"{n}.0.0", prior)
+        skills[name] = {**rec, "n": n, "at": buildstore.now(), "by": user}
+        pub.update(skills=skills)
+        pub.setdefault("registryId", rid)
+    else:
+        raise BuildError(400, 'what: "build" or "skill"')
+    _table.update_item(Key=buildstore.meta_key(build_id), UpdateExpression="SET #r = :r",
+                       ExpressionAttributeNames={"#r": "registry"}, ExpressionAttributeValues={":r": pub})
+    return registry_call(registry.statuses, pub)

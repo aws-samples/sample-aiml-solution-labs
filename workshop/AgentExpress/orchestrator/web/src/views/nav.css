@@ -4,7 +4,15 @@
 /* The AppLayout navigation slot does not set a font — Cloudscape components carry
    their own — so a hand-built pane has to, or it renders in the browser's serif. */
 .axn {
-  padding: 8px 0 24px;
+  /* A fixed pane: the header and the links below stay in view, and only the lists
+     scroll, so a long list of builds or runs never pushes AWS accounts, the library
+     and Activity out of sight. 56px is the top navigation's height. */
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  height: calc(100vh - 56px);
+  overflow: hidden;
+  padding: 8px 0 16px;
   font-family: "Open Sans", "Helvetica Neue", Roboto, Arial, sans-serif;
   font-size: 14px;
   line-height: 20px;
@@ -18,10 +26,15 @@
 }
 .axn a:hover { color: #002b66; text-decoration: underline; }
 
-.axn-header { padding: 12px 28px 16px; border-bottom: 1px solid #c6c6cd; margin-bottom: 12px; }
+.axn-header { flex: none; padding: 12px 28px 16px; border-bottom: 1px solid #c6c6cd; margin-bottom: 12px; }
 .axn-header a { font-size: 18px; font-weight: 700; line-height: 24px; }
 
-.axn-groups { padding: 0 12px 0 8px; }
+.axn-groups { flex: 1 1 auto; min-height: 96px; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 0 8px; }
+/* Each group's own list scrolls too, so one long list (Build) cannot push the next
+   group (Runs) off the pane. */
+.axn-group > .axn-entries { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; }
+.axn-links, .axn > .axn-divider { flex: none; }
+.axn-links { max-height: 45vh; overflow-y: auto; }
 .axn-group + .axn-group { margin-top: 4px; }
 
 .axn-head, .axn-entry {
@@ -73,9 +86,15 @@
 .axn-links { padding: 0 28px; }
 .axn-links li { padding: 4px 0; }
 .axn-ext { margin-left: 4px; }
+/* A group heading among the links (the library's Agent library, Gateway and access library, Quality library). */
+.axn-links li.axn-heading { padding: 10px 0 2px; font-size: 12px; font-weight: 700; color: #656871; }
+.axn-links li.axn-divider-li + li.axn-heading { padding-top: 0; }
+.axn-links li.axn-indent { padding-left: 14px; }
 
 /* The Runs group's workflow picker: indented to the entries it filters. */
 .axn-extra { padding: 4px 0 6px 28px; }
 /* A divider among the links spans the pane like the one above them: out of the links'
    padding, so all three line up. */
 .axn-divider-li { list-style: none; margin: 0 -28px; padding: 0 !important; }
+/* A long group's filter box: indented to its entries, and held above the list as it scrolls. */
+.axn-filter { padding: 4px 0 6px 28px; }

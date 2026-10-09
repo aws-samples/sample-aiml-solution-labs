@@ -68,6 +68,17 @@ describe("Builder", () => {
     }
     expect(screen.getAllByRole("tab").some((t) => (t.textContent ?? "").startsWith("Problems"))).toBe(false);
   });
+  it("orders the tabs by where each takes effect, and says the level at the top of each", async () => {
+    await act(async () => { render(<Builder notify={vi.fn()} />); });
+    const names = screen.getAllByRole("tab").map((t) => (t.textContent ?? "").replace(/\s*\(\d+\)$/, ""))
+      .filter((n) => !["AgentExpress Assistant", "Build manually", "Sign-in", "Tool access"].includes(n));
+    expect(names).toEqual(["Design", "Tools", "Skills", "Memory", "Guardrails", "Identity", "Policies", "Interceptors",
+      "Triggers", "Evals", "Settings", "workflow.json"]);
+    await act(async () => { fireEvent.click(screen.getByText("Policies (0)", { selector: "[role=tab] *" })); });
+    expect(screen.getByTestId("tab-level-policies").textContent).toMatch(/^Gateway level\./);
+    await act(async () => { fireEvent.click(screen.getByText("Skills (0)", { selector: "[role=tab] *" })); });
+    expect(screen.getByTestId("tab-level-skills").textContent).toMatch(/^Agent level\./);
+  });
   it("adds an agent from the palette with the keyboard, and autosaves the draft", async () => {
     vi.useFakeTimers();
     await act(async () => { render(<Builder notify={vi.fn()} />); });
@@ -93,6 +104,26 @@ describe("Builder", () => {
     expect(listProjects().map((p) => p.name).sort()).toEqual(["My workflow", "My workflow 2"]);
   });
 
+  it("opens the build a link names, even when the first open (the last-opened build) answers later", async () => {
+    const mk = (id: string, name: string) => ({ ...newProject(name), id });
+    const a = mk("plinka01", "Linked A"), b = mk("plinkb01", "Recent B");
+    const sum = (p: typeof a): BuildSummary => ({ id: p.id, name: p.name, updatedAt: p.updatedAt, agentName: "ax_00000000", versions: 0 });
+    let releaseB: () => void = () => {};
+    const store: BuildStore = {
+      server: false, list: async () => [sum(b), sum(a)],
+      // The last-opened build loads slowly; the linked one at once.
+      load: (id) => (id === b.id
+        ? new Promise((res) => { releaseB = () => res({ project: b, build: sum(b) }); })
+        : Promise.resolve({ project: a, build: sum(a) })),
+      save: async (p) => sum(p as typeof a), remove: async () => ({}),
+    };
+    const view = await act(async () => render(<Builder notify={vi.fn()} store={store} request={null} />));
+    await act(async () => { view.rerender(<Builder notify={vi.fn()} store={store} request={{ id: a.id, nonce: 1 }} />); });
+    await act(async () => { releaseB(); });
+    expect(screen.getByRole("heading", { name: /Linked A/ })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: /Recent B/ })).toBeNull();
+  });
+
   it("renames the build in place, to any non-blank name", async () => {
     vi.useFakeTimers();
     await act(async () => { render(<Builder notify={vi.fn()} />); });
@@ -112,6 +143,15 @@ describe("Builder", () => {
     const pre = document.querySelector(".axb-json");
     expect(pre?.textContent).toContain('"first_agent": {');
     expect(pre?.textContent?.startsWith("{\n  \"$schema\": \"./workflow.schema.json\"")).toBe(true);
+  });
+
+  it("opens the workflow.json tab from Export, from another tab, without scrolling to it", async () => {
+    await act(async () => { render(<Builder notify={vi.fn()} />); });
+    await act(async () => { fireEvent.click(screen.getByText("Settings", { selector: "[role=tab] *" })); });
+    expect(document.querySelector(".axb-json")).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Export" })); });
+    await act(async () => { fireEvent.click(screen.getByText("View workflow.json")); });
+    expect(document.querySelector(".axb-json")?.textContent).toContain('"first_agent": {');
   });
 
   it("edits and deletes a tool from its row on the Tools tab", async () => {

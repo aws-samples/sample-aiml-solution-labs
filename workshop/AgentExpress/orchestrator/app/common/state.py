@@ -15,6 +15,8 @@ class State(TypedDict, total=False):
     topic: str                               # the user's request; consumed by the intake agent
     subject_id: str                          # optional grouping key; scopes long-term memory
     user: str                                # authenticated user (Cognito email/sub); for cost attribution
+    attachments: list                        # the run's files (app/common/attachments.py), copied in at start
+    gates: str                               # "auto": a trigger said every review gate approves itself
     status: Annotated[dict, merge_dict]      # agent_id -> status
     outputs: Annotated[dict, merge_dict]     # agent_id -> output text
     decisions: Annotated[dict, merge_dict]   # agent_id / group_id -> approve | deny | revise (HITL gates)

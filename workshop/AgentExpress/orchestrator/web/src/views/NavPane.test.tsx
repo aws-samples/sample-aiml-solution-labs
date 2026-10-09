@@ -61,3 +61,19 @@ describe("NavPane", () => {
     expect(screen.queryByRole("link", { name: "Claims" })).toBeNull();
   });
 });
+
+describe("a long group", () => {
+  it("gets a filter box that narrows its entries", async () => {
+    const { fireEvent, render, screen } = await import("@testing-library/react");
+    const { NavPane } = await import("./NavPane");
+    const entries = Array.from({ length: 9 }, (_, i) => ({ href: `#build:b${i}`, text: i === 4 ? "Claims triage" : `Build ${i}` }));
+    render(<NavPane heading="H" homeHref="#" active="" onFollow={() => {}} links={[]}
+      groups={[{ id: "build", text: "Build", href: "#build", entries }]} />);
+    const box = screen.getByRole("searchbox", { name: "Find in Build" });
+    fireEvent.change(box, { target: { value: "claims" } });
+    expect(screen.getByText("Claims triage")).toBeTruthy();
+    expect(screen.queryByText("Build 1")).toBeNull();
+    fireEvent.change(box, { target: { value: "zzz" } });
+    expect(screen.getByText(/Nothing matches/)).toBeTruthy();
+  });
+});

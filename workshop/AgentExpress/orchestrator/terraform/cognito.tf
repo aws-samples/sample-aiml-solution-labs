@@ -1,11 +1,14 @@
 # --- Cognito resources -----------------------------------------------------
-# Created only when idp = "cognito" AND cognito.create = true (local.create_cognito).
-# With idp = "auth0" or "none", or when you bring your own pool, none of this is
-# provisioned. The provider-agnostic wiring lives in identity.tf.
+# The sign-in pool: only when idp = "cognito" AND cognito.create = true
+# (local.create_cognito). With another idp, the pool, its domain and the Gateway
+# clients are still made when agents need a Gateway client and you bring none
+# (local.machine_pool): users, groups and the sign-in page are not. The
+# provider-agnostic wiring lives in identity.tf.
 
 resource "aws_cognito_user_pool" "this" {
-  count = local.create_cognito ? 1 : 0
-  name  = "${var.agent_name}-users"
+  # The sign-in pool, or (local.machine_pool) one only for the agents' Gateway client.
+  count = local.make_pool ? 1 : 0
+  name  = local.create_cognito ? "${var.agent_name}-users" : "${var.agent_name}-machines"
 
   auto_verified_attributes = ["email"]
   username_attributes      = ["email"]
@@ -75,7 +78,7 @@ resource "aws_cognito_user_group" "authz" {
 }
 
 resource "aws_cognito_user_pool_domain" "this" {
-  count        = local.create_cognito ? 1 : 0
+  count        = local.make_pool ? 1 : 0
   domain       = "${replace(var.agent_name, "_", "-")}-${local.account_id}"
   user_pool_id = aws_cognito_user_pool.this[0].id
 }
@@ -110,9 +113,8 @@ resource "aws_cognito_user_pool_client" "spa" {
 # agent runtime needs a client-credentials token, which requires a Resource Server
 # (to define the custom scope) plus a CONFIDENTIAL client (with a secret).
 #
-# Created only when we're also auto-creating the pool AND the Gateway is enabled
-# (local.create_m2m) — otherwise you bring your own via var.gateway_identity,
-# which is also the Auth0 path.
+# Created whenever this deployment makes a pool AND the Gateway is enabled
+# (local.create_m2m) — otherwise you bring your own via var.gateway_identity.
 resource "aws_cognito_resource_server" "gateway" {
   count        = local.create_m2m ? 1 : 0
   identifier   = "gateway"
@@ -142,8 +144,8 @@ resource "aws_cognito_user_pool_client" "m2m" {
 
 # --- One machine client per agent (orchestrator.gatewayIdentity = "perAgent") ---------
 # Each agent with a tool signs in to the Gateway as ITSELF, so the Gateway's logs and
-# policy evaluations name the agent. Only with the pool this deployment creates: with your
-# own IdP there is nothing here to create a client in (identity.tf refuses that).
+# policy evaluations name the agent. Only with a pool this deployment creates: with your
+# own gateway_identity there is nothing here to create a client in.
 locals {
   per_agent_identity = lower(try(local.workflow_def.orchestrator.gatewayIdentity, local.key_defaults.orchestrator.gatewayIdentity)) == "peragent"
   agent_client_ids = toset(local.create_m2m && local.per_agent_identity ? [
@@ -171,7 +173,7 @@ resource "terraform_data" "agent_identity_validation" {
   lifecycle {
     precondition {
       condition     = !local.per_agent_identity || !local.gateway_enabled || local.create_m2m
-      error_message = "orchestrator.gatewayIdentity \"perAgent\" needs the Cognito pool this deployment creates (idp = \"cognito\" with create = true): with your own IdP there is no pool to create a client per agent in. Use \"shared\"."
+      error_message = "orchestrator.gatewayIdentity \"perAgent\" needs a pool this deployment creates: with your own gateway_identity there is no pool to create a client per agent in. Leave gateway_identity out, or use \"shared\"."
     }
   }
 }

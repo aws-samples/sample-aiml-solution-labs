@@ -41,6 +41,17 @@ export const NAG_ACKNOWLEDGED: Array<{ id: string; reason: string }> = [
       "source; a redeploy writes the current values." },
 ];
 
+/** Per resource: the one API route with no JWT (a webhook trigger's, bff/triggers.py). */
+export const HOOK_ROUTE_ACK = {
+  id: "AwsSolutions-APIG4",
+  reason: "POST /api/hooks/{name} is a webhook trigger's delivery route: the sender holds no user token, " +
+    "so its proof is an HMAC signature of the body with the trigger's secret, checked by the BFF before " +
+    "anything else is read, and the route has its own lower throttle.",
+};
+
 export function acknowledgeNagFindings(stack: cdk.Stack): void {
   NagSuppressions.addStackSuppressions(stack, NAG_ACKNOWLEDGED);
+  for (const c of stack.node.findAll()) {
+    if (c.node.path.endsWith("/POST--api--hooks--{name}")) NagSuppressions.addResourceSuppressions(c, [HOOK_ROUTE_ACK], true);
+  }
 }

@@ -118,7 +118,7 @@ describe("API routes", () => {
     // one kind of deployment — which is how /api/me could have gone missing.
     const tfRoutes = [
       ...read(path.join(TF, "bff.tf")).matchAll(
-        /^\s*"((?:GET|POST|PUT|DELETE|PATCH) \/api\/[^"]*)",/gm
+        /^\s*(?:route_key\s*=\s*)?"((?:GET|POST|PUT|DELETE|PATCH) \/api\/[^"]*)",?$/gm
       ),
     ]
       .map((m) => m[1])
@@ -253,6 +253,18 @@ describe("the framework vocabulary has ONE home", () => {
     expect(read(path.join(TF, "bff.tf"))).toContain('filename = "keys.json"');
     expect(read(path.join(TF, "bff.tf"))).toContain('filename = "VERSION"');
     expect(read(path.join(TF, "bff.tf"))).toContain('filename = "deploy-role-policy.json"');
+  });
+  it("ships the interceptor templates to the BFF, the same copy the Interceptors tab uses", () => {
+    // bff/interceptor_code.py generates an interceptor's files from them for the Assistant.
+    const { stageBffPackage } = require("../lib/orchestrator-stack");
+    const out = fs.mkdtempSync(path.join(require("os").tmpdir(), "bff-"));
+    const staged = stageBffPackage(shipped, path.join(out, "pkg"));
+    for (const point of ["request", "response"]) {
+      expect(read(path.join(staged, "interceptor_templates", `${point}.py`))).toBe(
+        read(path.join(ORCH_ROOT, "web", "src", "builder", "interceptor-templates", `${point}.py`)));
+    }
+    fs.rmSync(out, { recursive: true, force: true });
+    expect(read(path.join(TF, "bff.tf"))).toContain('filename = "interceptor_templates/${source.value}.py"');
   });
 
   it("still holds the values the shipped workflow relies on", () => {

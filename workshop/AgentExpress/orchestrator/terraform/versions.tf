@@ -26,7 +26,7 @@ terraform {
       # aws_bedrockagentcore_gateway_target, which the managed AgentCore Web
       # Search tool needs (terraform/tools.tf).
       source  = "hashicorp/aws"
-      version = ">= 6.64"
+      version = ">= 6.67"
     }
     awscc = {
       source  = "hashicorp/awscc"

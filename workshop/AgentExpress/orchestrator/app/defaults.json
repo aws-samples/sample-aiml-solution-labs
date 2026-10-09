@@ -6,6 +6,7 @@
     "temperature": 0,
     "framework": "plain",
     "output": "text",
+    "attachments": false,
     "maxTokens": 4000,
     "skill": "compliance",
     "auth": "none",
@@ -37,7 +38,7 @@
     "defaultModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "runtimeInvoke": {
       "maxAttempts": 1,
-      "readTimeoutSeconds": 120
+      "readTimeoutSeconds": 600
     },
     "a2aInvoke": {
       "timeoutSeconds": 30,
@@ -61,7 +62,9 @@
     "blockedOutputMessage": "The generated content was blocked by the content guardrail."
   },
   "authorization": {
-    "groupsClaim": "cognito:groups"
+    "groupsClaim": "cognito:groups",
+    "signIn.provider": "cognito",
+    "signIn.authorizationServer": "default"
   },
   "memory": {
     "expiryDays": 30,

@@ -14,6 +14,7 @@ vi.mock("./auth", () => ({
 }));
 vi.mock("./api", () => ({
   ApiError: class extends Error {},
+  uploadRunFile: vi.fn(),
   api: {
     get: async (path: string) => {
       if (path === "/api/me") return me.value;
@@ -67,9 +68,31 @@ describe("the Build view", () => {
     workflowUi.value = { title: "My app" };
   });
 
+  it("opens what a link names, on load and when the address changes", async () => {
+    me.value = { ...BASE, builder: true, consoleMode: "builder" };
+    window.location.hash = "#library:interceptor";
+    try {
+      render(<App />);
+      await waitFor(() => expect(screen.getAllByText(/Publish one from a build's Interceptors tab/).length).toBeGreaterThan(0));
+      window.location.hash = "#accounts";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      await waitFor(() => expect(screen.queryAllByText(/Publish one from a build's Interceptors tab/)).toHaveLength(0));
+    } finally { window.location.hash = ""; }
+  });
   it("is there on a console with the Builder", async () => {
     me.value = { ...BASE, builder: true, consoleMode: "builder" };
     render(<App />);
     await waitFor(() => expect(screen.getAllByRole("link", { name: /^Build/ }).length).toBeGreaterThan(0));
+  });
+  it("lists the library grouped by where each kind takes effect, in the Builder's tab order", async () => {
+    me.value = { ...BASE, builder: true, consoleMode: "builder" };
+    render(<App />);
+    await waitFor(() => expect(screen.getAllByText("AWS accounts").length).toBeGreaterThan(0));
+    const links = [...document.querySelectorAll(".axn-links li")].map((li) => li.textContent ?? "");
+    const from = links.indexOf("Agent library");
+    expect(links.slice(from, from + 11)).toEqual(["Agent library", "Tools", "Skills", "Memory", "Guardrails",
+      "Gateway and access library", "Identity", "Policies", "Interceptors", "Quality library", "Evals"]);
+    const indented = [...document.querySelectorAll(".axn-links li.axn-indent")].map((li) => li.textContent);
+    expect(indented).toEqual(["Tools", "Skills", "Memory", "Guardrails", "Identity", "Policies", "Interceptors", "Evals"]);
   });
 });

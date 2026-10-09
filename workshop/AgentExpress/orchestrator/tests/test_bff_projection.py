@@ -92,7 +92,8 @@ def test_the_projection_is_an_allow_list_not_a_blocklist(project):
     out = project(workflow)
     assert "somethingNobodyHasThoughtOfYet" not in out
     assert "privateNote" not in out["agents"]["a"]
-    assert set(out) == {"agents", "steps", "evalAgents", "chatbot", "ui", "authorization"}
+    assert set(out) == {"agents", "steps", "evalAgents", "chatbot", "ui", "authorization", "attachments",
+                        "triggers"}
 
 
 def test_an_agents_projected_keys_are_exactly_what_the_ui_reads(project):

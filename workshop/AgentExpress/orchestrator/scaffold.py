@@ -434,19 +434,47 @@ def code_tools(workflow: dict) -> list[str]:
             if isinstance(t, dict) and str(t.get("type") or "").lower() == "lambda" and "code" in t]
 
 
+#: A Gateway interceptor written in the build (orchestrator.interceptors.<point>.code) is
+#: a code function like a code tool: its files are app/tools/_code/interceptor-<point>/.
+#: A tool key is letters and digits only, so these folder names never collide with one.
+INTERCEPTOR_POINTS = ("request", "response")
+
+
+def code_interceptors(workflow: dict) -> list[str]:
+    """interceptor-<point> for each Gateway interceptor whose function is written here."""
+    ics = (workflow.get("orchestrator") or {}).get("interceptors") if isinstance(
+        workflow.get("orchestrator"), dict) else None
+    ics = ics if isinstance(ics, dict) else {}
+    return [f"interceptor-{p}" for p in INTERCEPTOR_POINTS
+            if isinstance(ics.get(p), dict) and "code" in ics[p]]
+
+
+def code_functions(workflow: dict) -> list[str]:
+    """Every function written in the build: its code tools, then its interceptors."""
+    return code_tools(workflow) + code_interceptors(workflow)
+
+
+def code_label(key: str) -> str:
+    """Where a code function is declared, for messages."""
+    if key.startswith("interceptor-"):
+        return f"orchestrator.interceptors.{key.split('-', 1)[1]}"
+    return f"tools.{key}"
+
+
 def code_problems(key: str, files) -> list[str]:
-    """What stops a code tool's files from being written."""
+    """What stops a code function's files from being written."""
+    where = code_label(key)
     if not isinstance(files, dict) or not isinstance(files.get("handler.py"), str) \
             or not files["handler.py"].strip():
-        return [f"tools.{key} is written in the build but its handler.py is missing"]
-    out = [f"tools.{key}: {name!r} is not a file a code tool may hold (*.py, requirements.txt, events.json)"
+        return [f"{where} is written in the build but its handler.py is missing"]
+    out = [f"{where}: {name!r} is not a file a code function may hold (*.py, requirements.txt, events.json)"
            for name in files if not CODE_FILE_RE.match(str(name))]
-    out += [f"tools.{key}: {name} is not text" for name, body in files.items()
+    out += [f"{where}: {name} is not text" for name, body in files.items()
             if CODE_FILE_RE.match(str(name)) and not isinstance(body, str)]
     if len(files) > CODE_MAX_FILES:
-        out.append(f"tools.{key}: at most {CODE_MAX_FILES} files")
+        out.append(f"{where}: at most {CODE_MAX_FILES} files")
     if sum(len(str(b).encode()) for b in files.values()) > CODE_MAX_BYTES:
-        out.append(f"tools.{key}: its files are over {CODE_MAX_BYTES // 1000} KB")
+        out.append(f"{where}: its files are over {CODE_MAX_BYTES // 1000} KB")
     return out
 
 
@@ -454,7 +482,7 @@ def _referenced(workflow: dict) -> tuple[set[str], set[str]]:
     """The app/tools/ folders and kb_docs/ corpora the workflow actually uses."""
     tools = (workflow.get("tools") or {}).values()
     sources = {str(t.get("source")) for t in tools if isinstance(t, dict) and t.get("source")}
-    if code_tools(workflow):
+    if code_functions(workflow):
         sources.add(CODE_DIR)
     corpora = {str(c) for t in tools if isinstance(t, dict)
                and str(t.get("type") or "").lower() == "kb" for c in (t.get("corpora") or [])}
@@ -531,7 +559,7 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
         return 2
     prompts = bundle.get("prompts") or {}
     tool_code = bundle.get("toolCode") if isinstance(bundle.get("toolCode"), dict) else {}
-    coded = code_tools(workflow)
+    coded = code_functions(workflow)
     wrong = [p for k in coded for p in code_problems(k, tool_code.get(k))]
     if wrong:
         print("scaffold: " + "; ".join(wrong) + ". Write it in the Builder and export again.",
@@ -607,7 +635,7 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
         for name in stale_corpora:
             print(f"kb_docs/{name}/ — DELETED (no knowledge-base tool names it)")
         for name in stale_code:
-            print(f"app/tools/{CODE_DIR}/{name}/ — DELETED (no code tool is named {name})")
+            print(f"app/tools/{CODE_DIR}/{name}/ — DELETED (no code tool or interceptor is named {name})")
     for key in coded:
         print(f"app/tools/{CODE_DIR}/{key}/ — "
               + ("written from the Builder" if key in write_code else "kept as is (your code)"))

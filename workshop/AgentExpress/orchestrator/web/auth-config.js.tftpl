@@ -5,6 +5,8 @@
 //                         (Hosted UI authorization-code flow)
 //   provider "auth0"   -> uses domain + clientId
 //                         (auth0-spa-js, loaded on demand)
+//   provider "okta"    -> uses authorizeUrl + tokenUrl + logoutUrl + clientId
+//   provider "entra"      (standard OIDC authorization code with PKCE, no SDK)
 //   provider "none"    -> enabled is false; the UI runs with NO authentication
 //
 // Unused fields for the selected provider are intentionally empty strings.
@@ -20,6 +22,11 @@ window.AUTH_CONFIG = {
   // Auth0
   domain: "${domain}",
 
-  // Both (the SPA / app client id)
+  // Okta, Entra
+  authorizeUrl: "${authorize_url}",
+  tokenUrl: "${token_url}",
+  logoutUrl: "${logout_url}",
+
+  // All (the SPA / app client id)
   clientId: "${client_id}"
 };

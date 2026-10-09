@@ -57,6 +57,43 @@ cognito = { create = true }
 # }
 
 # ---------------------------------------------------------------------------
+# OPTION 3b — Okta
+# ---------------------------------------------------------------------------
+# Terraform creates nothing in Okta. Sign-in goes through a CUSTOM authorization
+# server ("default" unless you made another): the org server cannot issue the
+# Gateway's client-credentials token.
+#   1. OIDC "Single-Page Application" integration: Authorization Code + Refresh
+#      Token grants; sign-in and sign-out redirect URIs = terraform output ui_url.
+#   2. On the authorization server: an access policy allowing it, and a `groups`
+#      ID-token claim for RBAC (authorization.groupsClaim = "groups").
+#   3. With enable_gateway = true: an "API Services" app, a custom scope (e.g.
+#      gateway.invoke) granted to it -> gateway_identity (audience = the server's
+#      Audience, e.g. "api://default"; scope = that scope).
+# idp = "okta"
+# okta = {
+#   domain               = "acme.okta.com"   # no scheme, no path
+#   client_id            = "YOUR_OKTA_SPA_CLIENT_ID"
+#   authorization_server = "default"
+# }
+
+# ---------------------------------------------------------------------------
+# OPTION 3c — Microsoft Entra ID
+# ---------------------------------------------------------------------------
+# Terraform creates nothing in Entra. One tenant, by its id (a GUID).
+#   1. App registration, single tenant, platform "Single-page application" with
+#      redirect URI = terraform output ui_url. Optional claim `email` on the ID
+#      token; app roles for RBAC (authorization.groupsClaim = "roles").
+#   2. With enable_gateway = true: an API app registration (Expose an API, an app
+#      role, manifest "requestedAccessTokenVersion": 2) and a client app with a
+#      secret granted that role -> gateway_identity (audience = the API app's
+#      client id; scope defaults to "<audience>/.default").
+# idp = "entra"
+# entra = {
+#   tenant_id = "00000000-0000-0000-0000-000000000000"
+#   client_id = "YOUR_SPA_APP_CLIENT_ID"
+# }
+
+# ---------------------------------------------------------------------------
 # OPTION 4 — No login
 # ---------------------------------------------------------------------------
 # The UI and /api/* deploy OPEN to anyone with the URL. Fine for a quick local
@@ -75,11 +112,15 @@ cognito = { create = true }
 # Required when enable_gateway = true, EXCEPT with option 1 above (Terraform
 # creates the client and reads the secret from state).
 #   `audience` = the OAuth2 scope for Cognito (e.g. "gateway/invoke"),
-#                or the API Identifier for Auth0 (e.g. "https://gateway.example.com").
+#                the API Identifier for Auth0 (e.g. "https://gateway.example.com"),
+#                the authorization server's Audience for Okta (e.g. "api://default"),
+#                or the API app's client id (a GUID) for Entra ID.
+#   `scope`    = Okta: the custom scope (required). Entra ID: default "<audience>/.default".
 # The SECRET goes in TF_VAR_gateway_client_secret, NOT here.
 # gateway_identity = {
 #   client_id = "YOUR_M2M_CLIENT_ID"
 #   audience  = "gateway/invoke"
+#   scope     = ""   # Okta: required; Entra ID: optional
 # }
 
 # ---------------------------------------------------------------------------

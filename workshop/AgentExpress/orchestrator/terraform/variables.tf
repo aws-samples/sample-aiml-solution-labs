@@ -69,6 +69,10 @@ variable "transaction_search_indexing_percentage" {
 #               (cognito.create = true), including the confidential M2M client.
 #   "auth0"   — an existing Auth0 tenant. Terraform creates nothing in Auth0;
 #               you supply the tenant domain + client ids.
+#   "okta"    — an existing Okta org, through one of its custom authorization
+#               servers ("default" unless you name another). Nothing is created in Okta.
+#   "entra"   — an existing Microsoft Entra ID tenant (single tenant, by id).
+#               Nothing is created in Entra.
 #   "none"    — NO authentication. The UI and /api/* are OPEN. Local trials and
 #               throwaway sandboxes only — never anywhere shared.
 #
@@ -76,13 +80,13 @@ variable "transaction_search_indexing_percentage" {
 # precise message if something required for your chosen provider is missing).
 
 variable "idp" {
-  description = "Identity provider for UI login + API auth + agent->Gateway M2M: \"cognito\", \"auth0\", or \"none\"."
+  description = "Identity provider for UI login + API auth + agent->Gateway M2M: \"cognito\", \"auth0\", \"okta\", \"entra\" (Microsoft Entra ID), or \"none\"."
   type        = string
   default     = "cognito"
 
   validation {
-    condition     = contains(["cognito", "auth0", "none"], var.idp)
-    error_message = "idp must be one of: \"cognito\", \"auth0\", \"none\"."
+    condition     = contains(["cognito", "auth0", "okta", "entra", "none"], var.idp)
+    error_message = "idp must be one of: \"cognito\", \"auth0\", \"okta\", \"entra\", \"none\"."
   }
   # idp = "none" deploys the UI and /api/* with NO sign-in on a public CloudFront URL,
   # where anyone who finds it can run agents on this account's Bedrock budget.
@@ -124,6 +128,25 @@ variable "auth0" {
   default = {}
 }
 
+variable "okta" {
+  description = "Okta settings (used when idp = \"okta\"). Terraform creates nothing in Okta. `domain` is the org's host (acme.okta.com, or your custom domain), no scheme. `client_id` is the Single-Page App integration (also the ID-token audience the API authorizer checks). `authorization_server` is the custom authorization server's id: \"default\" unless you made another; the org server cannot issue Gateway tokens."
+  type = object({
+    domain               = optional(string, "")
+    client_id            = optional(string, "")
+    authorization_server = optional(string, "default")
+  })
+  default = {}
+}
+
+variable "entra" {
+  description = "Microsoft Entra ID settings (used when idp = \"entra\"). Terraform creates nothing in Entra. `tenant_id` is the Directory (tenant) ID, a GUID: a domain name or common/organizations would let other tenants in. `client_id` is the app registration with a Single-page application platform (also the ID-token audience the API authorizer checks)."
+  type = object({
+    tenant_id = optional(string, "")
+    client_id = optional(string, "")
+  })
+  default = {}
+}
+
 # Machine-to-machine identity for agent -> AgentCore Gateway. Required when
 # enable_gateway = true, EXCEPT for cognito with create = true (Terraform makes
 # the client itself and reads the secret from state).
@@ -132,11 +155,18 @@ variable "auth0" {
 #            scope, e.g. "gateway/invoke". The token has a `client_id` claim.
 #   Auth0:   an API's Identifier is the `audience`. The token has an `aud` claim
 #            and no `client_id`, so the Gateway pins the caller on `azp` instead.
+#   Okta:    `audience` is the authorization server's Audience (e.g. "api://default")
+#            and `scope` a custom scope on it (e.g. "gateway.invoke"), both required.
+#            The token carries `aud` and the client as `cid`, which the Gateway pins.
+#   Entra:   `audience` is the client id (GUID) of the app registration that exposes
+#            the API — what a v2 token carries as `aud` — and the caller is pinned on
+#            `azp`. `scope` defaults to "<audience>/.default".
 variable "gateway_identity" {
-  description = "M2M client the runtime uses to obtain a Gateway token. `audience` = the OAuth2 scope (Cognito) or the API identifier (Auth0)."
+  description = "M2M client the runtime uses to obtain a Gateway token. `audience` = the OAuth2 scope (Cognito), the API identifier (Auth0), the authorization server's audience (Okta) or the API app's client id (Entra). `scope` = the scope requested, for Okta (required) and Entra (default \"<audience>/.default\")."
   type = object({
     client_id = optional(string, "")
     audience  = optional(string, "")
+    scope     = optional(string, "")
   })
   default = {}
 }
@@ -214,6 +244,24 @@ variable "api_throttle_burst" {
   description = "Burst limit on the BFF API's $default stage. Keep in step with API_THROTTLE_BURST in cdk/lib/orchestrator-stack.ts."
   type        = number
   default     = 1000
+}
+
+variable "hook_throttle_rate" {
+  description = "Steady-state requests per second on a webhook trigger's route (POST /api/hooks/{name}), which has no JWT. Keep in step with HOOK_THROTTLE_RATE in cdk/lib/orchestrator-stack.ts."
+  type        = number
+  default     = 10
+}
+
+variable "hook_throttle_burst" {
+  description = "Burst limit on a webhook trigger's route. Keep in step with HOOK_THROTTLE_BURST in cdk/lib/orchestrator-stack.ts."
+  type        = number
+  default     = 20
+}
+
+variable "run_owner_email" {
+  description = "Whose runs a trigger with runAs \"owner\" starts: the address of a user of this app (bff/triggers.py). The Builder sets it to the build's owner; -c runOwnerEmail on the CDK path."
+  type        = string
+  default     = ""
 }
 
 variable "hosted_ui_providers" {

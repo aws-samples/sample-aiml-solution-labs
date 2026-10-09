@@ -87,11 +87,43 @@ def test_the_project_environment_is_what_the_runner_reads():
 def test_the_runner_deploys_with_flags_both_tools_understand():
     """A context key or variable the IaC does not declare is silently ignored — and
     `builder=false` being ignored would give every build a console of its own."""
-    flags = runner.cdk_context("ax_12345678", True)
-    for key in [f.split("=")[0] for f in flags if f != "-c"]:
-        assert f'"{key}"' in BIN, f"cdk/bin/orchestrator.ts reads no context key {key!r}"
-    for var in runner.tf_vars("ax_12345678", True, "us-east-1"):
-        assert f'variable "{var}"' in VARIABLES, f"terraform declares no variable {var!r}"
+    for signin in SIGN_INS:
+        flags = runner.cdk_context("ax_12345678", True, None, signin)
+        for key in [f.split("=")[0] for f in flags if f != "-c"]:
+            assert f'"{key}"' in BIN, f"cdk/bin/orchestrator.ts reads no context key {key!r}"
+        tf = runner.tf_vars("ax_12345678", True, "us-east-1", None, signin)
+        for var in tf:
+            assert f'variable "{var}"' in VARIABLES, f"terraform declares no variable {var!r}"
+        provider = signin["provider"]
+        if provider != "cognito":
+            # Each field lands in that provider's variable object, under a name it declares.
+            block = VARIABLES.split(f'variable "{provider}"', 1)[1].split("\n}\n", 1)[0]
+            for field in tf[provider]:
+                assert re.search(rf"\b{field}\s*=", block), f"variable {provider} declares no {field!r}"
+
+
+SIGN_INS = [
+    {"provider": "cognito"},
+    {"provider": "okta", "domain": "acme.okta.com", "clientId": "0oaSpa", "authorizationServer": "default"},
+    {"provider": "auth0", "domain": "acme.us.auth0.com", "clientId": "abc"},
+    {"provider": "entra", "tenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47", "clientId": "spa"},
+]
+
+
+def test_a_build_signs_in_with_what_its_workflow_names():
+    assert runner.sign_in({}) == {"provider": "cognito"}
+    okta = runner.sign_in({"authorization": {"signIn": SIGN_INS[1]}})
+    flags = runner.cdk_context("ax_1", True, None, okta)
+    assert "idp=okta" in flags and "oktaDomain=acme.okta.com" in flags and "oktaClientId=0oaSpa" in flags
+    assert "createCognito=true" not in flags        # the sign-in pool is not made
+    tf = runner.tf_vars("ax_1", True, "us-east-1", None, okta)
+    assert tf["idp"] == "okta" and "cognito" not in tf
+    assert tf["okta"] == {"domain": "acme.okta.com", "client_id": "0oaSpa", "authorization_server": "default"}
+    entra = runner.tf_vars("ax_1", True, "us-east-1", None, runner.sign_in({"authorization": {"signIn": SIGN_INS[3]}}))
+    assert entra["entra"] == {"tenant_id": SIGN_INS[3]["tenantId"], "client_id": "spa"}
+    # Nothing said: Cognito, as before.
+    assert "createCognito=true" in runner.cdk_context("ax_1", True)
+    assert runner.tf_vars("ax_1", True, "us-east-1")["cognito"] == {"create": True}
 
 
 def test_the_console_env_var_names_agree():

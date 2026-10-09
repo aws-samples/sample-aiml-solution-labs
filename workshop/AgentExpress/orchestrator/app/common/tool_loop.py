@@ -24,7 +24,7 @@ import json
 import re
 
 from app.common.config import TOOLS
-from app.common.errors import ToolDenied, ToolUnavailable
+from app.common.errors import ToolDenied, ToolNeedsConsent, ToolUnavailable
 from app.common.sink import WorkflowCancelled, is_cancelled
 
 #: Bedrock's tool-name rule.
@@ -50,7 +50,12 @@ SYSTEM = (
     "- When you have what the agent needs — or the tools cannot provide more — stop calling "
     "tools and reply with one line saying what you found and what is missing.\n"
     "- Never invent a result. A tool that is refused or fails is reported to you; do not "
-    "try to work around a refusal.")
+    "try to work around a refusal.\n"
+    "- If the agent has skills, open (use_skill) each one whose description fits the request "
+    "before calling other tools, and follow it: it says how this task is done.")
+
+#: How many times one tool turn may open a skill or one of its files.
+SKILL_OPENS = 10
 
 
 def _safe(name: str, taken: set[str]) -> str:
@@ -161,6 +166,12 @@ def _task(ctx, query: str) -> str:
     feedback = getattr(ctx, "feedback", None)
     if feedback:
         parts.append(f"=== REVIEWER GUIDANCE ===\n{feedback}")
+    own = list(getattr(ctx, "skills", None) or [])
+    if own:
+        from app.common import skills
+        listed = skills.catalog(own)
+        if listed:
+            parts.append(f"=== THE AGENT'S SKILLS (open with use_skill when one fits) ===\n{listed}")
     return "\n\n".join(parts)
 
 
@@ -182,6 +193,14 @@ async def gather(ctx, query: str, *, tools: list[str],
         # this fails like direct mode does for an unpublished tool.
         raise ToolUnavailable(f"The Gateway lists none of this agent's tools ({', '.join(tools)}). "
                               + _HIDDEN_WHY)
+    own_skills = list(getattr(ctx, "skills", None) or [])
+    if own_skills:
+        from app.common import skills
+        if skills.known(own_skills):
+            # First, so it reads as part of how the task is done; never a Gateway call.
+            specs.insert(0, skills.tool_spec(own_skills))
+            routes[skills.TOOL_NAME] = ("skill", None, None)
+    opens = 0
     messages: list = [HumanMessage(content=_task(ctx, query))]
     parts: list[str] = []
     limitations: list[str] = [f"'{k}' was not offered: the Gateway lists none of its tools. {_HIDDEN_WHY}"
@@ -202,6 +221,22 @@ async def gather(ctx, query: str, *, tools: list[str],
         for call in wanted:
             name, args = str(call.get("name") or ""), call.get("args") or {}
             route = routes.get(name)
+            if route is not None and route[0] == "skill":
+                # Know-how, not evidence: not a tool call, so not counted against
+                # maxToolCalls, and kept out of the evidence. ctx.llm carries what
+                # was opened into the agent's own model calls.
+                from app.common import skills
+                opens += 1
+                skill, file = str(args.get("name") or ""), str(args.get("file") or "") or None
+                if opens > SKILL_OPENS:
+                    text = f"Not opened: at most {SKILL_OPENS} skill opens per turn. Work with what you have."
+                else:
+                    text = skills.open_skill(skill, file, allowed=own_skills)
+                    if skill in skills.known(own_skills) and not text.startswith("Skill "):
+                        ctx.opened_skills.add(skill)
+                        await ctx.log(f"Opened skill: {skill}{f' / {file}' if file else ''}")
+                messages.append(ToolMessage(content=text, tool_call_id=str(call.get("id") or name)))
+                continue
             if route is None:
                 text = f"There is no tool named {name}. Use one of: {', '.join(routes)}."
             elif calls >= budget:
@@ -216,11 +251,18 @@ async def gather(ctx, query: str, *, tools: list[str],
                     found, mode = await _call(ctx, route, args)
                 except ToolDenied as e:
                     found, mode = "", "denied"
-                    text = f"REFUSED by the policy: {e}"
-                    limitations.append(f"'{name}' was refused by the Gateway's policy for {shown}.")
+                    by_interceptor = getattr(e, "by", "policy") == "interceptor"
+                    layer = "interceptor" if by_interceptor else "policy"
+                    text = f"REFUSED by the {layer}: {e}"
+                    limitations.append(f"'{name}' was refused by the Gateway's {layer} for {shown}.")
                     # On the timeline too: the refusal is the policy working, and it
                     # was visible only to the model.
-                    await ctx.log(f"Refused by Cedar policy: {name}({shown})")
+                    await ctx.log(f"Refused by interceptor: {name}({shown}) — {str(e).split(': ', 1)[-1][:200]}"
+                                  if by_interceptor else f"Refused by Cedar policy: {name}({shown})")
+                except ToolNeedsConsent:
+                    # Not something the model can work around: the person connects
+                    # their account, then runs the step again. Fail it with that.
+                    raise
                 except ToolUnavailable as e:
                     found, mode = "", "error"
                     text = f"FAILED: {e}"

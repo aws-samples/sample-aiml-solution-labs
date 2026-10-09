@@ -21,6 +21,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
 from app.common.bus import bus
 from app.common.context import AgentContext
+from app.features.gateway import person
 from app.features.observability import otel
 from app.orchestrator.registry import build_agent_module
 
@@ -33,6 +34,8 @@ app = BedrockAgentCoreApp()
 @app.entrypoint
 async def invoke(payload, context=None):
     session_id = payload.get("session_id", "")
+    # The run's person, for tools that act as them (forwarded by the orchestrator).
+    person.set_token(payload.get("user_token") or "")
     # Re-attach the orchestrator's trace context (so this runtime's spans join
     # the same trace) and group them under the same session id.
     _ctx_token = otel.attach_carrier(payload.get("otel_context") or {})
@@ -41,6 +44,7 @@ async def invoke(payload, context=None):
         state = {
             "topic": payload.get("topic", ""),
             "subject_id": payload.get("subject_id", ""),
+            "attachments": list(payload.get("attachments") or []),
             "outputs": payload.get("outputs", {}) or {},
             # AgentContext reads feedback[self.id]; scope it to this agent.
             "feedback": {AGENT_ID: payload.get("feedback", "") or ""},

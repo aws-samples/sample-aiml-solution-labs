@@ -118,12 +118,20 @@ def _write_ddb(sid: str, ev: dict) -> None:
         # overall + hitl always. The per-node status is best-effort: a parallel
         # group gate emits a synthetic node id (e.g. "research") that has no
         # entry in the nodes map, so that update would fail — do it separately.
-        tbl.update_item(
+        # How it is answered and when it times out (app/common/gates.py), for the
+        # BFF's sweep and event decisions (bff/gates.py) and the run page.
+        hitl = {"node": n, "question": ev.get("question", ""),
+                **{k: ev[k] for k in ("approval", "timeoutAt", "timeoutAction") if ev.get(k)}}
+        before = (tbl.update_item(
             Key=_key(sid),
             UpdateExpression="SET overall = :ov, hitl = :h, updated_at = :u",
-            ExpressionAttributeValues={":ov": "waiting_human",
-                                       ":h": {"node": n, "question": ev.get("question", "")},
-                                       ":u": now})
+            ExpressionAttributeValues={":ov": "waiting_human", ":h": hitl, ":u": now},
+            ReturnValues="UPDATED_OLD") or {}).get("Attributes") or {}
+        # A resumed gate runs again and says this again: ask on EventBridge only when
+        # the run STARTS waiting.
+        if before.get("overall") != "waiting_human":
+            from app.common import gates
+            gates.publish_request(sid, hitl, ev.get("preview", ""))
         if n:
             with contextlib.suppress(Exception):  # synthetic gate id, no per-node entry
                 tbl.update_item(

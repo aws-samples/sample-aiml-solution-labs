@@ -9,7 +9,7 @@ store) uniformly for every agent.
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
-from app.common import branching, clock, grounding
+from app.common import branching, clock, gates, grounding
 from app.common.base import Agent
 from app.common.config import AGENTS
 from app.common.context import AgentContext
@@ -52,6 +52,16 @@ def _guardrail_input(ctx: AgentContext) -> str:
     if ctx.feedback:
         parts.append(ctx.feedback)
     return "\n\n".join(p for p in parts if p)
+
+
+async def _mask_input(ctx: AgentContext) -> None:
+    """The INPUT guardrail anonymized something: give the agent the masked request (and
+    feedback), each screened on its own so neither is split by guesswork."""
+    if ctx.topic:
+        ctx.topic = await ctx.guardrail(ctx.topic, "INPUT")
+    if ctx.feedback:
+        ctx.feedback = await ctx.guardrail(ctx.feedback, "INPUT")
+    await ctx.log(f"{ctx.agent_name}: the guardrail masked sensitive information in the request")
 
 
 async def _check_grounding(ctx: AgentContext, agent: Agent, state: dict, out: str) -> None:
@@ -136,7 +146,9 @@ def make_agent_node(agent: Agent):
                     #
                     # INPUT guardrail: screen the human-supplied text before the
                     # agent runs. A block raises GuardrailBlocked (handled below).
-                    await ctx.guardrail(_guardrail_input(ctx), "INPUT")
+                    screened = _guardrail_input(ctx)
+                    if await ctx.guardrail(screened, "INPUT") != screened:
+                        await _mask_input(ctx)
                     # Long-term memory: recall this agent's relevant past insights
                     # (ctx.llm auto-injects them into the system prompt), run, then
                     # store this run's output for future runs.
@@ -152,7 +164,11 @@ def make_agent_node(agent: Agent):
                     # becomes an input to any downstream agent or the reviewer.
                     # Applied to EVERY placement — unlike memory, this is about what
                     # crosses into the rest of this run, so it belongs here.
-                    await ctx.guardrail(str(out), "OUTPUT")
+                    checked = await ctx.guardrail(str(out), "OUTPUT")
+                    if isinstance(out, str) and checked != out:
+                        # Anonymized, not blocked: what crosses into the run is masked.
+                        out = checked
+                        await ctx.log(f"{agent.name}: the guardrail masked sensitive information in the output")
                     if agent.store_in_orchestrator:
                         await ctx.memory_store(out)
                 except WorkflowCancelled:
@@ -163,7 +179,10 @@ def make_agent_node(agent: Agent):
                     # re-raise so the run halts.
                     await emit(ctx.session_id, {
                         "type": "node_status", "node": agent.id, "status": "failed",
-                        "log": f"{agent.name} blocked by guardrail: {_blocked.message}"})
+                        "log": f"{agent.name} blocked by guardrail"
+                               + (f" ({', '.join(getattr(_blocked, 'reasons', []))})"
+                                  if getattr(_blocked, "reasons", None) else "")
+                               + f": {_blocked.message}"})
                     raise
                 except Exception as _agent_err:
                     # Surface WHICH agent failed (and why) as this node's terminal
@@ -258,7 +277,21 @@ def _decision_of(resumed) -> tuple[str, str]:
     return (str(resumed) if resumed else "approve"), ""
 
 
-def make_gate_node(agent_id: str, agent_name: str):
+async def _wait_or_auto(sid: str, state: dict, node: str, label: str, question: str, spec: dict,
+                        outputs: list[str], payload: dict, log: str):
+    """A decision for this gate: a person's (the run waits here), or the gate's own when
+    its spec says so (app/common/gates.py) — said on the timeline and in the log."""
+    why = gates.auto_reason(spec, state, outputs)
+    if why:
+        await emit(sid, {"type": "hitl_auto", "node": node, "log": f"{label}: approved automatically, {why}"})
+        gates.audit_auto(sid, node, why)
+        return {"decision": "approve", "comment": "", "auto": True}
+    await emit(sid, {"type": "hitl_request", "node": node, "question": question, "log": log,
+                     "preview": str(outputs[-1] if outputs else "")[:4000], **gates.request_extra(spec)})
+    return interrupt(payload)  # pauses here
+
+
+def make_gate_node(agent_id: str, agent_name: str, hitl=True):
     """A generic human-in-the-loop gate placed after `agent_id`.
 
     approve -> continue; deny -> halt (routing to END handled by the builder);
@@ -267,20 +300,22 @@ def make_gate_node(agent_id: str, agent_name: str):
     resume only this cheap gate, while revise re-runs the agent with feedback.
     """
 
+    spec = gates.spec_of(hitl)
+
     async def gate(state: dict, config: RunnableConfig) -> dict:
         sid = config["configurable"]["thread_id"]
         if is_cancelled(sid):
             raise WorkflowCancelled(sid)
         out = (state.get("outputs") or {}).get(agent_id, state.get("topic", ""))
         question = f"Review {agent_name} ({agent_id}) output: {str(out)[:120]}"
-        await emit(sid, {"type": "hitl_request", "node": agent_id, "question": question,
-                         "log": f"Awaiting human review after {agent_id}"})
-
-        resumed = interrupt({"node": agent_id, "question": question})  # pauses here
+        resumed = await _wait_or_auto(sid, state, agent_id, agent_name, question, spec, [str(out)],
+                                      {"node": agent_id, "question": question},
+                                      f"Awaiting human review after {agent_id}")
         decision, comment = _decision_of(resumed)
 
+        who = "Automatic" if isinstance(resumed, dict) and resumed.get("auto") else "Human"
         await emit(sid, {"type": "hitl_resolved", "node": agent_id,
-                         "log": f"Human decision ({agent_id}): {decision}"})
+                         "log": f"{who} decision ({agent_id}): {decision}"})
 
         if decision == "approve":
             await emit(sid, {"type": "node_status", "node": agent_id, "status": "done",
@@ -300,7 +335,7 @@ def make_gate_node(agent_id: str, agent_name: str):
     return gate
 
 
-def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str):
+def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str, hitl=True):
     """A human-in-the-loop gate placed after a SEQUENTIAL group (the agents run
     one after another; the gate runs once, after the LAST one completes).
 
@@ -310,6 +345,8 @@ def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str):
     re-runs with the reviewer's feedback (applied to every agent in the sequence).
     """
 
+    spec = gates.spec_of(hitl)
+
     async def gate(state: dict, config: RunnableConfig) -> dict:
         sid = config["configurable"]["thread_id"]
         if is_cancelled(sid):
@@ -317,10 +354,9 @@ def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str):
         # The last agent's output is the reviewable result of the sequence.
         out = (state.get("outputs") or {}).get(seq_ids[-1], state.get("topic", ""))
         question = f"Review {label}: {str(out)[:120]}"
-        await emit(sid, {"type": "hitl_request", "node": gate_id, "question": question,
-                         "log": f"Awaiting human review after {label}"})
-
-        resumed = interrupt({"node": gate_id, "sequence": seq_ids, "question": question})
+        resumed = await _wait_or_auto(sid, state, gate_id, label, question, spec, [str(out)],
+                                      {"node": gate_id, "sequence": seq_ids, "question": question},
+                                      f"Awaiting human review after {label}")
         decision, comment = _decision_of(resumed)
 
         await emit(sid, {"type": "hitl_resolved", "node": gate_id,
@@ -346,7 +382,7 @@ def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str):
     return gate
 
 
-def make_group_gate_node(group_id: str, group_ids: list[str], label: str):
+def make_group_gate_node(group_id: str, group_ids: list[str], label: str, hitl=True):
     """A human-in-the-loop gate placed after a PARALLEL group (all agents in the
     group must complete before it runs — LangGraph fan-in).
 
@@ -357,17 +393,20 @@ def make_group_gate_node(group_id: str, group_ids: list[str], label: str):
     just carries the decision.
     """
 
+    spec = gates.spec_of(hitl)
+
     async def gate(state: dict, config: RunnableConfig) -> dict:
         sid = config["configurable"]["thread_id"]
         if is_cancelled(sid):
             raise WorkflowCancelled(sid)
         question = f"Review {label} — approve / revise / reject each agent (or all)."
         # Emit against the synthetic group_id; the sink handles a node id that is
-        # not a per-agent status entry.
-        await emit(sid, {"type": "hitl_request", "node": group_id, "question": question,
-                         "log": f"Awaiting per-agent review after {label}"})
-
-        resumed = interrupt({"node": group_id, "group": group_ids, "question": question})
+        # not a per-agent status entry. A threshold rule matching ANY agent's output
+        # calls for a person.
+        outs = [str((state.get("outputs") or {}).get(a, "")) for a in group_ids]
+        resumed = await _wait_or_auto(sid, state, group_id, label, question, spec, outs,
+                                      {"node": group_id, "group": group_ids, "question": question},
+                                      f"Awaiting per-agent review after {label}")
 
         # Parse the reviewer's decision(s). Accepted shapes:
         #   {"decisions": {agent_id: {"decision": ..., "comment": ...}, ...}}  (per-agent)

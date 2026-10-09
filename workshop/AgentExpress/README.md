@@ -92,7 +92,7 @@ coupling: `assetType`, `sourceType` and `sectionType` are open strings.
 - **Any agentic framework inside `run()`.** The sample has a Strands agent and a nested
   LangGraph. The model call must go through `ctx.llm` to keep guardrails, telemetry and
   cancellation.
-- **Identity and RBAC.** `idp` selects Cognito, Auth0 or no login for both the UI and
+- **Identity and RBAC.** `idp` selects Cognito, Auth0, Okta, Microsoft Entra ID or no login for both the UI and
   agent-to-Gateway calls. The `authorization` block maps JWT groups to actions on runs
   (`start`, `decision`, `rerun`, `cancel`, `evaluate`, `insights`, `delete`), builds
   (`deploy`, `destroy`) and users (`audit`, `admin`). Unlisted actions stay open, except
@@ -141,6 +141,11 @@ under [`orchestrator/app/features/`](orchestrator/app/features/).
 | Guardrails | Bedrock `ApplyGuardrail` on input and/or output; a block halts the run | `guardrails.input`, `guardrails.output` |
 | Evaluations | LLM-as-judge over the real run, per prompt per version; auto or on demand | `evaluations` |
 | Policy | Cedar authorization enforced at the Gateway (`ENFORCE` or `LOG_ONLY`) | `orchestrator.policy`, `policy.enabled` |
+| Interceptors | A Lambda before each tool request and after each answer: audit, block, guard arguments, inject run context, redact, hide, cap | `orchestrator.interceptors` |
+| Skills | Know-how an agent opens when a task needs it: a SKILL.md with text reference files (`use_skill`), never code | `skills`, the agent's `skills` |
+| Agent Registry | Add MCP servers, agents and skills your organization approved in AWS Agent Registry, optionally kept in sync; admins publish a deployed build and its skills for approval | the item's `registry` |
+| Triggers | Runs started by a signed webhook, a schedule, an EventBridge event, an S3 object or an SQS message | `orchestrator.triggers` |
+| Review gates | A person always, only when a rule matches, or never; answered in the app or by EventBridge event; timeouts | `steps[].hitl` |
 | Optimization | cross-run Insights: failure patterns, user intents, execution summaries | `orchestrator.insights` |
 
 The **Observability** tab shows cost and latency by date, model and user, a per-run
@@ -153,6 +158,9 @@ guardrail and policy decisions), evaluation scores and Insights.
   image model renders; the reviewer sees the images at the gate. The `image` block sets
   model, aspect ratio, format, seed and a negative prompt. Images stay in the
   deployment's own assets bucket.
+- **Files on Start run.** `"attachments": true` gives an agent's model the files a run is
+  started with: uploaded on Start run, or named as `s3://` paths inside
+  `orchestrator.attachments.s3`, up to 5 per run, copied into the run when it starts.
 - **Vision.** `vision: {"from": ["<agent>", ...], "maxImages": N}` lets a later agent's
   model see images produced earlier in the same run (default 4, max 20). The model must
   be a Bedrock model that accepts image input (Claude, Nova Pro/Lite, Llama 3.2 Vision).
@@ -168,20 +176,28 @@ own stack.
 
 - **Build view** has two tabs over the same autosaved draft: **AgentExpress Assistant**, a
   chat that drafts and edits the workflow as you talk, and **Build manually**, a canvas
-  plus Tools, Policies, Guardrails, Memory, Evals, Identity, Settings and `workflow.json`
-  tabs. Validation status shows in the header. **Export** gives a bundle or
+  plus Tools, Skills, Memory, Guardrails (agent level), Identity, Policies, Interceptors
+  (Gateway and access), Triggers, Evals, Settings and `workflow.json` tabs, each saying
+  its level at the top. The Assistant reaches everything the tabs do, the
+  registry included, but cannot deploy or publish. Validation status shows in the header. **Export** gives a bundle or
   `workflow.json` only; **Import a file…** loads either.
 - **Deploy.** Each build deploys with CDK or Terraform from the console's CodeBuild
   project. A build's own app (**Open app**) has no Build view, library or admin; it runs
   and observes that build only and is titled "🧭 AgentExpress - \<ui.title\>".
 - **Console modes.** `console_mode` / `-c consoleMode` is `app` (default: this workflow's
   app with the Builder beside it) or `builder` (a control plane with no runs of its own).
-- **Library** (Tools, Identity, Memory, Evals, Policies, Guardrails). Items are private
+- **Library** (Tools, Skills, Memory, Guardrails; Identity, Policies, Interceptors; Evals). Items are private
   until shared with emails, groups or everyone. Builds use items live, so a change shows
   everywhere at once (a deployed build picks it up on its next deploy). From a build's
   tabs you can **Publish**, **Unpublish**, **Make a copy for this build** and **Share**.
   Deleting an item leaves each build that used it with its own copy. Identity secrets
   never go into the library.
+- **AWS Agent Registry.** **Add from registry** (Tools tab, Skills tab and the Agents palette)
+  takes an approved MCP server, A2A agent card or skill into the build, once or **kept in
+  sync** (refreshed when the build opens and before each deploy; otherwise the Builder
+  offers **Update**). Admins **Publish to registry** a deployed build (its workflow and its
+  Gateway's tools) and its skills; a curator approves them in the registry, and destroying
+  the build deprecates its records. See [DEPLOYMENT.md](DEPLOYMENT.md#aws-agent-registry).
 - **Sharing a build.** Share with emails, groups or everyone. A save based on an older
   copy is refused (409) so collaborators cannot overwrite each other.
 - **Moving a build.** Import the bundle into another console, or run
@@ -272,7 +288,7 @@ orchestrator/
   needs AWS credentials with Bedrock access. There is no offline mode: a failed model or
   tool call fails the run rather than inventing data. Steps in
   [GETTING_STARTED.md](GETTING_STARTED.md).
-- **Tests:** pytest (1296), CDK jest (269 in 6 files) and web vitest (265 in 30 files).
+- **Tests:** pytest (1510), CDK jest (315 in 7 files) and web vitest (400 in 42 files).
   The pytest suite needs no AWS account or model.
 
 ## Security summary
@@ -281,8 +297,8 @@ This is a reference sample, not a hardened product. Review it before any non-san
 The full model is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 **Built in**
-- SPA login (Cognito or Auth0) and an API Gateway JWT authorizer on `/api/*`.
-- M2M client-credentials tokens for agent → Gateway calls, pinned by `client_id`.
+- SPA login (Cognito, Auth0, Okta or Entra ID) and an API Gateway JWT authorizer on `/api/*`.
+- M2M client-credentials tokens for agent → Gateway calls, pinned to the calling client.
 - Cedar policy enforced at the Gateway (default-deny in `ENFORCE`), so a prompt-injected
   attempt to widen tool access is refused by infrastructure.
 - RBAC on run and build actions (`bff/authz.py`); the assistant is held to the same rules.

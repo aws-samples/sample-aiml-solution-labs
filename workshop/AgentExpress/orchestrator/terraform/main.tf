@@ -381,6 +381,8 @@ resource "awscc_bedrockagentcore_runtime" "orchestrator" {
     OTEL_PYTHON_DISABLED_INSTRUMENTATIONS = "aws_langchain"
     # Where image agents store what they render (images.tf); "" when none draws.
     ASSETS_BUCKET = local.assets_bucket
+    # Names this app in an approval request event (app/common/gates.py).
+    APP_NAME = var.agent_name
     # Map of agent_id -> its dedicated runtime ARN, consumed by
     # AgentCoreRuntimeAgent to invoke a "dedicated" agent cross-runtime.
     AGENT_RUNTIME_ARNS = jsonencode({
@@ -397,14 +399,17 @@ resource "awscc_bedrockagentcore_runtime" "orchestrator" {
     # Gateway-backed MCP access (agent -> Gateway via IdP client-credentials).
     # Empty when local.gateway_enabled is false, in which case an agent with a `tool`
     # fails loudly rather than inventing an answer (app/common/errors.py).
-    GATEWAY_URL       = local.gateway_enabled ? aws_bedrockagentcore_gateway.mcp[0].gateway_url : ""
+    GATEWAY_URL = local.gateway_enabled ? aws_bedrockagentcore_gateway.mcp[0].gateway_url : ""
+    # The person Gateway (tools with auth "user" / "obo"), reached with the caller's sign-in.
+    GATEWAY_USER_URL  = length(aws_bedrockagentcore_gateway.person) > 0 ? aws_bedrockagentcore_gateway.person[0].gateway_url : ""
     GATEWAY_TOKEN_URL = local.gateway_enabled ? local.gateway_token_url : ""
     GATEWAY_CLIENT_ID = local.gateway_client_id
-    # Which client-credentials request shape to build ("cognito" | "auth0").
+    # Which client-credentials request shape to build (the idp: cognito | auth0 | okta | entra).
     GATEWAY_AUTH_FLOW = local.gateway_enabled ? local.gateway_auth_flow : ""
-    # The OAuth2 `scope` the runtime requests (Cognito's client-credentials
-    # equivalent of an audience) — see app/features/gateway/client.py.
+    # What the token is for (the scope, API identifier or `aud`, per idp), and the
+    # scope requested where that is not it (Okta, Entra) — see app/features/gateway/client.py.
     GATEWAY_AUDIENCE = local.gateway_audience
+    GATEWAY_SCOPE    = local.gateway_scope
     # Cedar policy mode in effect at the Gateway (LOG_ONLY|ENFORCE), so the app
     # can label policy decisions in the observability UI. Enforcement itself is
     # server-side at the Gateway; this is display-only.

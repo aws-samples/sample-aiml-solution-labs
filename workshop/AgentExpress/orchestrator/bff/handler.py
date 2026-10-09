@@ -34,6 +34,7 @@ Endpoints:
   POST   /api/sessions/{id}/evaluate {agentId, prompt} -> {ok}  (AgentCore Evaluations)
   POST   /api/insights/run           {lookbackHours}   -> {ok}  (cross-run Insights)
   GET    /api/insights                           -> latest Insights findings
+  POST   /api/sessions/attachments   {name}  -> presigned POST for one file a run brings
   GET    /api/sessions/{id}/telemetry            -> per-run cost/token drilldown
   GET    /api/telemetry/aggregate                -> by date / model / user rollup
   POST   /api/chat                   {message, history} -> {reply, actions}
@@ -69,9 +70,13 @@ import chatbot
 import clock
 import codecheck
 import designer
+import gates
 import library
 import policies
+import registry
+import runfiles
 import sharing
+import triggers
 import workflow
 from boto3.dynamodb.conditions import Attr, Key
 
@@ -240,9 +245,23 @@ def _own_session(event: dict, session_id: str, read: bool = False) -> dict:
         # An admin may READ anyone's run (never decide, re-run, cancel or delete it).
         _admin_viewed(event, "session", session_id, str(item.get("owner") or ""))
         return target
+    if item and item.get("owner") != _owner(event) and _trigger_viewer(event, str(item.get("owner") or "")):
+        # A service trigger's run: its `approvers` read and decide it (bff/triggers.py).
+        return target
     if not item or item.get("owner") != _owner(event):
         raise builds.BuildError(404, "unknown session")
     return target
+
+
+def _service_owners(event: dict) -> list[str]:
+    """The service triggers whose runs the caller may see: those listing one of its groups."""
+    groups = authz.groups_of(event)
+    return [f"trigger:{n}" for n, t in triggers.all_triggers().items()
+            if isinstance(t, dict) and t.get("runAs") == "service" and triggers.may_see(t, groups)]
+
+
+def _trigger_viewer(event: dict, owner: str) -> bool:
+    return owner.startswith("trigger:") and owner in _service_owners(event)
 
 
 def _my_session_ids(tbl, owner: str) -> set[str]:
@@ -282,9 +301,18 @@ def _run(event: dict) -> dict:
     session_id = event["session_id"]
     payload = {"action": action, "session_id": session_id}
     payload["user"] = event.get("user", "")  # for observability attribution
+    # The run owner's sign-in, for tools that act as the person (_person_token). Only
+    # passed on; never stored, logged or returned.
+    if event.get("user_token"):
+        payload["user_token"] = event["user_token"]
     if action == "start":
         payload["topic"] = event.get("topic", "")
         payload["subject_id"] = event.get("subject_id", "")
+        if event.get("attachments"):
+            payload["attachments"] = event["attachments"]
+        # A trigger with `gates: "auto"` (bff/triggers.py): every gate approves itself.
+        if event.get("gates") == "auto":
+            payload["gates"] = "auto"
     elif action == "resume":
         payload["decision"] = event.get("decision", "approve")
         payload["comment"] = event.get("comment", "")
@@ -460,14 +488,15 @@ def _user(event: dict) -> str:
     """Authenticated user from the JWT claims (empty when idp = "none").
 
     Provider-agnostic: API Gateway puts the validated claims in the same place
-    for any JWT authorizer. `email` and `sub` are standard OIDC and cover both
-    Cognito and Auth0; the last two fallbacks are the provider-specific ones
-    (`name` on Auth0, `cognito:username` on Cognito).
+    for any JWT authorizer. A readable name first: `email` (Cognito, Auth0, Okta),
+    then `preferred_username` (Entra ID, which sends no `email` unless it is added
+    as an optional claim; seen live: runs were "started by" an opaque id) and `upn`;
+    `sub` only when there is nothing else, then `name` and `cognito:username`.
     """
     claims = (event.get("requestContext", {}).get("authorizer", {})
               .get("jwt", {}).get("claims", {}))
-    return (claims.get("email") or claims.get("sub")
-            or claims.get("name") or claims.get("cognito:username") or "")
+    return (claims.get("email") or claims.get("preferred_username") or claims.get("upn")
+            or claims.get("sub") or claims.get("name") or claims.get("cognito:username") or "")
 
 
 def _forbidden(action: str, event: dict) -> dict | None:
@@ -527,6 +556,50 @@ def _insights_latest(runtime_arn: str | None = None) -> dict:
         print(f"[insights] {type(e).__name__}: {e}")
         return _resp(502, {"error": "insights read failed"})
     return _resp(200, data if isinstance(data, dict) else {"status": "none"})
+
+
+def _person_token(event: dict, target: dict, run_owner: str) -> str:
+    """The caller's sign-in token, for a run whose tools act as the person (auth "user" /
+    "obo": app/features/gateway/person.py), and only when the caller IS the run's owner,
+    so a tool never acts as anyone but the person who started the run. The API Gateway
+    authorizer has verified this very token. "" otherwise."""
+    tools = (target.get("raw") or {}).get("tools") or {}
+    if not any(isinstance(t, dict) and str(t.get("auth") or "").lower() in ("user", "obo")
+               for t in tools.values()):
+        return ""
+    if not run_owner or run_owner != _owner(event):
+        return ""
+    # A build run from the Builder console: the caller signed in to the CONSOLE, whose
+    # token the build's person Gateway does not trust (it trusts the build's own sign-in).
+    # Its person tools then say to run it from the build's own app.
+    if target.get("build"):
+        return ""
+    headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+    auth = str(headers.get("authorization") or "")
+    return auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+
+
+def _token_field(event: dict, target: dict, sid: str) -> dict:
+    """{"user_token": ...} for a follow-up action (decide, re-run) by the run's owner."""
+    token = _person_token(event, target, _run_owner(sid, target["status"]))
+    return {"user_token": token} if token else {}
+
+
+_identity_client = None
+
+
+def _identity():
+    """The AgentCore Identity data plane (CompleteResourceTokenAuth), made once."""
+    global _identity_client
+    if _identity_client is None:
+        _identity_client = boto3.client("bedrock-agentcore", region_name=REGION)
+    return _identity_client
+
+
+def _run_owner(sid: str, tbl) -> str:
+    item = tbl.get_item(Key={"session_id": sid}, ProjectionExpression="#o",
+                        ExpressionAttributeNames={"#o": "owner"}).get("Item") or {}
+    return str(item.get("owner") or "")
 
 
 def _session_user(sid: str, tbl=None) -> str:
@@ -761,7 +834,8 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
         tool = body.get("tool") if isinstance(body.get("tool"), dict) else {}
         names = [s.get("name") for s in tool.get("toolSchema") or [] if isinstance(s, dict) and s.get("name")]
         key = str(body.get("key") or "")
-        if not validate_key(key):
+        # A Gateway interceptor written in the build is checked the same way.
+        if not validate_key(key) and key not in ("interceptor-request", "interceptor-response"):
             return _resp(400, {"error": "invalid tool key"})
         return _resp(200, codecheck.check(key, body.get("files"), tool.get("code") or {}, names,
                                           run=body.get("run") is not False))
@@ -834,6 +908,24 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
         shares = library.set_shares(owner, build_id, body)
         audit("library.shared", item=build_id, shares=shares)
         return _resp(200, shares)
+    # AWS Agent Registry (bff/registry.py): what the organization approved, to take into a
+    # build. Read only, like browsing the library, so it takes no permission.
+    if route_key == "GET /api/registry":
+        return _resp(200, builds.registry_call(registry.list_registries))
+    if route_key == "GET /api/registry/search":
+        return _resp(200, builds.registry_call(registry.search, qs.get("registry"), qs.get("q", ""),
+                                               qs.get("kind", "")))
+    if route_key == "GET /api/builds/{id}/registry":
+        viewed("registry")
+        return _resp(200, builds.registry_state(build_id, reader))
+    # Publishing to the organization's registry speaks for the organization: admins only.
+    if route_key == "POST /api/builds/{id}/publish":
+        if not admin:
+            return _resp(403, authz.denial("admin", event))
+        published = builds.publish(build_id, owner, body, email or owner)
+        audit("build.published", **builds.label(build_id, owner), what=str(body.get("what") or ""),
+              skill=str(body.get("skill") or ""), registry=str(body.get("registry") or ""))
+        return _resp(200, published)
     # Groups to share with: every user may list their names (to pick one); only an admin
     # sees their members and defines them.
     if route_key == "GET /api/groups":
@@ -947,6 +1039,107 @@ def _console_mode() -> str:
     return "builder" if CONSOLE_MODE == "builder" and builds.ENABLED else "app"
 
 
+def _begin_run(context, target: dict, topic: str, owner: str, user: str, *, files=(), subject_id: str = "",
+               build_id: str = "", item_extra: dict | None = None, payload_extra: dict | None = None,
+               audit_as: tuple = ("", "", ""), audit_detail: dict | None = None,
+               user_token: str = "") -> str | None:
+    """Create a run's status row and start it: the one run start, for a person (POST
+    /api/sessions) and for a trigger (bff/triggers.py). None if the row could not be written."""
+    session_id = uuid.uuid4().hex[:12]
+    files = runfiles.copy_in(session_id, list(files)) if files else []
+    item = _skeleton(session_id, topic, list(target["raw"].get("agents") or {}))
+    item["user"] = user
+    item["owner"] = owner   # the run is private to whoever started it
+    # THE WORKFLOW THIS RUN RAN WITH. The run page draws from this, not from whatever
+    # the workflow is now, so an old run keeps showing the graph that produced it.
+    item["workflow"] = target["view"]
+    if build_id:
+        item["build"] = {"id": build_id, "name": target["name"], "version": target["version"]}
+    if subject_id:
+        item["subject_id"] = subject_id  # so the UI can show it after a refresh
+    if files:
+        item["attachments"] = files      # the run page lists them
+    item.update(item_extra or {})
+    try:
+        target["status"].put_item(Item=item, ConditionExpression="attribute_not_exists(session_id)")
+    except Exception as e:  # noqa: BLE001
+        # Only the id-collision race is expected here. Anything else (denied,
+        # throttled, malformed) used to be swallowed identically and the run was
+        # started anyway — so the UI polled a session that would never appear and
+        # nothing was logged. Fail loudly instead.
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+        if code != "ConditionalCheckFailedException":
+            print(f"[sessions] status write failed: {type(e).__name__}: {e}")
+            return None
+    if build_id:
+        builds.link_run(build_id, session_id)
+    if audit.enabled():
+        try:
+            who, email, ip = audit_as
+            audit.record(who, email, "run.started", session=session_id, ip=ip, topic=str(topic)[:200],
+                         **{k: v for k, v in {**({"build": build_id, "name": target["name"],
+                                                    "version": target["version"]} if build_id else {}),
+                                                 **(audit_detail or {})}.items() if v not in (None, "")})
+        except Exception as e:  # noqa: BLE001 - never blocks a run
+            print(f"[audit] run.started {session_id}: {type(e).__name__}: {e}")
+    _self_invoke(context.function_name,
+                 {"action": "start", "session_id": session_id, "topic": topic,
+                  "subject_id": subject_id, "user": user,
+                  **({"attachments": files} if files else {}),
+                  **({"build": build_id} if build_id else {}), **(payload_extra or {}),
+                  **({"user_token": user_token} if user_token else {})})
+    return session_id
+
+
+def _gate_resume(context):
+    """How bff/gates.py hands a gate its decision: as the run page does, logged for the
+    run's owner with who (or what) decided."""
+    def resume(sid: str, decision: str, comment: str, by: str) -> None:
+        item = status_tbl.get_item(Key={"session_id": sid}, ProjectionExpression="#o, #u",
+                                   ExpressionAttributeNames={"#o": "owner", "#u": "user"}).get("Item") or {}
+        if audit.enabled() and item.get("owner"):
+            try:
+                audit.record(str(item["owner"]), by, "run.decided", session=sid, decision=decision,
+                             by=by, comment=comment[:200] or None)
+            except Exception as e:  # noqa: BLE001 - never blocks the decision
+                print(f"[audit] run.decided {sid}: {type(e).__name__}: {e}")
+        _self_invoke(context.function_name, {"action": "resume", "session_id": sid, "decision": decision,
+                                             "comment": comment, "decisions": None,
+                                             "user": str(item.get("user") or "")})
+    return resume
+
+
+def _trigger_start(context):
+    """How bff/triggers.py starts a run: in this deployment's own workflow, as the
+    trigger's identity, with the delivery attached when an agent reads files."""
+    def start(topic: str, owner: str, user: str, extra: dict) -> str:
+        target = _default_target()
+        files = []
+        if runfiles.enabled():
+            uploads = []
+            if extra.get("payload") is not None and runfiles.ASSETS_BUCKET:
+                key = f"{runfiles._folder(owner)}{uuid.uuid4().hex[:8]}-payload.json"
+                runfiles._s3().put_object(Bucket=runfiles.ASSETS_BUCKET, Key=key, ContentType="application/json",
+                                          Body=json.dumps(extra["payload"], default=str).encode()[:4_000_000])
+                uploads.append({"key": key, "name": "payload.json"})
+            try:
+                files = runfiles.resolve(owner, uploads, f"{topic}\n{extra.get('s3') or ''}")
+            except builds.BuildError as e:
+                # A path the workflow may not read is not attached; the run still starts.
+                print(f"[triggers] not attached: {e}")
+                files = runfiles.resolve(owner, uploads, "") if uploads else []
+        t = extra.get("trigger") or {}
+        sid = _begin_run(context, target, topic[:TOPIC_MAX], owner, user, files=files,
+                         item_extra={"trigger": t},
+                         payload_extra={"gates": "auto"} if extra.get("gates") == "auto" else None,
+                         audit_as=(owner, user, ""),
+                         audit_detail={"trigger": t.get("name"), "source": t.get("source")})
+        if sid is None:
+            raise RuntimeError("could not create the session")
+        return sid
+    return start
+
+
 def _api(event: dict, context) -> dict:
     """Route one API call. An expected refusal (unknown or someone else's run or build,
     a job already running...) is raised as BuildError anywhere below and answered here."""
@@ -967,6 +1160,43 @@ def _route(event: dict, context) -> dict:
             body = json.loads(event["body"])
         except (TypeError, ValueError):     # not JSON, or not a string
             body = {}
+
+    # A webhook trigger (bff/triggers.py): the one route with no JWT authorizer. Its proof
+    # is the signature over the body, checked before anything else is read.
+    if route_key == "POST /api/hooks/{name}":
+        if _console_mode() == "builder" or status_tbl is None:
+            return _resp(404, {"error": "unknown trigger"})
+        status, answer = triggers.webhook(event, _trigger_start(context))
+        return _resp(status, answer)
+    # The app's Triggers page: what is wired, each webhook's URL and secret, a test.
+    if route_key.startswith(("GET /api/triggers", "POST /api/triggers")):
+        denied = _forbidden("admin", event)
+        if denied:
+            return denied
+        if status_tbl is None:
+            return _resp(404, {"error": NOT_HERE})
+        name = str(params.get("name") or "")
+        try:
+            if route_key == "GET /api/triggers":
+                domain = (event.get("requestContext") or {}).get("domainName", "")
+                return _resp(200, {"triggers": triggers.listing(domain)})
+            if route_key == "POST /api/triggers/{name}/secret":
+                secret = triggers.set_secret(name, str(body.get("value") or ""))
+                _audit_run(event, "trigger.secret", "", trigger=name, given=bool(body.get("value")))
+                scheme = triggers.trigger(name).get("signature") or "agentexpress"
+                return _resp(200, {"secret": secret, "signature": scheme})
+            if route_key == "POST /api/triggers/{name}/test":
+                # As if delivered, signature aside: the caller is an admin of this app.
+                ctx = {"body": body.get("body") if body.get("body") is not None else {}, "headers": {},
+                       "event": body.get("event") or {}, "detail": (body.get("event") or {}).get("detail") or {},
+                       "time": clock.now_str()}
+                got = triggers.fire(name, "test", ctx, f"test-{uuid.uuid4().hex}", _trigger_start(context),
+                                    payload=body.get("body") if body.get("body") is not None else body.get("event"))
+                _audit_run(event, "trigger.tested", got.get("session_id") or "", trigger=name)
+                return _resp(200, got)
+        except triggers.TriggerError as e:
+            return _resp(e.status, {"error": str(e)})
+        return _resp(404, {"error": f"no route for {route_key}"})
 
     # The activity log (bff/audit.py): your own, or — with the `audit` permission —
     # everyone's on one day. Sign-ins are logged by the Cognito trigger; sign-outs here,
@@ -1029,9 +1259,39 @@ def _route(event: dict, context) -> dict:
                              "PUT /api/policies", "DELETE /api/policies",
                              "GET /api/library", "POST /api/library", "PUT /api/library",
                              "DELETE /api/library", "GET /api/groups", "PUT /api/groups",
-                             "DELETE /api/groups")):
+                             "DELETE /api/groups", "GET /api/registry")):
         return _builds_route(route_key, params.get("id", ""), body, event)
 
+    if method == "POST" and path == "/api/sessions/attachments":
+        # A presigned POST for one file the next run will bring (bff/runfiles.py).
+        denied = _forbidden("start", event)
+        if denied:
+            return denied
+        return _resp(200, runfiles.upload(_owner(event), str(body.get("name") or "")))
+
+    if method == "POST" and path == "/api/connect":
+        # A person back from connecting their account for a tool that uses each person's
+        # own account (auth "user"). AgentCore Identity sent them here with the session
+        # it opened when the person Gateway asked for consent; binding it with THIS
+        # caller's sign-in is what proves the person who consented is the one whose run
+        # asked (session binding), so a link forwarded to someone else binds nothing.
+        session_uri = str(body.get("sessionUri") or "")
+        if not re.fullmatch(r"urn:ietf:params:oauth:request_uri:[A-Za-z0-9._~-]{1,1000}", session_uri):
+            return _resp(400, {"error": "not a connection to complete"})
+        headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+        auth = str(headers.get("authorization") or "")
+        if not auth.lower().startswith("bearer "):
+            return _resp(401, {"error": "sign in first"})
+        try:
+            _identity().complete_resource_token_auth(
+                sessionUri=session_uri, userIdentifier={"userToken": auth[7:].strip()})
+        except Exception as e:  # noqa: BLE001 - expired, already used, or someone else's
+            # The service's own message ("Invalid or expired session", or an IAM denial);
+            # it never carries the token.
+            print(f"[connect] not bound: {type(e).__name__}: {str(e)[:300]}")
+            return _resp(409, {"error": "That connection could not be completed: it expired (10 minutes), was "
+                                        "already used, or was started by someone else. Run the step again."})
+        return _resp(200, {"ok": True})
     if method == "POST" and path == "/api/sessions":
         denied = _forbidden("start", event)
         if denied:
@@ -1051,39 +1311,20 @@ def _route(event: dict, context) -> dict:
         # `subject_id` is accepted too: the console sent that spelling, and dropping it
         # silently lost every subject a user typed.
         subject_id = body.get("subjectId") or body.get("subject_id") or ""
-        session_id = uuid.uuid4().hex[:12]
-        item = _skeleton(session_id, topic, list(target["raw"].get("agents") or {}))
-        item["user"] = _user(event)
-        item["owner"] = _owner(event)   # the run is private to whoever started it
-        # THE WORKFLOW THIS RUN RAN WITH. The run page draws from this, not from whatever
-        # the workflow is now, so an old run keeps showing the graph that produced it.
-        item["workflow"] = target["view"]
-        if build_id:
-            item["build"] = {"id": build_id, "name": target["name"],
-                             "version": target["version"]}
-        if subject_id:
-            item["subject_id"] = subject_id  # so the UI can show it after a refresh
-        try:
-            target["status"].put_item(Item=item,
-                                      ConditionExpression="attribute_not_exists(session_id)")
-        except Exception as e:  # noqa: BLE001
-            # Only the id-collision race is expected here. Anything else (denied,
-            # throttled, malformed) used to be swallowed identically and the run was
-            # started anyway — so the UI polled a session that would never appear and
-            # nothing was logged. Fail loudly instead.
-            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
-            if code != "ConditionalCheckFailedException":
-                print(f"[sessions] status write failed: {type(e).__name__}: {e}")
-                return _resp(500, {"error": "could not create the session"})
-        if build_id:
-            builds.link_run(build_id, session_id)
-        _audit_run(event, "run.started", session_id, topic=str(topic)[:200],
-                   **({"build": build_id, "name": target["name"], "version": target["version"]}
-                      if build_id else {}))
-        _self_invoke(context.function_name,
-                     {"action": "start", "session_id": session_id, "topic": topic,
-                      "subject_id": subject_id, "user": item["user"],
-                      **({"build": build_id} if build_id else {})})
+        # Files the run brings (uploads, s3:// paths in the request), for the agents
+        # that set `attachments`. Only this deployment's own workflow: a build's app
+        # takes its own.
+        if build_id and body.get("attachments"):
+            return _resp(400, {"error": "attach files in the build's own app"})
+        files = [] if build_id else runfiles.resolve(_owner(event), body.get("attachments"), topic)
+        claims = authz.claims(event)
+        ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
+        session_id = _begin_run(context, target, topic, _owner(event), _user(event), files=files,
+                                subject_id=subject_id, build_id=build_id,
+                                audit_as=(builds.owner_of(claims), str(claims.get("email") or ""), ip),
+                                user_token=_person_token(event, target, _owner(event)))
+        if session_id is None:
+            return _resp(500, {"error": "could not create the session"})
         return _resp(200, {"session_id": session_id})
 
     if method == "GET" and path == "/api/sessions":
@@ -1094,11 +1335,20 @@ def _route(event: dict, context) -> dict:
         items = []
         target = _query_target(event, builds.owner_of(authz.claims(event)))
         # Only the caller's own runs.
+        service = (event.get("queryStringParameters") or {}).get("scope") == "triggers"
+        owners = _service_owners(event) if service else []
+        if service and not owners:
+            return _resp(200, [])
         scan_kwargs = ({"ProjectionExpression": "session_id, topic, overall, hitl, created, "
-                                                "#o, #u",
-                        "ExpressionAttributeNames": {"#o": "owner", "#u": "user"}}
+                                                "#o, #u, #tr",
+                        "ExpressionAttributeNames": {"#o": "owner", "#u": "user", "#tr": "trigger"}}
                        if _everyone(event) else
-                       {"ProjectionExpression": "session_id, topic, overall, hitl, created",
+                       {"ProjectionExpression": "session_id, topic, overall, hitl, created, #o, #tr",
+                        "ExpressionAttributeNames": {"#o": "owner", "#tr": "trigger"},
+                        "FilterExpression": Attr("owner").is_in(owners)}
+                       if service else
+                       {"ProjectionExpression": "session_id, topic, overall, hitl, created, #tr",
+                        "ExpressionAttributeNames": {"#tr": "trigger"},
                         "FilterExpression": Attr("owner").eq(_owner(event))})
         while True:
             page = target["status"].scan(**scan_kwargs)
@@ -1199,7 +1449,7 @@ def _route(event: dict, context) -> dict:
                      {"action": "resume", "session_id": sid, "decision": decision or "approve",
                       "comment": body.get("comment", ""), "decisions": decisions,
                       "user": _session_user(sid, target["status"]),
-                      **_build_field(target)})
+                      **_build_field(target), **_token_field(event, target, sid)})
         return _resp(200, {"ok": True})
 
     if method == "POST" and params.get("id") and path.endswith("/rerun"):
@@ -1223,7 +1473,8 @@ def _route(event: dict, context) -> dict:
         _self_invoke(context.function_name,
                      {"action": "rerun_from", "session_id": sid, "agent_id": agent_id,
                       "comment": body.get("comment", ""), "agents": agents,
-                      "user": _session_user(sid, target["status"]), **_build_field(target)})
+                      "user": _session_user(sid, target["status"]), **_build_field(target),
+                      **_token_field(event, target, sid)})
         return _resp(200, {"ok": True})
 
     if method == "POST" and params.get("id") and path.endswith("/evaluate"):
@@ -1321,6 +1572,14 @@ def _route(event: dict, context) -> dict:
 def handler(event, context):
     if event.get("action") == "design" and "requestContext" not in event:
         return designer.run_turn(event)       # a Design-with-AI turn, in the background
+    if "requestContext" not in event and gates.is_gate_event(event):
+        # A review gate decided by an EventBridge event, or by its timeout (bff/gates.py).
+        if status_tbl is None:
+            return {"decided": False, "reason": "this deployment runs no workflow"}
+        return gates.dispatch(event, status_tbl, _gate_resume(context))
+    if "requestContext" not in event and triggers.is_trigger_event(event):
+        # A schedule, an EventBridge rule or an SQS message (bff/triggers.py).
+        return triggers.dispatch(event, _trigger_start(context))
     if "action" in event and "requestContext" not in event:
         return _run(event)
     try:

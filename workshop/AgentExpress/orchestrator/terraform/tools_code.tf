@@ -1,4 +1,4 @@
-# --- type = "lambda" with `code`: a function written in the build ---------------------
+# --- type = "lambda" with `code`, and interceptors with `code`: functions written in the build ---
 # Its files are app/tools/_code/<key>/ (scaffold.py apply wrote them from the bundle; the
 # deploy runner pip-installed its requirements into the same folder). Its role is logs
 # plus ONLY the grants workflow.json names, and the same statements are its permissions
@@ -6,8 +6,13 @@
 # nothing attached to the role later can reach further. Mirrors codeToolStatements and
 # CODE_BOUNDARY_DENY in cdk/lib/tool-plane.ts.
 locals {
-  code_tool_fn     = { for n, t in local.code_lambda_tools : n => "ToolLambda-${var.agent_name}-${n}" }
-  code_tool_grants = { for n, t in local.code_lambda_tools : n => try(t.code.grants, {}) }
+  # Every function written in the build: the code tools, and the Gateway interceptors
+  # (interceptor-<point>, files in app/tools/_code/interceptor-<point>/; see
+  # interceptors.tf). A tool key is letters and digits only, so the names never collide.
+  # Mirrors ToolPlane.codeFunction in cdk/lib/tool-plane.ts.
+  code_functions   = merge(local.code_lambda_tools, local.code_interceptors)
+  code_tool_fn     = { for n, t in local.code_functions : n => "ToolLambda-${var.agent_name}-${n}" }
+  code_tool_grants = { for n, t in local.code_functions : n => try(t.code.grants, {}) }
   # An allowlist, not just the deny below: a code tool reaches a secret, table or bucket
   # only if its owner tagged it agentexpress:code-tools=true (a bucket also needs ABAC
   # turned on: aws s3api put-bucket-abac). Anything else in the account stays out of
@@ -94,7 +99,7 @@ locals {
 }
 
 resource "aws_iam_policy" "tool_code_boundary" {
-  for_each    = local.code_lambda_tools
+  for_each    = local.code_functions
   name        = "${local.code_tool_fn[each.key]}-boundary"
   description = "The most ${local.code_tool_fn[each.key]} may ever do: its grants in workflow.json, and never the framework's own data."
   policy = jsonencode({
@@ -104,7 +109,7 @@ resource "aws_iam_policy" "tool_code_boundary" {
 }
 
 resource "aws_iam_role" "tool_code" {
-  for_each             = local.code_lambda_tools
+  for_each             = local.code_functions
   name                 = local.code_tool_fn[each.key]
   permissions_boundary = aws_iam_policy.tool_code_boundary[each.key].arn
   assume_role_policy = jsonencode({
@@ -118,7 +123,7 @@ resource "aws_iam_role" "tool_code" {
 }
 
 resource "aws_iam_role_policy" "tool_code" {
-  for_each = local.code_lambda_tools
+  for_each = local.code_functions
   name     = "grants"
   role     = aws_iam_role.tool_code[each.key].id
   policy = jsonencode({
@@ -128,13 +133,13 @@ resource "aws_iam_role_policy" "tool_code" {
 }
 
 resource "aws_cloudwatch_log_group" "tool_code" {
-  for_each          = local.code_lambda_tools
+  for_each          = local.code_functions
   name              = "/aws/lambda/${local.code_tool_fn[each.key]}"
   retention_in_days = var.log_retention_days
 }
 
 data "archive_file" "tool_code" {
-  for_each    = local.code_lambda_tools
+  for_each    = local.code_functions
   type        = "zip"
   source_dir  = "${path.module}/../app/tools/_code/${each.key}"
   output_path = "${path.module}/.build/code-${each.key}.zip"
@@ -142,7 +147,7 @@ data "archive_file" "tool_code" {
 }
 
 resource "aws_lambda_function" "tool_code" {
-  for_each         = local.code_lambda_tools
+  for_each         = local.code_functions
   function_name    = local.code_tool_fn[each.key]
   role             = aws_iam_role.tool_code[each.key].arn
   runtime          = "python3.12"

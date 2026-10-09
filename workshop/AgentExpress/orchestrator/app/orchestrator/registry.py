@@ -46,6 +46,10 @@ def _configure(agent: Agent, agent_id: str, spec: dict) -> Agent:
     # choose tools and arguments (app/common/tool_loop.py), up to maxToolCalls.
     agent.tool_mode = str(spec.get("toolMode") or defaults.get("agent", "toolMode"))
     agent.max_tool_calls = int(spec.get("maxToolCalls") or defaults.get("agent", "maxToolCalls"))
+    # The build's skills this agent may use (app/common/skills.py): offered to the model
+    # to open in toolMode "model", added in full otherwise. Names only; content stays in
+    # the workflow's `skills`.
+    agent.skills = [str(s) for s in spec.get("skills") or [] if isinstance(s, str)]
     agent.model = spec.get("model")  # None -> config.MODEL_ID default
     agent.temperature = spec.get("temperature", defaults.get("agent", "temperature"))
     # Unset means the model's own default; see app/common/llm.py for models that refuse
@@ -57,6 +61,9 @@ def _configure(agent: Agent, agent_id: str, spec: dict) -> Agent:
     agent.image = dict(spec.get("image") or {})
     # Images from earlier agents this agent's model reads (ctx.llm; see images.load_for).
     agent.vision = dict(spec.get("vision") or {})
+    # The files the run was started with (uploads, s3:// paths), as model content; see
+    # app/common/attachments.py.
+    agent.attachments = spec.get("attachments", defaults.get("agent", "attachments")) is True
     # Output budget for this agent's model calls, in tokens. camelCase to match the
     # rest of workflow.json (the old snake_case `max_tokens` key was never set by
     # any config, so every agent silently used the 300 default and then overrode it
@@ -350,8 +357,8 @@ def validate_runtimes() -> None:
         # projection matches `runtime == "a2a"` first and derives "A2A · <host>", so on a
         # remote agent it is read by nothing.
         decorative = [k for k in ("model", "temperature", "topP", "stopSequences", "maxTokens",
-                                  "access", "framework", "output", "image", "vision", "toolMode",
-                                  "maxToolCalls") if k in spec]
+                                  "access", "framework", "output", "image", "vision", "attachments",
+                                  "toolMode", "maxToolCalls", "skills") if k in spec]
         if decorative:
             # All three configure ctx.llm, and a remote agent never calls it — its
             # model, its temperature, its budget. Left settable, they would read as

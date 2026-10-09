@@ -210,6 +210,17 @@
      "doc": "Let this agent's model READ images produced earlier in the same run: each of its model calls gets them as image content next to the text. The model must accept image input (Claude, Amazon Nova Pro/Lite, Llama 3.2 Vision, ...); one that does not fails the call with the model's reason. Images never leave the run: only keys under this run's own folder in the assets bucket are read. Bedrock's text guardrails and evaluations do not inspect images.",
      "reads": "registry.py -> agent.vision -> ctx.llm -> images.load_for, llm.run_llm"
     },
+    "attachments": {
+     "group": "model",
+     "type": "boolean",
+     "appliesTo": [
+      "main",
+      "dedicated"
+     ],
+     "doc": "Let this agent's model READ the files a run is started with: documents (PDF, Word, Excel, CSV, HTML, text, Markdown, JSON...) and images uploaded on Start run, or named there as s3:// paths in a bucket orchestrator.attachments.s3 allows. Each of its model calls gets them as content next to the text (at most 5 files; documents up to 4.5 MB, images 3.75 MB). The model must accept them (Claude, Amazon Nova, ...). The files are copied into the run's own folder when it starts, so a re-run reads the same ones. Bedrock's text guardrails do not inspect them.",
+     "reads": "registry.py -> agent.attachments -> ctx.llm -> attachments.load_for, llm.run_llm; bff/runfiles.py; images.tf / orchestrator-stack.ts assets bucket",
+     "default": false
+    },
     "maxTokens": {
      "group": "model",
      "type": "integer",
@@ -312,6 +323,48 @@
      "doc": "Who decides which tools to call. \"direct\": every tool the agent is bound to is queried with the request before the model reasons (predictable: one call per tool). \"model\": the model sees each tool's name, description and input schema, and decides which to call and with what arguments, reading each result before the next — up to maxToolCalls. Every call still goes through the Gateway, so the Cedar policy, the corpus scope and a tool's fixed `args` still apply; each call is on the run's timeline and in Observability.",
      "reads": "registry._configure -> ctx.tool_mode -> evidence.gather -> tool_loop",
      "default": "direct"
+    },
+    "skills": {
+     "group": "data",
+     "type": "array",
+     "items": "string",
+     "appliesTo": [
+      "main",
+      "dedicated"
+     ],
+     "doc": "Skills this agent may use: names in the build's `skills`. Each is know-how written as a SKILL.md (when to use it, then the steps), with optional reference files. With toolMode \"model\" the agent sees each skill's name and description and opens the ones it needs (use_skill); otherwise its skills are added to its instructions in full.",
+     "reads": "registry._configure -> ctx.skills -> ctx.llm, tool_loop (app/common/skills.py)"
+    },
+    "registry": {
+     "type": "object",
+     "properties": {
+      "registryId": {
+       "type": "string",
+       "doc": "The registry's id."
+      },
+      "recordId": {
+       "type": "string",
+       "doc": "The record's id."
+      },
+      "name": {
+       "type": "string",
+       "doc": "The record's name, for display."
+      },
+      "version": {
+       "type": "string",
+       "doc": "The record version this was taken from."
+      },
+      "sync": {
+       "type": "boolean",
+       "doc": "Keep it in sync with the record's latest approved version."
+      }
+     },
+     "doc": "Where this came from in an AWS Agent Registry (the Builder's Add from registry): {\"registryId\", \"recordId\", \"name\", \"version\", \"sync\"}. With sync true, the console refreshes it from the registry record's latest approved version when the build is opened and before each deploy; with sync false it stays as imported and the Builder says when a newer version exists. Read only by the console, never deployed.",
+     "reads": "bff/registry.py (the Builder); not deployed",
+     "appliesTo": [
+      "a2a"
+     ],
+     "group": "remote"
     },
     "maxToolCalls": {
      "group": "data",
@@ -834,17 +887,49 @@
      "doc": "Maps the roles an agent needs onto the field names YOUR payload actually uses, so an agent that COMPUTES from tool output stays config-driven instead of hardcoding your schema.",
      "reads": "TOOLS_JSON -> ctx.call_tool_rows / extract_rows"
     },
+    "registry": {
+     "type": "object",
+     "properties": {
+      "registryId": {
+       "type": "string",
+       "doc": "The registry's id."
+      },
+      "recordId": {
+       "type": "string",
+       "doc": "The record's id."
+      },
+      "name": {
+       "type": "string",
+       "doc": "The record's name, for display."
+      },
+      "version": {
+       "type": "string",
+       "doc": "The record version this was taken from."
+      },
+      "sync": {
+       "type": "boolean",
+       "doc": "Keep it in sync with the record's latest approved version."
+      }
+     },
+     "doc": "Where this came from in an AWS Agent Registry (the Builder's Add from registry): {\"registryId\", \"recordId\", \"name\", \"version\", \"sync\"}. With sync true, the console refreshes it from the registry record's latest approved version when the build is opened and before each deploy; with sync false it stays as imported and the Builder says when a newer version exists. Read only by the console, never deployed.",
+     "reads": "bff/registry.py (the Builder); not deployed",
+     "appliesTo": [
+      "mcp"
+     ],
+     "group": "target"
+    },
     "toolSchema": {
      "group": "call",
      "type": "array",
      "items": "object",
      "appliesTo": [
-      "lambda"
+      "lambda",
+      "mcp"
      ],
      "requiredFor": [
       "lambda"
      ],
-     "doc": "The tools your function publishes, inline: one entry per tool with `name`, an optional `description`, and `properties` mapping each parameter to {type, required, description}. The Gateway has no other way to learn a plain Lambda's interface.",
+     "doc": "The tools your function publishes, inline: one entry per tool with `name`, an optional `description`, and `properties` mapping each parameter to {type, required, description}. The Gateway has no other way to learn a plain Lambda's interface. An MCP tool used as the person (auth \"user\" or \"obo\") lists its tools here too, since the Gateway cannot ask the server for them before anyone has signed in.",
      "reads": "tools.tf, tool-plane.ts"
     },
     "maxResults": {
@@ -909,7 +994,7 @@
       "apigateway"
      ],
      "vocabulary": "toolAuthModes",
-     "doc": "Outbound auth from the Gateway to the endpoint: \"apikey\" is vaulted and sent as X-API-Key, \"sigv4\" signs with the Gateway's own role so there is no secret at all (for an API Gateway target: its methods need IAM authorization, and the Gateway role gets execute-api:Invoke on that API and stage only), \"oauth2\" gets a token with OAuth client credentials from an AgentCore Identity provider the framework creates from `oauth` (mcp and openapi only). The key or client secret itself goes in tool_api_keys (the build's secrets), never here.",
+     "doc": "Outbound auth from the Gateway to the endpoint: \"apikey\" is vaulted and sent as X-API-Key, \"sigv4\" signs with the Gateway's own role so there is no secret at all (for an API Gateway target: its methods need IAM authorization, and the Gateway role gets execute-api:Invoke on that API and stage only), \"oauth2\" gets a token with OAuth client credentials from an AgentCore Identity provider the framework creates from `oauth` (mcp and openapi only). Two act as the PERSON using the app, through a Gateway of their own that accepts their sign-in: \"user\" (each person connects their own account once, OAuth authorization code: GitHub, Salesforce, Google) and \"obo\" (the person's sign-in is exchanged for the tool's token, OAuth on-behalf-of token exchange, for a tool that trusts the same provider). The key or client secret itself goes in tool_api_keys (the build's secrets), never here.",
      "reads": "tools.tf, tool-plane.ts"
     },
     "service": {
@@ -929,7 +1014,7 @@
       "mcp",
       "openapi"
      ],
-     "doc": "With auth \"oauth2\": how to get a token with OAuth client credentials. {\"clientId\": \"...\", \"scopes\": [\"orders.read\"], and either \"discoveryUrl\" (the issuer's .well-known/openid-configuration) or \"tokenUrl\" (plus \"issuer\" when it differs from the token URL's origin)}. The client SECRET is a secret: set it in the build's secrets (the same place as an API key), never here. The framework creates an AgentCore Identity OAuth2 credential provider from these.",
+     "doc": "With auth \"oauth2\": how to get a token with OAuth client credentials. {\"clientId\": \"...\", \"scopes\": [\"orders.read\"], and either \"discoveryUrl\" (the issuer's .well-known/openid-configuration) or \"tokenUrl\" (plus \"issuer\" when it differs from the token URL's origin)}. The client SECRET is a secret: set it in the build's secrets (the same place as an API key), never here. With auth \"user\", also \"authorizationUrl\" when you give tokenUrl rather than discoveryUrl. With auth \"obo\", optionally \"audience\": the tool's API the exchanged token is for. The framework creates an AgentCore Identity OAuth2 credential provider from these.",
      "reads": "tool-plane.ts CfnOAuth2CredentialProvider, tools.tf aws_bedrockagentcore_oauth2_credential_provider"
     },
     "identity": {
@@ -1023,10 +1108,13 @@
     },
     "hitl": {
      "group": "gate",
-     "type": "boolean",
+     "type": [
+      "boolean",
+      "object"
+     ],
      "appliesTo": "*",
-     "doc": "Pause after this step for a human to approve, revise or deny. Revise re-runs the step with the reviewer's comment as feedback.",
-     "reads": "graph_builder gate nodes and routers"
+     "doc": "Pause after this step for a human to approve, revise or deny. Revise re-runs the step with the reviewer's comment as feedback. true is always, in the console. Or an object: `mode` always (default), threshold (a person only when a `when` rule matches the output: branch rules without `goto`) or auto (approves itself, logged); `approval` console (default) or event (also asked for as an \"AgentExpress Approval Requested\" event, and answerable with an \"AgentExpress Approval Decision\" event); `timeout` {\"after\": \"24h\", \"action\": \"approve\" | \"deny\"}.",
+     "reads": "graph_builder gate nodes and routers; app/common/gates.py; bff/gates.py"
     },
     "gateId": {
      "group": "gate",
@@ -1064,11 +1152,11 @@
     },
     "runtimeInvoke": {
      "type": "object",
-     "doc": "Calling a `dedicated` agent's runtime: maxAttempts (total, default 1 — InvokeAgentRuntime is not idempotent, so a retry bills a second model call and returns whichever answered last) and readTimeoutSeconds (default 120).",
+     "doc": "Calling a `dedicated` agent's runtime: maxAttempts (total, default 1 — InvokeAgentRuntime is not idempotent, so a retry bills a second model call and returns whichever answered last) and readTimeoutSeconds (default 600: a dedicated agent that makes several tool calls and writes a long answer takes minutes, and 120 timed out such an agent mid-answer).",
      "reads": "config.py RUNTIME_INVOKE -> agentcore_agent",
      "default": {
       "maxAttempts": 1,
-      "readTimeoutSeconds": 120
+      "readTimeoutSeconds": 600
      }
     },
     "a2aInvoke": {
@@ -1143,6 +1231,38 @@
      "default": "shared",
      "doc": "How agents sign in to the Gateway: \"shared\" (one machine client for all) or \"perAgent\" (one each, so the Gateway knows which agent called). perAgent needs the Cognito pool the deployment creates.",
      "reads": "cognito.tf / orchestrator-stack.ts agent clients; gateway/client.py GATEWAY_AGENT_CLIENTS"
+    },
+    "attachments": {
+     "type": "object",
+     "properties": {
+      "s3": {
+       "type": "array",
+       "items": "string",
+       "doc": "Buckets, or bucket/prefix folders, a run's request may name as s3://... for agents with `attachments` to read, e.g. [\"my-docs\", \"my-bucket/contracts\"]. The deployment grants read on exactly these; none by default (uploads only)."
+      }
+     },
+     "doc": "Files a run is started with, for agents that set `attachments`: which S3 locations a request may refer to, beside uploads.",
+     "reads": "bff/runfiles.py S3_ALLOWED; images.tf / orchestrator-stack.ts BFF grants"
+    },
+    "interceptors": {
+     "type": "object",
+     "properties": {
+      "request": {
+       "type": "object",
+       "doc": "The Lambda the Gateway calls BEFORE every MCP request reaches a tool (initialize, tools/list, tools/call): it may rewrite the request or refuse it. Exactly one of `code` (written in the build, in app/tools/_code/interceptor-request/, with the same grants menu as a code tool) or `lambdaArn` (yours). `passRequestHeaders` (default false) hands it the request headers, including the caller's token and x-ax-session / x-ax-agent / x-ax-user. `templates` records what the Builder generated the code from: audit, blockTools, argumentGuard, injectContext, custom."
+      },
+      "response": {
+       "type": "object",
+       "doc": "The Lambda the Gateway calls AFTER a tool answers, before the agent sees it: it may rewrite the answer. Same keys as `request`; its templates are audit, redactPii, hideTools, capResult, custom."
+      }
+     },
+     "doc": "AgentCore Gateway interceptors: at most one Lambda before each MCP request and one after each response, for checks and changes a Cedar policy cannot express (redaction, auditing, rewriting arguments). Needs the Gateway. The Gateway may retry a call, so an interceptor must be safe to run twice.",
+     "reads": "interceptors.tf / tool-plane.ts interceptorConfigurations; tools_code.tf code functions; scaffold.py code_functions"
+    },
+    "triggers": {
+     "type": "object",
+     "doc": "What starts a run without anyone typing it: name -> {type, prompt, ...}. type webhook (a signed POST to the app's /api/hooks/<name>; `signature` agentexpress, github, slack, stripe or token), schedule (`expression` cron(...) or rate(...), `timezone`), eventbridge (an event `pattern`, on `bus`, default the default bus: AWS services, your applications, SaaS partners), s3 (`bucket`, `prefix`: an object created there, attached when orchestrator.attachments.s3 allows it) or sqs (`queueArn`, or none for a queue the framework makes, with a dead-letter queue). `prompt` is the run's request, with {{placeholders}} filled from the delivery ({{body.x}}, {{headers.x}}, {{detail.x}}, {{event.x}}, {{time}}). Also: `enabled` (default true), `runAs` owner (default) or service, `approvers` (groups that read and decide a service trigger's runs), `gates` inherit (default) or auto, `maxRunsPerHour` (default 60), `attachPayload` (the delivery as payload.json), `idempotencyKey` (a template; a delivery seen in the last day starts no second run).",
+     "reads": "bff/triggers.py; triggers.tf / orchestrator-stack.ts triggersOf"
     }
    }
   },
@@ -1262,6 +1382,38 @@
      "keyVocabulary": "authorizationActions",
      "doc": "Action -> the group names allowed to take it. Each action name is a route in bff/handler.py; one with no route would read as a restriction and gate nothing. An action you omit is UNRESTRICTED.",
      "reads": "bff/authz.py; bff/workflow.py projects it to the UI"
+    },
+    "signIn.provider": {
+     "type": "string",
+     "vocabulary": "signInProviders",
+     "default": "cognito",
+     "doc": "Who signs people in to this app: \"cognito\" (the default: the deployment creates the user list), or your own \"okta\", \"auth0\" or \"entra\" (Microsoft Entra ID). Register the app's address at your provider as its sign-in and sign-out redirect. A console build deploys with it; a deployment of your own sets the same in its idp setting (terraform.tfvars / CDK context), which must agree.",
+     "reads": "deployer/runner.py -> idp; terraform/identity.tf, orchestrator-stack.ts check it matches"
+    },
+    "signIn.domain": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$",
+     "doc": "Okta or Auth0: your org's host, e.g. acme.okta.com or acme.us.auth0.com. No https://, no path.",
+     "reads": "deployer/runner.py -> oktaDomain / auth0Domain"
+    },
+    "signIn.clientId": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9._~-]{1,128}$",
+     "doc": "Okta, Auth0 or Entra ID: the client ID of the single-page application registered for this app.",
+     "reads": "deployer/runner.py -> oktaClientId / auth0ClientId / entraClientId"
+    },
+    "signIn.tenantId": {
+     "type": "string",
+     "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+     "doc": "Entra ID: the Directory (tenant) ID, a GUID. Not a domain name, common or organizations: those would let other tenants sign in.",
+     "reads": "deployer/runner.py -> entraTenantId"
+    },
+    "signIn.authorizationServer": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9]{1,64}$",
+     "default": "default",
+     "doc": "Okta: the custom authorization server's ID. \"default\" unless you made another.",
+     "reads": "deployer/runner.py -> oktaAuthServer"
     }
    }
   },
@@ -1336,6 +1488,59 @@
      "items": "object",
      "doc": "The rating scale: 2 to 20 {value, label, definition} points. Default: five points from 0 to 1.",
      "reads": "evaluations.tf / orchestrator-stack.ts"
+    }
+   }
+  },
+  "skill": {
+   "$comment": "Skills: know-how an agent can use, each a SKILL.md (a description of when to use it, then the instructions) with optional reference files. An agent uses one by listing its name in `skills`. Scripts in a skill are not run. Optional.",
+   "$path": "skills.<name>",
+   "$optional": true,
+   "$namePattern": "^[A-Za-z][A-Za-z0-9]{0,31}$",
+   "$ordered": true,
+   "keys": {
+    "description": {
+     "type": "string",
+     "required": true,
+     "doc": "When to use it, in a sentence or two: what an agent reads to decide whether to open it.",
+     "reads": "app/common/skills.py (the catalog the agent sees)"
+    },
+    "instructions": {
+     "type": "string",
+     "required": true,
+     "doc": "The skill itself: the body of its SKILL.md (Markdown), the steps the agent follows.",
+     "reads": "app/common/skills.py"
+    },
+    "files": {
+     "type": "object",
+     "doc": "Reference files the instructions may point to, by name: {\"checklist.md\": \"...\"}. Text only (.md, .txt, .json, .csv, .yaml, .yml); up to 20 files and 200 KB in all. The agent opens one when it needs it.",
+     "reads": "app/common/skills.py"
+    },
+    "registry": {
+     "type": "object",
+     "properties": {
+      "registryId": {
+       "type": "string",
+       "doc": "The registry's id."
+      },
+      "recordId": {
+       "type": "string",
+       "doc": "The record's id."
+      },
+      "name": {
+       "type": "string",
+       "doc": "The record's name, for display."
+      },
+      "version": {
+       "type": "string",
+       "doc": "The record version this was taken from."
+      },
+      "sync": {
+       "type": "boolean",
+       "doc": "Keep it in sync with the record's latest approved version."
+      }
+     },
+     "doc": "Where this came from in an AWS Agent Registry (the Builder's Add from registry, a SKILL record): {\"registryId\", \"recordId\", \"name\", \"version\", \"sync\"}. With sync true, the console refreshes it from the registry record's latest approved version when the build is opened and before each deploy; with sync false it stays as imported and the Builder says when a newer version exists. Read only by the console, never deployed.",
+     "reads": "bff/registry.py (the Builder); not deployed"
     }
    }
   },
@@ -1461,13 +1666,15 @@
    ]
   },
   "toolAuthModes": {
-   "$comment": "A tool target's `auth`. \"\" means unset. oauth2 = OAuth client credentials through an AgentCore Identity provider the framework creates (mcp, openapi only: an API Gateway target takes apikey, sigv4 or none).",
+   "$comment": "A tool target's `auth`. \"\" means unset. oauth2 = OAuth client credentials through an AgentCore Identity provider the framework creates; user = each person's own account (OAuth authorization code); obo = the person's sign-in exchanged on-behalf-of. The three OAuth modes are mcp and openapi only: an API Gateway target takes apikey, sigv4 or none.",
    "values": [
     "",
     "none",
     "apikey",
     "sigv4",
-    "oauth2"
+    "oauth2",
+    "user",
+    "obo"
    ]
   },
   "httpMethods": {
@@ -1813,6 +2020,108 @@
     "shared",
     "perAgent"
    ]
+  },
+  "signInProviders": {
+   "$comment": "Who signs people in to an app (authorization.signIn.provider): cognito = the user pool the deployment creates; okta, auth0, entra = your own provider, through its single-page application. Each maps to the IaC's idp setting.",
+   "values": [
+    "cognito",
+    "okta",
+    "auth0",
+    "entra"
+   ]
+  },
+  "interceptorRequestTemplates": {
+   "$comment": "What a REQUEST interceptor written in the build may be generated from (orchestrator.interceptors.request.templates): audit logs each call, blockTools refuses named tools, argumentGuard refuses arguments matching a pattern or over a size, injectContext sets arguments from the run (session, agent, user), custom is your own code.",
+   "values": [
+    "audit",
+    "blockTools",
+    "argumentGuard",
+    "injectContext",
+    "custom"
+   ]
+  },
+  "interceptorResponseTemplates": {
+   "$comment": "What a RESPONSE interceptor written in the build may be generated from (orchestrator.interceptors.response.templates): audit logs each answer, redactPii masks personal data in tool results, hideTools removes tools from tools/list, capResult truncates long results, custom is your own code.",
+   "values": [
+    "audit",
+    "redactPii",
+    "hideTools",
+    "capResult",
+    "custom"
+   ]
+  },
+  "interceptorPiiTypes": {
+   "$comment": "What the redactPii interceptor template masks (templates.redactPii.types). Pattern-based, so it is a backstop rather than a guarantee: a Bedrock guardrail is the managed check.",
+   "values": [
+    "email",
+    "phone",
+    "ssn",
+    "card"
+   ]
+  },
+  "triggerTypes": {
+   "$comment": "What starts a run without anyone typing it (orchestrator.triggers.<name>.type): webhook = a signed POST to the app's /api/hooks/<name>; schedule = EventBridge Scheduler, cron or rate; eventbridge = an event pattern on a bus (AWS services, your own applications, SaaS partners); s3 = an object created in a bucket; sqs = a message on a queue.",
+   "values": [
+    "webhook",
+    "schedule",
+    "eventbridge",
+    "s3",
+    "sqs"
+   ]
+  },
+  "triggerSignatures": {
+   "$comment": "How a webhook trigger's sender proves a delivery (orchestrator.triggers.<name>.signature): agentexpress = HMAC-SHA256 of '<timestamp>.<body>' in X-AX-Signature with X-AX-Timestamp; github = X-Hub-Signature-256; slack = X-Slack-Signature over v0:<timestamp>:<body>; stripe = Stripe-Signature; token = the secret itself in X-AX-Token, for a sender that can set a header but not sign.",
+   "values": [
+    "agentexpress",
+    "github",
+    "slack",
+    "stripe",
+    "token"
+   ]
+  },
+  "triggerRunAs": {
+   "$comment": "Whose run a trigger starts (orchestrator.triggers.<name>.runAs): owner = the build's owner, as if they had typed it; service = the trigger's own identity, whose runs its `approvers` groups read and decide.",
+   "values": [
+    "owner",
+    "service"
+   ]
+  },
+  "triggerGates": {
+   "$comment": "How a triggered run's review gates behave (orchestrator.triggers.<name>.gates): inherit = as each step's `hitl` says; auto = every gate approves itself, and each approval is in the activity log.",
+   "values": [
+    "inherit",
+    "auto"
+   ]
+  },
+  "gateModes": {
+   "$comment": "How a review gate decides (steps[].hitl.mode): always = a person, every time; threshold = a person only when one of its `when` rules matches the gated output, else it approves itself; auto = it approves itself. Every self-approval is on the run's timeline and in the activity log.",
+   "values": [
+    "always",
+    "threshold",
+    "auto"
+   ]
+  },
+  "gateApprovals": {
+   "$comment": "Where a review gate is answered (steps[].hitl.approval): console = the run page; event = also asked for as an \"AgentExpress Approval Requested\" event on the account's default bus, and answerable with an \"AgentExpress Approval Decision\" event (bff/gates.py).",
+   "values": [
+    "console",
+    "event"
+   ]
+  },
+  "gateTimeoutActions": {
+   "$comment": "What a review gate decides when nobody has by its timeout (steps[].hitl.timeout.action).",
+   "values": [
+    "approve",
+    "deny"
+   ]
+  },
+  "interceptorContextSources": {
+   "$comment": "Where the injectContext interceptor template takes an argument's value from (templates.injectContext.arguments): the run's session id, the calling agent's id, or the run's user, sent by the runtime as the x-ax-session / x-ax-agent / x-ax-user headers.",
+   "values": [
+    "session",
+    "agent",
+    "user"
+   ]
   }
  },
  "defaults": {
@@ -1823,6 +2132,7 @@
    "temperature": 0,
    "framework": "plain",
    "output": "text",
+   "attachments": false,
    "maxTokens": 4000,
    "skill": "compliance",
    "auth": "none",
@@ -1854,7 +2164,7 @@
    "defaultModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
    "runtimeInvoke": {
     "maxAttempts": 1,
-    "readTimeoutSeconds": 120
+    "readTimeoutSeconds": 600
    },
    "a2aInvoke": {
     "timeoutSeconds": 30,
@@ -1878,7 +2188,9 @@
    "blockedOutputMessage": "The generated content was blocked by the content guardrail."
   },
   "authorization": {
-   "groupsClaim": "cognito:groups"
+   "groupsClaim": "cognito:groups",
+   "signIn.provider": "cognito",
+   "signIn.authorizationServer": "default"
   },
   "memory": {
    "expiryDays": 30,

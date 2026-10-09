@@ -50,6 +50,8 @@ import os
 import re
 from pathlib import Path
 
+import attachments as _att
+
 # workflow.json as shipped INSIDE this Lambda's deployment package. Both IaC paths
 # put it here (terraform/bff.tf's archive_file, and the staged asset directory the
 # CDK stack builds), so the BFF and the orchestrator runtime read the same bytes
@@ -266,7 +268,14 @@ def project(workflow: dict) -> dict:
                 .get("enabled") is True)],
         "chatbot": chatbot,
         "ui": _ui(workflow),
+        # What a run may be started with (bff/runfiles.py), or None.
+        "attachments": _att.run_view(workflow),
         "authorization": authorization,
+        # What starts runs besides a person (bff/triggers.py): names and kinds only —
+        # the prompts, patterns and queues stay on the server.
+        "triggers": [{"name": n, "type": t.get("type"), "runAs": t.get("runAs") or "owner"}
+                     for n, t in (((workflow.get("orchestrator") or {}).get("triggers") or {}).items())
+                     if isinstance(t, dict)] or None,
     }
 
 

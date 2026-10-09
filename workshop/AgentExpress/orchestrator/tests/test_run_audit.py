@@ -12,6 +12,16 @@ moto = pytest.importorskip("moto")
 ORCH = Path(__file__).resolve().parent.parent
 
 
+def _forget():
+    """Drop the modules AND their attributes on the package: `from app.common import audit`
+    returns the package attribute when there is one, so clearing sys.modules alone kept a
+    module imported earlier (with another AUDIT_TABLE) whenever an earlier test had one."""
+    import app.common as pkg
+    for m in ("config", "audit", "sink"):
+        sys.modules.pop(f"app.common.{m}", None)
+        pkg.__dict__.pop(m, None)
+
+
 @pytest.fixture()
 def sink(monkeypatch):
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
@@ -30,13 +40,11 @@ def sink(monkeypatch):
         monkeypatch.setenv("STATUS_TABLE", "s")
         monkeypatch.setenv("AUDIT_TABLE", "a")
         monkeypatch.delenv("EVENTS_TABLE", raising=False)
-        for m in ("app.common.config", "app.common.audit", "app.common.sink"):
-            sys.modules.pop(m, None)
+        _forget()
         mod = importlib.import_module("app.common.sink")
         mod._ddb = ddb
         yield mod, ddb.Table("s"), ddb.Table("a")
-        for m in ("app.common.config", "app.common.audit", "app.common.sink"):
-            sys.modules.pop(m, None)
+        _forget()
 
 
 def _log(audit, owner="u1"):

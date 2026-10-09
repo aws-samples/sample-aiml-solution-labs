@@ -933,6 +933,8 @@
   async function loadFlow() {
     const sid = resolveSessionId();
     if (!sid) return;
+    // The shell's Run Assistant answers "this run" with the run shown here.
+    window.dispatchEvent(new CustomEvent("obs:session", { detail: sid }));
     let data;
     try { data = await api(`/api/sessions/${sid}/telemetry`); }
     catch (e) { $("obsFlowTable").innerHTML = `<div class="obs-empty">Couldn't load: ${esc(e.message)}</div>`; return; }

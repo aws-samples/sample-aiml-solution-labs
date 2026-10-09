@@ -31,6 +31,26 @@ data "archive_file" "bff" {
     }
   }
 
+  # AWS Agent Registry's API models (bff/registry.py MODELS): the Lambda runtime's boto3
+  # predates them. Mirrors the bff/ subdirectories stageBffPackage copies.
+  dynamic "source" {
+    for_each = fileset("${path.module}/../bff", "botocore_data/**/*.json")
+    content {
+      content  = file("${path.module}/../bff/${source.value}")
+      filename = source.value
+    }
+  }
+
+  # The Gateway interceptor templates, one copy shared with the Interceptors tab:
+  # bff/interceptor_code.py generates an interceptor's files from them when the
+  # Assistant sets its templates. Mirrors stageBffPackage in the CDK stack.
+  dynamic "source" {
+    for_each = toset(["request", "response"])
+    content {
+      content  = file("${path.module}/../web/src/builder/interceptor-templates/${source.value}.py")
+      filename = "interceptor_templates/${source.value}.py"
+    }
+  }
   source {
     content  = file("${path.module}/../app/workflow.json")
     filename = "workflow.json"
@@ -105,6 +125,26 @@ resource "aws_iam_role_policy" "bff" {
           "${awscc_bedrockagentcore_runtime.orchestrator[0].agent_runtime_arn}/*"
         ]
       },
+      ], length(local.person_tool_names) == 0 || !local.gateway_enabled ? [] : [
+      # A person who connected their account for a tool (auth "user") comes back to the
+      # app, which binds that grant to them (POST /api/connect). Mirrors orchestrator-stack.ts.
+      {
+        Sid    = "BindPersonConsent"
+        Effect = "Allow"
+        Action = ["bedrock-agentcore:CompleteResourceTokenAuth"]
+        Resource = [
+          "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:workload-identity-directory/*",
+          "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:token-vault/*",
+        ]
+      },
+      {
+        # Binding makes AgentCore Identity exchange the person's code with the CALLER's
+        # credentials, so it reads the tool's client secret as the BFF. This build's only.
+        Sid      = "BindPersonConsentSecret"
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue"]
+        Resource = ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:bedrock-agentcore-identity!default/oauth2/bedrock-agentcore-${replace(var.agent_name, "_", "-")}-*"]
+      },
       ], [
       {
         Effect   = "Allow"
@@ -164,7 +204,7 @@ resource "aws_lambda_function" "bff" {
       # about eleven agents' worth of it.
       # Where image agents' images are (images.tf), for GET /api/images.
       ASSETS_BUCKET = local.assets_bucket
-    }, local.bff_run_env, local.builder_bff_env, local.audit_bff_env) # builder.tf, audit.tf
+    }, local.bff_run_env, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env) # builder.tf, audit.tf, triggers.tf
   }
   # The log group must exist BEFORE the function, or Lambda creates
   # /aws/lambda/<name> itself and Terraform's CreateLogGroup then fails with
@@ -229,6 +269,8 @@ resource "aws_apigatewayv2_route" "routes" {
     # The Bedrock text models this account can invoke, for the Build view's picker.
     "GET /api/models",
     "POST /api/sessions",
+    # One file a run will bring, for agents with `attachments` (bff/runfiles.py).
+    "POST /api/sessions/attachments",
     "GET /api/sessions",
     "GET /api/sessions/{id}",
     "DELETE /api/sessions/{id}",
@@ -289,18 +331,39 @@ resource "aws_apigatewayv2_route" "routes" {
     "PUT /api/library/{id}",
     "DELETE /api/library/{id}",
     "PUT /api/library/{id}/shares",
+    "GET /api/registry",
+    "GET /api/registry/search",
+    "GET /api/builds/{id}/registry",
+    "POST /api/builds/{id}/publish",
     "GET /api/groups",
     "PUT /api/groups/{id}",
     "DELETE /api/groups/{id}",
     # The audit log, and the sign-out the page reports before it signs out.
     "GET /api/audit",
     "POST /api/audit/logout",
+    # External triggers (bff/triggers.py): the app's Triggers page.
+    "GET /api/triggers",
+    # A person back from connecting their account for a tool (auth "user").
+    "POST /api/connect",
+    "POST /api/triggers/{name}/secret",
+    "POST /api/triggers/{name}/test",
   ])
   api_id             = aws_apigatewayv2_api.bff.id
   route_key          = each.value
   target             = "integrations/${aws_apigatewayv2_integration.bff.id}"
   authorization_type = local.auth_enabled ? "JWT" : "NONE"
   authorizer_id      = local.auth_enabled ? aws_apigatewayv2_authorizer.jwt[0].id : null
+}
+
+# A webhook trigger's delivery: the ONE route with no JWT authorizer. The BFF checks the
+# signature over the body with the trigger's secret before reading anything else, and the
+# route has its own, lower throttle (the stage below). Mirrors the CDK HttpApi.
+resource "aws_apigatewayv2_route" "hook" {
+  # checkov:skip=CKV_AWS_309:A webhook sender holds no user token; its proof is an HMAC signature of the body with the trigger's secret, checked by the BFF before anything else is read, on a route with its own throttle.
+  api_id             = aws_apigatewayv2_api.bff.id
+  route_key          = "POST /api/hooks/{name}"
+  target             = "integrations/${aws_apigatewayv2_integration.bff.id}"
+  authorization_type = "NONE"
 }
 
 # Access logs and a throttle on the $default stage. Mirrors the CDK HttpApi stage. The
@@ -332,6 +395,11 @@ resource "aws_apigatewayv2_stage" "default" {
   default_route_settings {
     throttling_rate_limit  = var.api_throttle_rate
     throttling_burst_limit = var.api_throttle_burst
+  }
+  route_settings {
+    route_key              = aws_apigatewayv2_route.hook.route_key
+    throttling_rate_limit  = var.hook_throttle_rate
+    throttling_burst_limit = var.hook_throttle_burst
   }
 }
 

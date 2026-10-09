@@ -15,13 +15,20 @@ import {
   aws_cognito as cognito,
   aws_logs as logs,
   aws_secretsmanager as secretsmanager,
+  aws_events as events,
+  aws_events_targets as eventsTargets,
+  aws_sqs as sqs,
+  aws_scheduler as scheduler,
+  aws_lambda_event_sources as lambdaEventSources,
   custom_resources as cr,
   aws_bedrockagentcore as agentcore,
 } from "aws-cdk-lib";
 import { CfnStage, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { HttpJwtAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
-import { CustomPolicy, GATEWAY_PLACEHOLDER, ToolPlane, ToolSpec, ToolType } from "./tool-plane";
+import {
+  CustomPolicy, GATEWAY_PLACEHOLDER, INTERCEPTION_POINTS, InterceptionPoint, InterceptorSpec, ToolPlane, ToolSpec, ToolType,
+} from "./tool-plane";
 import { BuilderPlane } from "./builder-plane";
 import * as vocab from "./vocabulary";
 import { keyDefault, keyDefaultFor } from "./defaults";
@@ -42,6 +49,11 @@ const LOG_RETENTION = logs.RetentionDays.ONE_MONTH;
  *  terraform/variables.tf var.api_throttle_rate / var.api_throttle_burst. */
 const API_THROTTLE_RATE = 500;
 const API_THROTTLE_BURST = 1000;
+/** A webhook trigger's route has its own, lower throttle: anyone can reach it. Keep in
+ *  step with terraform/bff.tf var.hook_throttle_rate / var.hook_throttle_burst. */
+export const HOOK_ROUTE = "POST /api/hooks/{name}";
+const HOOK_THROTTLE_RATE = 10;
+const HOOK_THROTTLE_BURST = 20;
 /** One JSON line per request: who, what, how it ended. No bodies, no headers. */
 const API_ACCESS_LOG_FORMAT = {
   requestId: "$context.requestId",
@@ -167,18 +179,18 @@ export function validateTools(
             `with methods from ${methods.join(", ")}: only what they select becomes a tool.`
         );
       }
-      if (t.auth === "oauth2") {
-        throw new Error(`workflow.json tools.${name}: an API Gateway target takes auth apikey, sigv4 or none, not oauth2.`);
+      if (["oauth2", "user", "obo"].includes(t.auth)) {
+        throw new Error(`workflow.json tools.${name}: an API Gateway target takes auth apikey, sigv4 or none, not ${t.auth}.`);
       }
     }
-    // --- auth: oauth2 (client credentials) ------------------------------
-    if (t.auth === "oauth2") {
+    // --- auth: oauth2 (client credentials), user (3LO), obo (token exchange) --------
+    if (["oauth2", "user", "obo"].includes(t.auth)) {
       const oa = t.oauth ?? {};
       const urls = ["discoveryUrl", "tokenUrl"].filter((k) => oa[k]);
       if (!vocab.values("oauthToolTypes").includes(t.type) || !oa.clientId || urls.length !== 1
           || urls.some((k) => !/^https:\/\/\S+\.\S+/.test(String(oa[k])))) {
         throw new Error(
-          `workflow.json tools.${name} has auth "oauth2", which needs type ${vocab.values("oauthToolTypes").join(" or ")} and ` +
+          `workflow.json tools.${name} has auth "${t.auth}", which needs type ${vocab.values("oauthToolTypes").join(" or ")} and ` +
             `"oauth": {"clientId", "scopes", and exactly one https "discoveryUrl" or "tokenUrl"}. ` +
             `The client secret goes in the build's secrets, never in workflow.json.`
         );
@@ -337,7 +349,7 @@ export function validateTools(
     }
     if (t.auth && !vocab.TOOL_AUTH_MODES.includes(t.auth)) {
       throw new Error(
-        `workflow.json tools.${name} has an invalid "auth" (${t.auth}); use "none", "apikey", "sigv4" or "oauth2".`
+        `workflow.json tools.${name} has an invalid "auth" (${t.auth}); use one of ${vocab.TOOL_AUTH_MODES.filter(Boolean).join(", ")}.`
       );
     }
     // An API key is only vaulted for the target kinds that GET a credential provider.
@@ -830,6 +842,43 @@ export function agentClientIdsOf(workflow: any): string[] {
     .map(([id]) => id);
 }
 
+/** A Directory (tenant) ID, an app's client id: Entra's GUIDs. */
+const GUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** What an OIDC provider signs users in with: the issuer the API authorizer trusts,
+ *  the SPA's client id, and the endpoints the UI's OIDC strategy and the runtime use. */
+export interface OidcSettings { issuer: string; clientId: string; authorizeUrl: string; tokenUrl: string; logoutUrl: string }
+
+/** Okta, through a custom authorization server. Checked at synth. Mirrors terraform/identity.tf. */
+export function oktaSettings(on: boolean, p: { oktaDomain?: string; oktaClientId?: string; oktaAuthServer?: string }): OidcSettings | undefined {
+  if (!on) return undefined;
+  const domain = p.oktaDomain ?? "";
+  const server = p.oktaAuthServer || "default";
+  if (!/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(domain) || !p.oktaClientId) {
+    throw new Error("idp=okta requires -c oktaDomain=<the org's host, e.g. acme.okta.com: no https://, no path> " +
+      "-c oktaClientId=<the Single-Page App integration's client id>.");
+  }
+  if (!/^[A-Za-z0-9]+$/.test(server)) {
+    throw new Error('-c oktaAuthServer is the custom authorization server\'s id ("default", or one like aus1a2b3c4d), letters and digits only.');
+  }
+  const issuer = `https://${domain}/oauth2/${server}`;
+  return { issuer, clientId: p.oktaClientId, authorizeUrl: `${issuer}/v1/authorize`,
+    tokenUrl: `${issuer}/v1/token`, logoutUrl: `${issuer}/v1/logout` };
+}
+
+/** Microsoft Entra ID, one tenant by id, v2.0 endpoints. Checked at synth. Mirrors terraform/identity.tf. */
+export function entraSettings(on: boolean, p: { entraTenantId?: string; entraClientId?: string }): OidcSettings | undefined {
+  if (!on) return undefined;
+  const tenant = p.entraTenantId ?? "";
+  if (!GUID.test(tenant) || !p.entraClientId) {
+    throw new Error("idp=entra requires -c entraTenantId=<the Directory (tenant) ID, a GUID: not a domain name, " +
+      "common or organizations> -c entraClientId=<the app registration with the Single-page application platform>.");
+  }
+  const login = `https://login.microsoftonline.com/${tenant}`;
+  return { issuer: `${login}/v2.0`, clientId: p.entraClientId, authorizeUrl: `${login}/oauth2/v2.0/authorize`,
+    tokenUrl: `${login}/oauth2/v2.0/token`, logoutUrl: `${login}/oauth2/v2.0/logout` };
+}
+
 export function validateWorkflow(workflow: any, orchRoot: string, agentName: string, idp: string): void {
   const agents: Record<string, any> = workflow.agents ?? {};
   const steps: any[] = workflow.steps ?? [];
@@ -946,7 +995,17 @@ export function validateWorkflow(workflow: any, orchRoot: string, agentName: str
       `app/workflow.json restricts ${restricted.join(", ")} in \`authorization.actions\`, but ` +
         `idp = "none" deploys the API with no authorizer, so there are no JWT claims to ` +
         `authorize against and every one of those actions would be denied. Use -c idp=cognito ` +
-        `or -c idp=auth0, or remove \`authorization.actions\`.`
+        `(or auth0, okta, entra), or remove \`authorization.actions\`.`
+    );
+  }
+  // Who the workflow says signs people in: a console build deploys with it, and a
+  // deployment of your own must agree. Mirrors terraform/identity.tf.
+  const signIn = String(workflow.authorization?.signIn?.provider ?? "");
+  if (signIn && signIn !== idp) {
+    throw new Error(
+      `app/workflow.json authorization.signIn.provider is "${signIn}", but this deployment's idp is ` +
+        `"${idp}". Deploy with -c idp=${signIn} and its settings (see DEPLOYMENT.md, Identity provider), ` +
+        `or change the workflow's sign-in.`
     );
   }
   // Mirrors ACTIONS in bff/authz.py. A typo'd key looks like a restriction but
@@ -960,6 +1019,130 @@ export function validateWorkflow(workflow: any, orchRoot: string, agentName: str
         `in bff/authz.py). An unrecognised key gates nothing.`
     );
   }
+}
+
+/** Agents whose model reads the files a run is started with (`attachments`). Mirrors
+ *  local.file_agents in terraform/images.tf. */
+export function runFileAgents(agents: Record<string, any>): string[] {
+  return Object.entries(agents ?? {})
+    .filter(([, a]) => a?.runtime !== "a2a" && a?.attachments === true).map(([id]) => id);
+}
+
+/** orchestrator.interceptors, checked: each point has exactly one of `code` (and its
+ *  handler.py on disk) or a well-formed `lambdaArn`. Mirrors the interceptor
+ *  preconditions in terraform/interceptors.tf. */
+export function interceptorsOf(workflow: any, orchRoot?: string): Partial<Record<InterceptionPoint, InterceptorSpec>> {
+  const ics = workflow?.orchestrator?.interceptors;
+  const out: Partial<Record<InterceptionPoint, InterceptorSpec>> = {};
+  if (ics === undefined || ics === null) return out;
+  for (const point of INTERCEPTION_POINTS) {
+    const ic = ics[point];
+    if (ic === undefined || ic === null) continue;
+    const hasCode = ic.code !== undefined && ic.code !== null;
+    const hasArn = typeof ic.lambdaArn === "string" && ic.lambdaArn !== "";
+    if (hasCode === hasArn) {
+      throw new Error(`workflow.json orchestrator.interceptors.${point} needs EXACTLY ONE of "code" (a function ` +
+        `written in the build, in app/tools/_code/interceptor-${point}/) or "lambdaArn" (a function you own).`);
+    }
+    if (hasArn && !LAMBDA_ARN.test(ic.lambdaArn)) {
+      throw new Error(`workflow.json orchestrator.interceptors.${point}.lambdaArn is not a Lambda function ARN: ` +
+        `${JSON.stringify(ic.lambdaArn)}.`);
+    }
+    if (hasCode && orchRoot && !fs.existsSync(path.join(orchRoot, "app", "tools", "_code", `interceptor-${point}`, "handler.py"))) {
+      throw new Error(`workflow.json orchestrator.interceptors.${point} is written in the build ("code"), but ` +
+        `app/tools/_code/interceptor-${point}/handler.py is not there. scaffold.py apply writes it from the build's bundle.`);
+    }
+    out[point] = ic;
+  }
+  return out;
+}
+
+/** One of orchestrator.triggers (bff/triggers.py), as the IaC reads it. */
+export interface TriggerSpec {
+  type: "webhook" | "schedule" | "eventbridge" | "s3" | "sqs";
+  expression?: string;
+  timezone?: string;
+  pattern?: Record<string, unknown>;
+  bus?: string;
+  bucket?: string;
+  prefix?: string;
+  queueArn?: string;
+  enabled?: boolean;
+}
+const TRIGGER_NAME = /^[A-Za-z][A-Za-z0-9]{0,31}$/;
+const SQS_ARN = /^arn:aws[a-z-]*:sqs:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_.-]{1,80}$/;
+
+/** orchestrator.triggers, checked at synth: names, types, and what each type needs.
+ *  Mirrors the preconditions in terraform/triggers.tf. */
+export function triggersOf(workflow: any): Record<string, TriggerSpec> {
+  const t = workflow?.orchestrator?.triggers;
+  if (t === undefined || t === null) return {};
+  const types = vocab.values("triggerTypes");
+  const out: Record<string, TriggerSpec> = {};
+  for (const [name, spec] of Object.entries<any>(t)) {
+    const where = `workflow.json orchestrator.triggers.${name}`;
+    if (!TRIGGER_NAME.test(name)) throw new Error(`${where}: a trigger's name is letters and digits, at most 32, starting with a letter.`);
+    if (!spec || typeof spec !== "object" || !types.includes(spec.type)) {
+      throw new Error(`${where} needs a "type": one of ${types.join(", ")}.`);
+    }
+    if (spec.type === "schedule" && !/^(cron|rate)\(.+\)$/.test(String(spec.expression ?? ""))) {
+      throw new Error(`${where} is a schedule and needs "expression": cron(...) or rate(...).`);
+    }
+    if (spec.type === "eventbridge" && !(spec.pattern && typeof spec.pattern === "object" && Object.keys(spec.pattern).length)) {
+      throw new Error(`${where} is an EventBridge trigger and needs an event "pattern".`);
+    }
+    if (spec.type === "s3" && !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(String(spec.bucket ?? ""))) {
+      throw new Error(`${where} is an S3 trigger and needs a "bucket".`);
+    }
+    if (spec.type === "sqs" && spec.queueArn !== undefined && !SQS_ARN.test(String(spec.queueArn))) {
+      throw new Error(`${where}.queueArn is not an SQS queue ARN.`);
+    }
+    out[name] = spec;
+  }
+  return out;
+}
+
+/** The EventBridge pattern a trigger listens with: its own, or an S3 bucket's "Object
+ *  Created" events (the bucket must send events to EventBridge). Mirrors terraform. */
+export function triggerPattern(spec: TriggerSpec): Record<string, unknown> {
+  if (spec.type === "s3") {
+    return { source: ["aws.s3"], "detail-type": ["Object Created"], detail: {
+      bucket: { name: [spec.bucket] }, ...(spec.prefix ? { object: { key: [{ prefix: spec.prefix }] } } : {}) } };
+  }
+  return spec.pattern ?? {};
+}
+
+/** Whether any review gate is answered by event, or times out (steps[].hitl). Mirrors
+ *  local.gate_events / local.gate_timeouts in terraform/gates.tf. */
+export function gateSteps(workflow: any): { events: boolean; timeouts: boolean } {
+  const hs = (workflow?.steps ?? []).map((s: any) => s?.hitl).filter((h: any) => h && typeof h === "object");
+  return { events: hs.some((h: any) => h.approval === "event"), timeouts: hs.some((h: any) => h.timeout && typeof h.timeout === "object") };
+}
+
+/** orchestrator.attachments.s3, trimmed of slashes. Mirrors local.run_files_s3. */
+export function runFilesS3(workflow: any): string[] {
+  const locs = workflow?.orchestrator?.attachments?.s3;
+  return (Array.isArray(locs) ? locs : []).map((p: any) => String(p).trim().replace(/^\/+|\/+$/g, "")).filter(Boolean);
+}
+
+/** The BFF's grants for a run's files: uploads, copies into the run, and the named S3
+ *  locations (read; list a folder). Mirrors aws_iam_role_policy.bff_assets. */
+export function runFilesBffStatements(bucketArn: string, locations: string[]): iam.PolicyStatementProps[] {
+  const out: iam.PolicyStatementProps[] = [
+    { sid: "RunFileUploads", actions: ["s3:PutObject", "s3:GetObject"], resources: [`${bucketArn}/uploads/*`] },
+    { sid: "RunFileCopies", actions: ["s3:PutObject"], resources: [`${bucketArn}/runs/*/attachments/*`] },
+  ];
+  if (locations.length) {
+    const prefixes = [...new Set(locations.flatMap((p) => {
+      const [, ...rest] = p.split("/");
+      return rest.length ? [rest.join("/"), `${rest.join("/")}/*`] : ["*"];
+    }))];
+    out.push({ sid: "RunFilesFromS3", actions: ["s3:GetObject"], resources: locations.map((p) => `arn:aws:s3:::${p}/*`) });
+    out.push({ sid: "ListRunFilesInS3", actions: ["s3:ListBucket"],
+      resources: [...new Set(locations.map((p) => `arn:aws:s3:::${p.split("/")[0]}`))],
+      conditions: { StringLike: { "s3:prefix": prefixes } } });
+  }
+  return out;
 }
 
 /** Every distinct group named anywhere in `authorization.actions`. */
@@ -1078,13 +1261,21 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   agentName: string;
   modelId: string;
   memoryEventExpiryDays: number;
-  /** "cognito" | "auth0" | "none" — see terraform/identity.tf for the same switch. */
+  /** "cognito" | "auth0" | "okta" | "entra" | "none" — see terraform/identity.tf for the same switch. */
   idp: string;
   cognitoUserPoolId: string;
   cognitoClientId: string;
   cognitoDomainPrefix: string;
   auth0Domain: string;
   auth0ClientId: string;
+  /** Okta: the org's host (acme.okta.com), the SPA integration's client id, and the
+   *  custom authorization server's id ("default" unless set). */
+  oktaDomain?: string;
+  oktaClientId?: string;
+  oktaAuthServer?: string;
+  /** Entra ID: the Directory (tenant) ID, a GUID, and the SPA app registration's client id. */
+  entraTenantId?: string;
+  entraClientId?: string;
   /** Create the AgentCore Gateway + Knowledge Base + Cedar policy (live MCP/RAG). */
   enableGateway: boolean;
   createCognito: boolean;
@@ -1101,8 +1292,12 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   gatewayClientId: string;
   /** Bring-your-own M2M secret, from $GATEWAY_CLIENT_SECRET. Never a context key. */
   gatewayClientSecret: string;
-  /** OAuth2 scope (Cognito) or API identifier (Auth0) for the M2M token. */
+  /** OAuth2 scope (Cognito), API identifier (Auth0), the authorization server's
+   *  audience (Okta) or the API app's client id (Entra) for the M2M token. */
   gatewayAudience: string;
+  /** The scope requested where it is not the audience: Okta (required), Entra
+   *  (default "<gatewayAudience>/.default"). */
+  gatewayScope?: string;
   /**
    * API keys for tools that need one, keyed by the workflow.json tool name.
    * From $TOOL_API_KEYS, never a context key (cdk.json is committed).
@@ -1174,6 +1369,9 @@ const ORCH_ROOT = path.join(__dirname, "..", "..");
  * `tool` raises ToolUnavailable rather than inventing evidence.
  */
 export class OrchestratorStack extends cdk.Stack {
+  /** web/auth-config.js as deployed: the non-secret IdP settings the SPA signs in with. */
+  public readonly authConfigJs: string;
+
   constructor(scope: Construct, id: string, props: OrchestratorStackProps) {
     super(scope, id, props);
 
@@ -1222,7 +1420,12 @@ export class OrchestratorStack extends cdk.Stack {
     // of the stack consumes only the provider-agnostic values derived here
     // (authEnabled / jwtIssuer / jwtAudience / authConfig for the SPA).
     const isCognito = props.idp === "cognito";
+    // The app's address, once its CloudFront distribution exists (further down): where a
+    // person connecting their account for a tool is sent back (ToolPlane returnUrl).
+    let appUrl = "";
     const isAuth0 = props.idp === "auth0";
+    const isOkta = props.idp === "okta";
+    const isEntra = props.idp === "entra";
 
     let cognitoUserPoolId = "";
     let cognitoClientId = "";
@@ -1237,12 +1440,51 @@ export class OrchestratorStack extends cdk.Stack {
     let m2mClientId = "";
     let m2mClientSecret = "";
     const agentClients: Record<string, { id: string; secret: string }> = {};
-    if (agentClientIdsOf(workflow).length && !(isCognito && props.createCognito && enableGateway)) {
-      throw new Error('orchestrator.gatewayIdentity "perAgent" needs the Cognito pool this deployment creates '
-        + "(-c idp=cognito -c createCognito=true) and the Gateway: with your own IdP there is no pool to create "
-        + 'a client per agent in. Use "shared".');
+    // The agents sign in to the Gateway as a MACHINE, not as the person, so this need
+    // not be the sign-in provider: with Okta, Auth0, Entra or your own Cognito pool,
+    // and no gatewayClientId of yours, a pool of its own holds their client — no
+    // users, no sign-in page. Mirrors local.machine_pool in terraform/identity.tf.
+    const machinePool = enableGateway && !(isCognito && props.createCognito) && props.idp !== "none"
+      && !props.gatewayClientId;
+    if (agentClientIdsOf(workflow).length && !(enableGateway && ((isCognito && props.createCognito) || machinePool))) {
+      throw new Error('orchestrator.gatewayIdentity "perAgent" needs a pool this deployment creates and the '
+        + "Gateway: with your own -c gatewayClientId there is no pool to create a client per agent in. Leave it "
+        + 'out, or use "shared".');
     }
     let m2mAudience = "";
+    // The pool the agents' Gateway clients are in (the sign-in pool, or the machine pool).
+    let m2mPoolId = "";
+    let m2mDomainPrefix = "";
+    const acctTail = cdk.Token.isUnresolved(this.account) ? "local" : this.account.slice(-6);
+    /** The Gateway's resource server, the shared machine client and one per agent
+     *  (orchestrator.gatewayIdentity "perAgent"), in `pool`. */
+    const addGatewayClients = (pool: cognito.UserPool, domainPrefix: string) => {
+      const scopeName = "invoke";
+      const resourceServer = pool.addResourceServer("GatewayResourceServer", {
+        identifier: "gateway",
+        userPoolResourceServerName: `${agentName}-gateway`,
+        scopes: [new cognito.ResourceServerScope({ scopeName, scopeDescription: "Invoke tools through the AgentCore Gateway" })],
+      });
+      const scope = cognito.OAuthScope.resourceServer(resourceServer, new cognito.ResourceServerScope({ scopeName, scopeDescription: "" }));
+      const m2m = pool.addClient("M2mClient", {
+        userPoolClientName: `${agentName}-m2m`, generateSecret: true, authFlows: {},
+        oAuth: { flows: { clientCredentials: true }, scopes: [scope] },
+      });
+      m2mClientId = m2m.userPoolClientId;
+      for (const id of agentClientIdsOf(workflow)) {
+        const c = pool.addClient(`AgentClient-${id}`, {
+          userPoolClientName: `${agentName}-a-${id}`, generateSecret: true, authFlows: {},
+          oAuth: { flows: { clientCredentials: true }, scopes: [scope] },
+        });
+        agentClients[id] = { id: c.userPoolClientId, secret: c.userPoolClientSecret.unsafeUnwrap() };
+      }
+      // Resolved via a describe-user-pool-client lookup at deploy time, so the
+      // secret never appears in the template body.
+      m2mClientSecret = m2m.userPoolClientSecret.unsafeUnwrap();
+      m2mAudience = "gateway/invoke";
+      m2mPoolId = pool.userPoolId;
+      m2mDomainPrefix = domainPrefix;
+    };
 
     if (isCognito && props.createCognito) {
       const pool = new cognito.UserPool(this, "UserPool", {
@@ -1397,49 +1639,7 @@ export class OrchestratorStack extends cdk.Stack {
       // The SPA client above logs USERS in. Gateway calls are a different
       // boundary: the runtime needs a client-credentials token, which requires a
       // Resource Server (to define the custom scope) plus a CONFIDENTIAL client.
-      if (enableGateway) {
-        const scopeName = "invoke";
-        const resourceServer = pool.addResourceServer("GatewayResourceServer", {
-          identifier: "gateway",
-          userPoolResourceServerName: `${agentName}-gateway`,
-          scopes: [
-            new cognito.ResourceServerScope({
-              scopeName,
-              scopeDescription: "Invoke tools through the AgentCore Gateway",
-            }),
-          ],
-        });
-        const m2m = pool.addClient("M2mClient", {
-          userPoolClientName: `${agentName}-m2m`,
-          generateSecret: true,
-          authFlows: {},
-          oAuth: {
-            flows: { clientCredentials: true },
-            scopes: [
-              cognito.OAuthScope.resourceServer(
-                resourceServer,
-                new cognito.ResourceServerScope({ scopeName, scopeDescription: "" })
-              ),
-            ],
-          },
-        });
-        m2mClientId = m2m.userPoolClientId;
-        // orchestrator.gatewayIdentity "perAgent": one client per agent with a tool.
-        for (const id of agentClientIdsOf(workflow)) {
-          const c = pool.addClient(`AgentClient-${id}`, {
-            userPoolClientName: `${agentName}-a-${id}`,
-            generateSecret: true,
-            authFlows: {},
-            oAuth: { flows: { clientCredentials: true }, scopes: [cognito.OAuthScope.resourceServer(
-              resourceServer, new cognito.ResourceServerScope({ scopeName, scopeDescription: "" }))] },
-          });
-          agentClients[id] = { id: c.userPoolClientId, secret: c.userPoolClientSecret.unsafeUnwrap() };
-        }
-        // Resolved via a describe-user-pool-client lookup at deploy time, so the
-        // secret never appears in the template body.
-        m2mClientSecret = m2m.userPoolClientSecret.unsafeUnwrap();
-        m2mAudience = "gateway/invoke";
-      }
+      if (enableGateway) addGatewayClients(pool, domainPrefix);
 
       new cdk.CfnOutput(this, "cognitoUserPoolId", { value: pool.userPoolId });
       new cdk.CfnOutput(this, "cognitoClientId", { value: client.userPoolClientId });
@@ -1448,6 +1648,18 @@ export class OrchestratorStack extends cdk.Stack {
       cognitoUserPoolId = props.cognitoUserPoolId;
       cognitoClientId = props.cognitoClientId;
       cognitoDomainPrefix = props.cognitoDomainPrefix;
+    }
+    if (machinePool) {
+      // Machines only: nobody signs in to it, so no users, groups, sign-in page or
+      // triggers; its domain is the token endpoint the runtime posts to.
+      const pool = new cognito.UserPool(this, "MachinePool", {
+        userPoolName: `${agentName}-machines`,
+        selfSignUpEnabled: false,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      });
+      const domainPrefix = `${agentName.replace(/_/g, "-")}-${acctTail}`;
+      pool.addDomain("MachineDomain", { cognitoDomain: { domainPrefix } });
+      addGatewayClients(pool, domainPrefix);
     }
 
     // "none" is the only configuration that deploys without auth.
@@ -1462,35 +1674,52 @@ export class OrchestratorStack extends cdk.Stack {
     if (isAuth0 && (!props.auth0Domain || !props.auth0ClientId)) {
       throw new Error('idp=auth0 requires -c auth0Domain=... -c auth0ClientId=...');
     }
+    // Okta: through a CUSTOM authorization server — the org server signs users in
+    // but issues no client-credentials token with a custom scope, so the Gateway
+    // could not be reached. Entra: ONE tenant, by id — `iss` carries the GUID
+    // whatever name signed in, and common/organizations would admit every tenant.
+    const okta = oktaSettings(isOkta, props);
+    const entra = entraSettings(isEntra, props);
+    const oidc = okta ?? entra;
 
     // Cognito issues `iss` as the user-pool endpoint; Auth0 as the tenant domain
-    // WITH a trailing slash. Both put the SPA client id in the ID token's `aud`.
+    // WITH a trailing slash; Okta as the authorization server; Entra as the tenant's
+    // v2.0 issuer. Every one puts the SPA client id in the ID token's `aud`.
     const jwtIssuer = isCognito
       ? `https://cognito-idp.${this.region}.amazonaws.com/${cognitoUserPoolId}`
       : isAuth0
         ? `https://${props.auth0Domain}/`
-        : "";
-    const jwtAudience = isCognito ? cognitoClientId : props.auth0ClientId;
+        : oidc?.issuer ?? "";
+    const jwtAudience = isCognito ? cognitoClientId : isAuth0 ? props.auth0ClientId : oidc?.clientId ?? "";
 
     // ---- Agent -> Gateway machine identity (provider-agnostic) --------------
-    // Either created above (Cognito + createCognito) or supplied by the operator.
+    // Either created above (in the sign-in pool or the machine pool) or supplied by the operator.
     const createdM2m = m2mClientId !== "";
+    // Which request shape and token the Gateway expects: a created pool's is Cognito's.
+    const gatewayFlow = createdM2m ? "cognito" : props.idp;
     const gatewayClientId = createdM2m ? m2mClientId : props.gatewayClientId;
     const gatewayClientSecret = createdM2m ? m2mClientSecret : props.gatewayClientSecret;
-    // Cognito -> the OAuth2 scope; Auth0 -> the API identifier.
+    // Cognito -> the OAuth2 scope; Auth0 -> the API identifier; Okta -> the
+    // authorization server's audience; Entra -> the API app's client id.
     const gatewayAudience = createdM2m ? m2mAudience : props.gatewayAudience;
-
+    // What to ask for where the audience is not it (Okta, Entra).
+    const gatewayScope = gatewayFlow === "okta" ? props.gatewayScope ?? ""
+      : gatewayFlow === "entra" ? props.gatewayScope || `${gatewayAudience}/.default` : "";
     // OIDC discovery + token endpoints, per provider.
-    const gatewayDiscoveryUrl = isCognito
+    const gatewayDiscoveryUrl = createdM2m
+      ? `https://cognito-idp.${this.region}.amazonaws.com/${m2mPoolId}/.well-known/openid-configuration`
+      : isCognito
       ? `https://cognito-idp.${this.region}.amazonaws.com/${cognitoUserPoolId}/.well-known/openid-configuration`
       : isAuth0
         ? `https://${props.auth0Domain}/.well-known/openid-configuration`
-        : "";
-    const gatewayTokenUrl = isCognito
+        : oidc ? `${oidc.issuer}/.well-known/openid-configuration` : "";
+    const gatewayTokenUrl = createdM2m
+      ? `https://${m2mDomainPrefix}.auth.${this.region}.amazoncognito.com/oauth2/token`
+      : isCognito
       ? `https://${cognitoDomainPrefix}.auth.${this.region}.amazoncognito.com/oauth2/token`
       : isAuth0
         ? `https://${props.auth0Domain}/oauth/token`
-        : "";
+        : oidc?.tokenUrl ?? "";
 
     // Same guardrails as terraform/identity.tf, enforced at synth.
     if (enableGateway) {
@@ -1503,9 +1732,22 @@ export class OrchestratorStack extends cdk.Stack {
       }
       if (!createdM2m && (!gatewayClientId || !gatewayAudience || !gatewayClientSecret)) {
         throw new Error(
-          "enableGateway=true requires -c gatewayClientId=... -c gatewayAudience=... and " +
-            "GATEWAY_CLIENT_SECRET in the environment (the OAuth2 scope for Cognito, or the API " +
-            "identifier for Auth0), unless idp=cognito with -c createCognito=true."
+          "-c gatewayClientId needs -c gatewayAudience=... and GATEWAY_CLIENT_SECRET in the environment " +
+            "(the OAuth2 scope for Cognito, the API identifier for Auth0, the authorization server's " +
+            "audience for Okta, the API app's client id for Entra). Leave gatewayClientId out and the " +
+            "deployment makes the agents' client itself."
+        );
+      }
+      if (gatewayFlow === "okta" && !gatewayScope) {
+        throw new Error(
+          "idp=okta with your own -c gatewayClientId requires -c gatewayScope=...: a custom scope on the " +
+            "authorization server (e.g. gateway.invoke). Okta issues no client-credentials token without one."
+        );
+      }
+      if (gatewayFlow === "entra" && !GUID.test(gatewayAudience)) {
+        throw new Error(
+          "idp=entra with -c enableGateway=true requires -c gatewayAudience=<the client id (GUID) of the " +
+            "app registration that exposes the API>: a v2 token carries that as `aud`, not its api:// URI."
         );
       }
     }
@@ -1820,13 +2062,21 @@ export class OrchestratorStack extends cdk.Stack {
           if (why) throw new Error(`agents.${id}: ${why}`);
         }
       }
-      const assetsBucket = imageAgents.length ? new s3.Bucket(this, "AssetsBucket", {
+      // It also holds the files a run is started with, for agents with `attachments`
+      // (bff/runfiles.py): uploads under uploads/ (expired after a day), and each run's
+      // copy under runs/<session>/attachments/. Mirrors terraform/images.tf.
+      const fileAgents = runFileAgents(agents);
+      const assetsBucket = imageAgents.length || fileAgents.length ? new s3.Bucket(this, "AssetsBucket", {
         bucketName: `agentcore-${agentName.replace(/_/g, "-")}-assets-${this.account}`,
         blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
         encryption: s3.BucketEncryption.S3_MANAGED,
         enforceSSL: true,
         removalPolicy: cdk.RemovalPolicy.DESTROY,
         autoDeleteObjects: true,
+        ...(fileAgents.length ? { lifecycleRules: [{
+          id: "expire-uploads", prefix: "uploads/", expiration: cdk.Duration.days(1),
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
+        }] } : {}),
       }) : undefined;
       const featureEnv = {
         ...observabilityEnv,
@@ -1930,11 +2180,17 @@ export class OrchestratorStack extends cdk.Stack {
             gatewayClientId,
             agentClientIds: Object.values(agentClients).map((c) => c.id),
             gatewayAudience,
-            isCognito,
-            isAuth0,
+            isCognito: gatewayFlow === "cognito",
+            clientClaim: gatewayFlow === "okta" ? "cid" : "azp",
+            // Tools that act as the person: their Gateway trusts the app's sign-in (the
+            // ID token, whose audience is the app's client) and sends people back here.
+            ...(authEnabled ? { personAuth: {
+              discoveryUrl: `${jwtIssuer.replace(/\/$/, "")}/.well-known/openid-configuration`, audience: jwtAudience } } : {}),
+            returnUrl: cdk.Lazy.string({ produce: () => appUrl }),
             policyEnabled,
             policyMode,
             customPolicies: policyEnabled ? customPoliciesOf(workflow) : [],
+            interceptors: interceptorsOf(workflow, ORCH_ROOT),
             orchRoot: ORCH_ROOT,
           })
         : undefined;
@@ -1946,9 +2202,13 @@ export class OrchestratorStack extends cdk.Stack {
         GATEWAY_URL: toolPlane?.gatewayUrl ?? "",
         GATEWAY_TOKEN_URL: enableGateway ? gatewayTokenUrl : "",
         GATEWAY_CLIENT_ID: enableGateway ? gatewayClientId : "",
-        // Which client-credentials request shape to build ("cognito" | "auth0").
-        GATEWAY_AUTH_FLOW: enableGateway ? props.idp : "",
+        // Which client-credentials request shape to build (the idp: cognito | auth0 | okta | entra).
+        GATEWAY_AUTH_FLOW: enableGateway ? gatewayFlow : "",
+        // The person Gateway (tools with auth "user" / "obo"), reached with the caller's sign-in.
+        GATEWAY_USER_URL: toolPlane?.personGatewayUrl ?? "",
         GATEWAY_AUDIENCE: enableGateway ? gatewayAudience : "",
+        // The scope requested where the audience is not it (Okta, Entra).
+        GATEWAY_SCOPE: enableGateway ? gatewayScope : "",
         // Cedar mode in effect at the Gateway, so the UI can label decisions.
         // Enforcement itself is server-side; this is display-only.
         GATEWAY_POLICY_MODE: toolPlane?.policyModeEnv ?? "",
@@ -2105,6 +2365,13 @@ export class OrchestratorStack extends cdk.Stack {
             sid: "ReadRunImages", actions: ["s3:GetObject"], resources: [assetsBucket.arnForObjects("runs/*")],
           }));
         }
+        // An agent that reads the run's files (`attachments`) reads them from its own
+        // runtime. Mirrors aws_iam_role_policy.subagent_files.
+        if (assetsBucket && fileAgents.includes(id)) {
+          subagentRole.addToPolicy(new iam.PolicyStatement({
+            sid: "ReadRunFiles", actions: ["s3:GetObject"], resources: [assetsBucket.arnForObjects("runs/*/attachments/*")],
+          }));
+        }
         if ((ac.memory?.longTerm ?? []).length || ac.memory?.use) subagentRole.addToPolicy(longTermMemory);
         if ((ac.identity?.outbound ?? []).some((n: string) => agentIdentities.includes(n))) {
           identityPerms.forEach((st) => subagentRole.addToPolicy(st));
@@ -2244,7 +2511,7 @@ export class OrchestratorStack extends cdk.Stack {
         // Read too, only when an in-process agent reads images (`vision`). Mirrors
         // aws_iam_role_policy.runtime_assets.
         const mainReads = Object.entries(agents).some(([id, a]) => !dedicatedIds.includes(id)
-          && a?.runtime !== "a2a" && readsImages(a));
+          && a?.runtime !== "a2a" && readsImages(a)) || fileAgents.some((id) => !dedicatedIds.includes(id));
         runtimeRole.addToPolicy(new iam.PolicyStatement({
           actions: ["s3:PutObject", ...(mainReads ? ["s3:GetObject"] : [])],
           resources: [assetsBucket.arnForObjects("runs/*")],
@@ -2348,6 +2615,8 @@ export class OrchestratorStack extends cdk.Stack {
             INSIGHTS_TABLE: insightsTable.tableName,
             // How each run ended, in the activity log (app/common/audit.py).
             AUDIT_TABLE: runAuditTable,
+            // Names this app in an approval request event (app/common/gates.py).
+            APP_NAME: agentName,
             AGENT_RUNTIME_ARNS: arnMapJson,
             RUNTIME_SECRET_ARN: runtimeSecret("OrchestratorSecret", {
               GATEWAY_CLIENT_SECRET: enableGateway ? gatewayClientSecret : "",
@@ -2362,6 +2631,14 @@ export class OrchestratorStack extends cdk.Stack {
         },
       });
       orchestrator.node.addDependency(runtimeRole);
+      // A gate answered by event (steps[].hitl.approval "event") asks on the default bus.
+      // Mirrors aws_iam_role_policy.runtime_gate_events.
+      if (gateSteps(workflow).events) {
+        runtimeRole.addToPolicy(new iam.PolicyStatement({
+          sid: "GateApprovalRequests", actions: ["events:PutEvents"],
+          resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
+        }));
+      }
       const orchestratorArn = orchestrator.getAtt("AgentRuntimeArn").toString();
       plane = { statusTable, eventsTable, telemetryTable, orchestratorArn, memoryId, imageUri: image.imageUri,
         assetsBucket, toolPlane };
@@ -2436,6 +2713,27 @@ export class OrchestratorStack extends cdk.Stack {
           resources: [plane.orchestratorArn, `${plane.orchestratorArn}/*`],
         })
       );
+      // A person who connected their account for a tool (auth "user") comes back to
+      // the app, which binds that grant to them (POST /api/connect). Mirrors bff.tf.
+      if (plane.toolPlane?.personGatewayUrl) {
+        bff.addToRolePolicy(new iam.PolicyStatement({
+          sid: "BindPersonConsent",
+          actions: ["bedrock-agentcore:CompleteResourceTokenAuth"],
+          resources: [
+            `arn:aws:bedrock-agentcore:${this.region}:${this.account}:workload-identity-directory/*`,
+            `arn:aws:bedrock-agentcore:${this.region}:${this.account}:token-vault/*`,
+          ],
+        }));
+        // Binding makes AgentCore Identity exchange the person's code for a token with
+        // the CALLER's credentials, so it reads the tool's client secret as the BFF
+        // (seen live: "Access denied when retrieving secret"). This build's providers only.
+        bff.addToRolePolicy(new iam.PolicyStatement({
+          sid: "BindPersonConsentSecret",
+          actions: ["secretsmanager:GetSecretValue"],
+          resources: [`arn:aws:secretsmanager:${this.region}:${this.account}:secret:` +
+            `bedrock-agentcore-identity!default/oauth2/bedrock-agentcore-${props.agentName.replace(/_/g, "-")}-*`],
+        }));
+      }
     }
     // The BFF self-invokes (async runner mode). Use the constructed ARN to avoid a
     // circular dependency with its own execution role.
@@ -2528,6 +2826,135 @@ export class OrchestratorStack extends cdk.Stack {
         actions: ["s3:GetObject"], resources: [assetsBucket.arnForObjects("runs/*")],
       }));
     }
+    // A run's files (bff/runfiles.py): sign uploads, check them, copy each into the run,
+    // and read the S3 locations a request may name. Mirrors aws_iam_role_policy.bff_assets.
+    if (assetsBucket && runFileAgents(workflow.agents ?? {}).length) {
+      runFilesBffStatements(assetsBucket.bucketArn, runFilesS3(workflow))
+        .forEach((st) => bff.addToRolePolicy(new iam.PolicyStatement(st)));
+    }
+
+    // ---- External triggers (orchestrator.triggers, bff/triggers.py) ------------
+    // Each delivery reaches THIS function: webhooks through /api/hooks/{name} (below),
+    // schedules through EventBridge Scheduler, events and S3 objects through an
+    // EventBridge rule, messages through an SQS event source mapping. Mirrors
+    // terraform/triggers.tf.
+    const triggerSpecs = plane && consoleMode !== "builder" ? triggersOf(workflow) : {};
+    const triggerNames = Object.keys(triggerSpecs);
+    if (triggerNames.length) {
+      if (triggerNames.some((n) => triggerSpecs[n].type === "webhook")) {
+        // Each webhook's secret, set from the app's Triggers page (never in the template).
+        const hookSecret = new secretsmanager.Secret(this, "TriggerSecret", {
+          description: `Webhook trigger secrets for ${agentName} (bff/triggers.py)`,
+          secretStringValue: cdk.SecretValue.unsafePlainText("{}"),
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+        hookSecret.grantRead(bff);
+        hookSecret.grantWrite(bff);
+        bff.addEnvironment("TRIGGER_SECRET_ARN", hookSecret.secretArn);
+      }
+      // Whose runs `runAs: "owner"` starts: the build's owner, a user of this app's pool.
+      const runOwner = String(this.node.tryGetContext("runOwnerEmail") ?? "");
+      if (runOwner) bff.addEnvironment("RUN_OWNER_EMAIL", runOwner);
+      if (cognitoUserPoolId) {
+        bff.addEnvironment("USER_POOL_ID", cognitoUserPoolId);
+        bff.addToRolePolicy(new iam.PolicyStatement({
+          sid: "TriggerRunOwner", actions: ["cognito-idp:AdminGetUser"],
+          resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/${cognitoUserPoolId}`],
+        }));
+      }
+      const scheduled = triggerNames.filter((n) => triggerSpecs[n].type === "schedule");
+      const schedulerRole = scheduled.length ? new iam.Role(this, "TriggerSchedulerRole", {
+        roleName: `AgentCoreBFF-${agentName}-scheduler`,
+        assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com", {
+          conditions: { StringEquals: { "aws:SourceAccount": this.account } },
+        }),
+        inlinePolicies: { invoke: new iam.PolicyDocument({ statements: [new iam.PolicyStatement({
+          actions: ["lambda:InvokeFunction"], resources: [bffArn] })] }) },
+      }) : undefined;
+      const queues: Record<string, string> = {};
+      for (const name of triggerNames) {
+        const spec = triggerSpecs[name];
+        const resourceName = `AgentCoreTrigger-${agentName}-${name}`;
+        if (spec.type === "schedule") {
+          new scheduler.CfnSchedule(this, `TriggerSchedule-${name}`, {
+            name: resourceName,
+            scheduleExpression: spec.expression!,
+            scheduleExpressionTimezone: spec.timezone ?? "UTC",
+            flexibleTimeWindow: { mode: "OFF" },
+            state: spec.enabled === false ? "DISABLED" : "ENABLED",
+            target: {
+              arn: bff.functionArn, roleArn: schedulerRole!.roleArn,
+              input: JSON.stringify({ axTrigger: name, time: "<aws.scheduler.scheduled-time>",
+                id: "<aws.scheduler.execution-id>" }),
+              retryPolicy: { maximumRetryAttempts: 2 },
+            },
+          });
+        } else if (spec.type === "eventbridge" || spec.type === "s3") {
+          // By name (a custom or SaaS partner bus, e.g. aws.partner/...), or by ARN.
+          const bus = !spec.bus || spec.bus === "default" ? undefined
+            : spec.bus.startsWith("arn:") ? events.EventBus.fromEventBusArn(this, `TriggerBus-${name}`, spec.bus)
+            : events.EventBus.fromEventBusName(this, `TriggerBus-${name}`, spec.bus);
+          new events.Rule(this, `TriggerRule-${name}`, {
+            ruleName: resourceName,
+            ...(bus ? { eventBus: bus } : {}),
+            eventPattern: triggerPattern(spec) as events.EventPattern,
+            enabled: spec.enabled !== false,
+            targets: [new eventsTargets.LambdaFunction(bff, {
+              event: events.RuleTargetInput.fromObject({ axTrigger: name, event: events.EventField.fromPath("$") }),
+              retryAttempts: 2,
+            })],
+          });
+        } else if (spec.type === "sqs") {
+          let queue: sqs.IQueue;
+          if (spec.queueArn) {
+            queue = sqs.Queue.fromQueueArn(this, `TriggerQueue-${name}`, spec.queueArn);
+          } else {
+            const qName = `agentcore-${agentName}-trigger-${name}`;
+            const dlq = new sqs.Queue(this, `TriggerDlq-${name}`, {
+              queueName: `${qName}-dlq`, encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true,
+              retentionPeriod: cdk.Duration.days(14), removalPolicy: cdk.RemovalPolicy.DESTROY,
+            });
+            queue = new sqs.Queue(this, `TriggerQueue-${name}`, {
+              queueName: qName, encryption: sqs.QueueEncryption.SQS_MANAGED, enforceSSL: true,
+              // Above the function's 300 s, so a message being handled is not handed out twice.
+              visibilityTimeout: cdk.Duration.seconds(330),
+              deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
+              removalPolicy: cdk.RemovalPolicy.DESTROY,
+            });
+          }
+          bff.addEventSource(new lambdaEventSources.SqsEventSource(queue, {
+            batchSize: 1, reportBatchItemFailures: true, enabled: spec.enabled !== false,
+          }));
+          queues[queue.queueArn] = name;
+        }
+      }
+      if (Object.keys(queues).length) bff.addEnvironment("TRIGGER_QUEUES", this.toJsonString(queues));
+    }
+
+    // ---- Review gates answered without the run page (bff/gates.py) ------------
+    // A decision event for a gate with approval "event", and a sweep for gates with a
+    // timeout. Mirrors terraform/gates.tf.
+    const gateUse = plane && consoleMode !== "builder" ? gateSteps(workflow) : { events: false, timeouts: false };
+    if (gateUse.events || gateUse.timeouts) bff.addEnvironment("APP_NAME", agentName);
+    if (gateUse.events) {
+      new events.Rule(this, "GateDecisions", {
+        ruleName: `AgentCoreTrigger-${agentName}-gatedecisions`,
+        eventPattern: { detailType: ["AgentExpress Approval Decision"], detail: { app: [agentName] } },
+        targets: [new eventsTargets.LambdaFunction(bff, {
+          event: events.RuleTargetInput.fromObject({ axGate: "decision", event: events.EventField.fromPath("$") }),
+          retryAttempts: 2,
+        })],
+      });
+    }
+    if (gateUse.timeouts) {
+      new events.Rule(this, "GateTimeouts", {
+        ruleName: `AgentCoreTrigger-${agentName}-gatetimeouts`,
+        schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+        targets: [new eventsTargets.LambdaFunction(bff, {
+          event: events.RuleTargetInput.fromObject({ axGate: "sweep" }), retryAttempts: 0,
+        })],
+      });
+    }
 
     const api = new HttpApi(this, "HttpApi", { apiName: `AgentCoreBFF-${agentName}` });
     // ONE invoke permission for the whole API, as terraform/bff.tf has, instead of one per
@@ -2548,6 +2975,10 @@ export class OrchestratorStack extends cdk.Stack {
       // The Bedrock text models this account can invoke, for the Build view's picker.
       { path: "/api/models", methods: [HttpMethod.GET] },
       { path: "/api/sessions", methods: [HttpMethod.GET, HttpMethod.POST] },
+      // A person back from connecting their account for a tool (auth "user").
+      { path: "/api/connect", methods: [HttpMethod.POST] },
+      // One file a run will bring, for agents with `attachments` (bff/runfiles.py).
+      { path: "/api/sessions/attachments", methods: [HttpMethod.POST] },
       { path: "/api/sessions/{id}", methods: [HttpMethod.GET, HttpMethod.DELETE] },
       { path: "/api/sessions/{id}/decision", methods: [HttpMethod.POST] },
       { path: "/api/sessions/{id}/cancel", methods: [HttpMethod.POST] },
@@ -2596,15 +3027,28 @@ export class OrchestratorStack extends cdk.Stack {
       { path: "/api/library", methods: [HttpMethod.GET, HttpMethod.POST] },
       { path: "/api/library/{id}", methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
       { path: "/api/library/{id}/shares", methods: [HttpMethod.PUT] },
+      // AWS Agent Registry (bff/registry.py): find approved records; publish a build (admin).
+      { path: "/api/registry", methods: [HttpMethod.GET] },
+      { path: "/api/registry/search", methods: [HttpMethod.GET] },
+      { path: "/api/builds/{id}/registry", methods: [HttpMethod.GET] },
+      { path: "/api/builds/{id}/publish", methods: [HttpMethod.POST] },
       { path: "/api/groups", methods: [HttpMethod.GET] },
       { path: "/api/groups/{id}", methods: [HttpMethod.PUT, HttpMethod.DELETE] },
       // The audit log, and the sign-out the page reports before it signs out.
       { path: "/api/audit", methods: [HttpMethod.GET] },
       { path: "/api/audit/logout", methods: [HttpMethod.POST] },
+      // External triggers (bff/triggers.py): the app's Triggers page.
+      { path: "/api/triggers", methods: [HttpMethod.GET] },
+      { path: "/api/triggers/{name}/secret", methods: [HttpMethod.POST] },
+      { path: "/api/triggers/{name}/test", methods: [HttpMethod.POST] },
     ];
     for (const r of routes) {
       api.addRoutes({ path: r.path, methods: r.methods, integration, authorizer });
     }
+    // A webhook trigger's delivery: the ONE route with no JWT authorizer. The BFF checks
+    // the signature over the body with the trigger's secret before reading anything else,
+    // and the route has its own, lower throttle. Mirrors terraform/bff.tf.
+    const hookRoutes = api.addRoutes({ path: "/api/hooks/{name}", methods: [HttpMethod.POST], integration });
 
     // Access logs and a throttle on the $default stage. Mirrors terraform/bff.tf. The
     // throttle is per API, generous for a console: the UI polls a run every few seconds.
@@ -2622,6 +3066,12 @@ export class OrchestratorStack extends cdk.Stack {
       throttlingBurstLimit: API_THROTTLE_BURST,
       throttlingRateLimit: API_THROTTLE_RATE,
     };
+    // An untyped JSON map, so CloudFormation's own casing (no conversion happens here).
+    defaultStage.routeSettings = {
+      [HOOK_ROUTE]: { ThrottlingBurstLimit: HOOK_THROTTLE_BURST, ThrottlingRateLimit: HOOK_THROTTLE_RATE },
+    };
+    // The stage's settings name the route, which must exist first ("Unable to find Route").
+    hookRoutes.forEach((r) => defaultStage.addDependency(r.node.defaultChild as cdk.CfnResource));
 
     // ---- Static UI: private S3 + CloudFront (OAC) --------------------------
     const uiBucket = new s3.Bucket(this, "UiBucket", {
@@ -2653,7 +3103,7 @@ export class OrchestratorStack extends cdk.Stack {
         },
       },
     });
-    const distribution = new cf.Distribution(this, "Ui", {
+    const distribution: cf.Distribution = new cf.Distribution(this, "Ui", {
       comment: "Multi-agent orchestrator UI",
       defaultRootObject: "index.html",
       defaultBehavior: {
@@ -2675,6 +3125,14 @@ export class OrchestratorStack extends cdk.Stack {
     });
 
     builderPlane?.allowUploadsFrom(`https://${distribution.distributionDomainName}`);
+    // The page uploads a run's files straight to the assets bucket (a presigned POST).
+    if (assetsBucket && runFileAgents(workflow.agents ?? {}).length) {
+      assetsBucket.addCorsRule({
+        allowedMethods: [s3.HttpMethods.POST],
+        allowedOrigins: [`https://${distribution.distributionDomainName}`],
+        allowedHeaders: ["*"], maxAge: 3000,
+      });
+    }
 
     // ---- wire the Hosted UI callbacks -------------------------------------
     // Cognito rejects an /authorize request whose redirect_uri is not registered
@@ -2704,7 +3162,7 @@ export class OrchestratorStack extends cdk.Stack {
     // `provider` selects the login strategy, and unused fields stay empty.
     const authConfigJs =
       `// Generated by CDK. Non-secret IdP settings for the SPA.\n` +
-      `// provider: "cognito" | "auth0" | "none" (enabled=false).\n` +
+      `// provider: "cognito" | "auth0" | "okta" | "entra" | "none" (enabled=false).\n` +
       `window.AUTH_CONFIG = {\n` +
       `  enabled: ${authEnabled},\n` +
       `  provider: ${JSON.stringify(props.idp)},\n` +
@@ -2712,8 +3170,13 @@ export class OrchestratorStack extends cdk.Stack {
       `  userPoolId: ${JSON.stringify(cognitoUserPoolId)},\n` +
       `  domainPrefix: ${JSON.stringify(cognitoDomainPrefix)},\n` +
       `  domain: ${JSON.stringify(isAuth0 ? props.auth0Domain : "")},\n` +
+      // Okta and Entra: one standard OIDC strategy in the UI, so the endpoints are spelled out.
+      `  authorizeUrl: ${JSON.stringify(oidc?.authorizeUrl ?? "")},\n` +
+      `  tokenUrl: ${JSON.stringify(oidc?.tokenUrl ?? "")},\n` +
+      `  logoutUrl: ${JSON.stringify(oidc?.logoutUrl ?? "")},\n` +
       `  clientId: ${JSON.stringify(jwtAudience)}\n` +
       `};\n`;
+    this.authConfigJs = authConfigJs;
 
     new s3deploy.BucketDeployment(this, "UiDeploy", {
       // The CDK framework Lambda behind this construct also leaves a never-expire log
@@ -2985,13 +3448,18 @@ def handler(event, context):
     }
 
     // ---- Outputs ------------------------------------------------------------
-    new cdk.CfnOutput(this, "uiUrl", { value: `https://${distribution.distributionDomainName}` });
+    appUrl = `https://${distribution.distributionDomainName}`;
+    new cdk.CfnOutput(this, "uiUrl", { value: appUrl });
     new cdk.CfnOutput(this, "apiEndpoint", { value: api.apiEndpoint });
     new cdk.CfnOutput(this, "idp", { value: props.idp });
     if (toolPlane) {
       new cdk.CfnOutput(this, "gatewayUrl", { value: toolPlane.gatewayUrl });
       new cdk.CfnOutput(this, "gatewayId", { value: toolPlane.gatewayId });
       new cdk.CfnOutput(this, "knowledgeBaseId", { value: toolPlane.knowledgeBaseId });
+      // Read by the console's deploy runner, which shows each one on the tool.
+      if (Object.keys(toolPlane.callbackUrls).length) {
+        new cdk.CfnOutput(this, "toolCallbackUrls", { value: cdk.Stack.of(this).toJsonString(toolPlane.callbackUrls) });
+      }
     }
     if (plane) {
       new cdk.CfnOutput(this, "agentRuntimeArn", { value: plane.orchestratorArn });
@@ -3127,6 +3595,14 @@ export function stageBffPackage(workflow: any, outDir?: string): string {
         filter: (s) => !s.includes("__pycache__"),
       });
     }
+  }
+  // The Gateway interceptor templates, ONE copy shared with the Interceptors tab:
+  // bff/interceptor_code.py generates an interceptor's files from them when the
+  // Assistant sets its templates. Mirrors the archive_file sources in terraform/bff.tf.
+  const templates = path.join(ORCH_ROOT, "web", "src", "builder", "interceptor-templates");
+  fs.mkdirSync(path.join(staged, "interceptor_templates"), { recursive: true });
+  for (const point of ["request", "response"]) {
+    fs.copyFileSync(path.join(templates, `${point}.py`), path.join(staged, "interceptor_templates", `${point}.py`));
   }
   // Written from the parsed object rather than copied, so a syntactically broken
   // workflow.json fails here at synth instead of inside the Lambda at run time.
