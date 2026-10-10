@@ -892,8 +892,8 @@ The Bedrock Guardrail policy. Agents opt in per agent via
 | `contentFilters` | Filter type → strength (`NONE`/`LOW`/`MEDIUM`/`HIGH`), applied to input and output. `PROMPT_ATTACK` is input-only, so its output strength is forced to `NONE`. |
 | `deniedWords` | Exact custom terms. `BLOCKED_DEMO_TERM` is a deterministic string for testing that blocking works end to end — **replace it**. |
 | `managedWordLists` | e.g. `PROFANITY`. |
-| `deniedTopics` | Each needs a `name` and a `definition`; `examples` optional. |
-| `piiEntities` | Bedrock PII entity type → `BLOCK` or `ANONYMIZE`. |
+| `deniedTopics` | Each needs a `name` (1–100 letters, digits, spaces, `- _ ! ? .`) and a `definition` (≤ 200 characters; Bedrock matches on it); `examples` optional, ≤ 5 of ≤ 100 characters. |
+| `piiEntities` | Bedrock PII entity type → `BLOCK` or `ANONYMIZE`. `ANONYMIZE` masks the text and the run continues with it; `BLOCK` stops the step and the log names the rule. |
 | `blockedInputMessage` / `blockedOutputMessage` | What the user sees when something is blocked. |
 
 Omit any key to drop that policy; omit the whole block for an empty guardrail.

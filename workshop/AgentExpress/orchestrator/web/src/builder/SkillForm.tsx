@@ -33,7 +33,13 @@ export function parseSkillMd(text: string): SkillMd {
   if (!m) return { name: "", description: "", instructions: text.trim() };
   const field = (k: string) => {
     const f = new RegExp(`^${k}\\s*:\\s*(.*)$`, "m").exec(m[1]);
-    return f ? f[1].trim().replace(/^(["'])(.*)\1$/, "$2") : "";
+    if (!f) return "";
+    const v = f[1].trim();
+    // A double-quoted YAML scalar, as toSkillMd writes it.
+    if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) {
+      try { return String(JSON.parse(v)); } catch { return v.slice(1, -1); }
+    }
+    return v.replace(/^'(.*)'$/, "$1");
   };
   return { name: field("name"), description: field("description"), instructions: m[2].trim() };
 }
@@ -42,7 +48,9 @@ export function parseSkillMd(text: string): SkillMd {
  *  kebab-case, as the Agent Skills format asks). */
 export function toSkillMd(name: string, skill: Entry): string {
   const kebab = name.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
-  const desc = String(skill.description ?? "").replace(/\s+/g, " ").trim();
+  // Quoted: an unquoted description with ": " in it is not valid YAML, and the registry
+  // refuses it. Mirrors bff/registry.py skill_md.
+  const desc = JSON.stringify(String(skill.description ?? "").replace(/\s+/g, " ").trim());
   return `---\nname: ${kebab}\ndescription: ${desc}\n---\n\n${String(skill.instructions ?? "").trim()}\n`;
 }
 

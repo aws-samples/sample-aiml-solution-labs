@@ -394,9 +394,12 @@ several the author picks.
   before each deploy; off, it stays as taken and the Builder offers the update.
 - **Publish to registry** (admins only: the `admin` action): the deployed build (an AGENT record
   describing the workflow and its app, and an MCP record for its Gateway's tools) or its skills
-  (SKILL records, as their SKILL.md). Records are submitted for approval; the console never
+  (SKILL records, as their SKILL.md, whose frontmatter `description` is written quoted so any
+  prose is valid YAML). Records are submitted for approval; the console never
   approves its own. Publishing again submits the next version of the same record, and the
   registry keeps serving the approved one meanwhile. Destroying the build deprecates its records.
+  A name and version another build already published is refused with a 409 that says so: rename
+  the skill, or publish from the build that owns the record.
 - IAM: the console's BFF gets `agent-registry:ListRegistries`, and on `registry/*` the
   discoverable reads plus `CreateRegistryRecord`, `UpdateRegistryRecord`, `GetRegistryRecord`,
   `SubmitRegistryRecordForApproval`, `UpdateRegistryRecordStatus` and `TagResource` (a published

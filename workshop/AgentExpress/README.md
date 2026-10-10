@@ -107,7 +107,8 @@ coupling: `assetType`, `sourceType` and `sectionType` are open strings.
 - **Run Assistant.** An in-app chat that answers questions about your runs and takes
   actions (approve a gate, re-run, evaluate) through the same APIs as the buttons, under
   the same RBAC. It is on unless `orchestrator.chatbot.enabled` is `false`, its title
-  comes from `ui.assistantTitle`, and replies render Markdown.
+  comes from `ui.assistantTitle`, and replies render Markdown. *This run* is the run on
+  screen: the one open under Runs, or the one shown in Observability's Run detail.
 - **Durable state and live progress.** LangGraph checkpoints in AgentCore Memory survive
   HITL pauses; status is mirrored to DynamoDB and the UI polls it. Timestamps are stored
   in US Eastern (`YYYY-MM-DD HH:MM:SS`) and shown in each viewer's own timezone.
@@ -288,7 +289,7 @@ orchestrator/
   needs AWS credentials with Bedrock access. There is no offline mode: a failed model or
   tool call fails the run rather than inventing data. Steps in
   [GETTING_STARTED.md](GETTING_STARTED.md).
-- **Tests:** pytest (1510), CDK jest (315 in 7 files) and web vitest (400 in 42 files).
+- **Tests:** pytest (1526), CDK jest (315 in 7 files) and web vitest (409 in 43 files).
   The pytest suite needs no AWS account or model.
 
 ## Security summary

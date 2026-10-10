@@ -74,7 +74,9 @@ export function endReason(snap: SessionSnapshot, workflow?: Workflow): { type: "
       const agents = (workflow ?? snap.workflow)?.agents ?? {};
       const name = (id: string) => agents[id]?.name ?? id;
       const skipped = m[3] ? m[3].split(", ").map((id) => name(id.trim())).join(", ") : "";
-      return { type: "info", text: `Ended early: after ${name(m[1])}, the branch rule "${m[2]}" sent the run to END`
+      // No rule matched and the branch's `default` was END: say that, not the log's wording.
+      const why = /^no rule matched/.test(m[2]) ? "the branch's default" : `the branch rule "${m[2]}"`;
+      return { type: "info", text: `Ended early: after ${name(m[1])}, ${why} sent the run to END`
         + (skipped ? `, so ${skipped} did not run.` : ".") };
     }
     return null;

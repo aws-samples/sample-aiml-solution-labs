@@ -117,7 +117,12 @@ def parse_skill_md(text: str) -> dict:
     def field(k):
         f = re.search(rf"^{k}\s*:\s*(.*)$", m.group(1), re.MULTILINE)
         v = f.group(1).strip() if f else ""
-        return v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'" else v
+        if len(v) >= 2 and v[0] == v[-1] == '"':
+            try:
+                return str(json.loads(v))     # a double-quoted YAML scalar, as skill_md writes it
+            except ValueError:
+                return v[1:-1]
+        return v[1:-1] if len(v) >= 2 and v[0] == v[-1] == "'" else v
     return {"name": field("name"), "description": field("description"), "instructions": m.group(2).strip()}
 
 
@@ -339,7 +344,9 @@ def _kebab(name: str) -> str:
 
 def skill_md(name: str, skill: dict) -> str:
     """The SKILL.md a skill is published as (SkillForm.tsx toSkillMd)."""
-    desc = re.sub(r"\s+", " ", str(skill.get("description") or "")).strip()
+    # Quoted: a description is prose, and an unquoted one with ": " in it is not valid
+    # YAML. Seen live: the registry refused it ("skillMd frontmatter is not valid").
+    desc = json.dumps(re.sub(r"\s+", " ", str(skill.get("description") or "")).strip(), ensure_ascii=False)
     return f"---\nname: {_kebab(name)}\ndescription: {desc}\n---\n\n{str(skill.get('instructions') or '').strip()}\n"
 
 

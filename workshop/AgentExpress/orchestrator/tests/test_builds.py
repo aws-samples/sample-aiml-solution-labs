@@ -1449,3 +1449,33 @@ def test_publishing_to_the_registry_is_for_admins_and_a_skill_goes_as_its_skill_
     status, err = call(env, "POST /api/builds/{id}/publish", params={"id": "pclaims01"},
                        body={**body, "what": "build"}, groups=("admins",))
     assert status == 409 and "deploy the build first" in err["error"]
+
+
+def test_a_runs_snapshot_carries_its_whole_timeline_in_order(env, monkeypatch):
+    """It used to be the newest 40 events, so a long run's first lines never showed."""
+    sid = call(env, "POST /api/sessions", body={"topic": "a long run"})[1]["session_id"]
+    events = __import__("boto3").resource("dynamodb", region_name="us-east-1").Table("console_events")
+    for i in range(65):
+        events.put_item(Item={"session_id": sid, "ts": f"2026-10-10 10:00:{i:02d}.{i:03d}", "msg": f"line {i}"})
+    status, snap = call(env, "GET /api/sessions/{id}", params={"id": sid}, path=f"/api/sessions/{sid}")
+    msgs = [x["msg"] for x in snap["logs"] if x["msg"].startswith("line ")]
+    assert status == 200 and msgs == [f"line {i}" for i in range(65)]
+    # Bounded: past the cap, the newest are kept.
+    monkeypatch.setattr(env.handler, "TIMELINE_MAX", 10)
+    snap = call(env, "GET /api/sessions/{id}", params={"id": sid}, path=f"/api/sessions/{sid}")[1]
+    assert [x["msg"] for x in snap["logs"]][-1] == "line 64" and len(snap["logs"]) == 10
+
+
+def test_a_registry_conflict_is_the_callers_to_resolve(env):
+    """Another build had already published that name and version: a 409 that says so."""
+    class Conflict(Exception):
+        def __init__(self):
+            super().__init__()
+            self.response = {"Error": {"Code": "ConflictException",
+                                       "Message": "A record with name 'x' already exists"}}
+
+    def boom():
+        raise Conflict()
+    with pytest.raises(env.builds.BuildError) as e:
+        env.builds.registry_call(boom)
+    assert e.value.status == 409 and "already exists" in str(e.value)

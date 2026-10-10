@@ -81,7 +81,8 @@ The branch on `intake` can end the run or skip to the A2A step. Both IaC paths (
    checkpointer (`AgentCoreMemorySaver`). Agents call Bedrock and, via the Gateway, tools.
 6. `app/common/sink.py` writes progress to the status table (nested-map updates, so
    parallel agents never conflict) and the events table (append-only timeline).
-7. The UI polls `GET /api/sessions/{id}` every 2 s (the run list every 5 s). At a gate
+7. The UI polls `GET /api/sessions/{id}` every 2 s (the run list every 5 s); the snapshot
+   carries the whole timeline, up to `TIMELINE_MAX` (1,000) events. At a gate
    the graph pauses on `interrupt()`; `POST /api/sessions/{id}/decision` resumes it
    through the same self-invoke path.
 8. When the overall status becomes `done`, `failed` or `denied`, the sink logs
@@ -220,7 +221,7 @@ Each feature lives in `app/features/<name>/` and is switched on per agent in its
 | Gateway | MCP endpoint for all tools; CUSTOM_JWT authorizer pinned to the caller (`allowed_clients` for Cognito; `allowed_audience` + `azp` for Auth0 and Entra ID, + `cid` for Okta) |
 | Identity | Credential providers from `identities.<name>`, secrets from the environment. `gatewayIdentity: "perAgent"` gives each tool-using agent its own Gateway client |
 | Policy | Cedar engine on the Gateway, `ENFORCE` (default-deny) or `LOG_ONLY`. `ctx.policy_check` is a secondary, fail-open helper |
-| Guardrails | Build-wide `guardrail` block (not created if it enforces nothing), plus named `guardrails.<name>` |
+| Guardrails | Build-wide `guardrail` block (not created if it enforces nothing), plus named `guardrails.<name>`. A block stops the agent and the timeline names the policy that blocked; an anonymize-only finding carries on with the masked text |
 | Observability | OTEL with one `session.id` per run, AGENT and tool spans, force-flush per burst; a telemetry row per model, tool, memory, guardrail and policy call |
 | Evaluations | LLM-as-judge per named prompt per version: telemetry rows replayed into `Evaluate` as `sessionSpans`, CloudWatch span fallback. `auto: true` scores at run end |
 | Insights | Batch evaluation over recent traces; findings in the insights table |
@@ -271,7 +272,9 @@ groups do not permit are withheld. Configured by `orchestrator.chatbot`.
 Builder's designer. `POST /api/builds/{id}/design` stores the message and hands the turn
 to a background self-invocation; the page polls. The model changes the latest draft only
 through `apply_changes` and `undo_last_change`, each result checked by
-`bff/validate_build.py` with up to 3 fix rounds. Its edits reach what the tabs reach:
+`bff/validate_build.py`, with the build's library items resolved as the deploy resolves them,
+and up to 3 fix rounds. Its context lists the caller's library (`library.list_items`), so it
+reuses an item by id rather than writing a new one, and never edits one the build uses. Its edits reach what the tabs reach:
 agents, steps, tools and their code, the named maps (skills included), triggers,
 interceptors (their code generated from the templates by `bff/interceptor_code.py`, a
 byte-for-byte port of the tab's generator), and items from the organization's AWS Agent
@@ -446,9 +449,9 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
 
 | Suite | Runner | Count | Covers |
 |---|---|---|---|
-| `tests/` | pytest | 1510 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
+| `tests/` | pytest | 1526 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
 | `cdk/test/` | jest | 315 in 7 files | Projections, validators, synthesized template, Terraform ↔ CDK parity, cdk-nag |
-| `web/` | vitest | 400 in 42 files | Asset renderer, token refresh, gates, Builder views, validator parity |
+| `web/` | vitest | 409 in 43 files | Asset renderer, token refresh, gates, Builder views, validator parity |
 
 None need AWS credentials. Prompt quality is not unit-tested; the HITL gates and
 Evaluations cover it. Each suite's directory has a `README.md`.

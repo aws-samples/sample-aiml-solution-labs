@@ -854,7 +854,10 @@ def registry_call(fn, *args):
     except Exception as e:
         err = getattr(e, "response", {}).get("Error", {}) if hasattr(e, "response") else {}
         code = err.get("Code") or type(e).__name__
-        status = 403 if "AccessDenied" in code else 404 if "NotFound" in code else 502
+        # A Conflict is the caller's to resolve (another build already published that
+        # name and version), not a fault of the registry.
+        status = (403 if "AccessDenied" in code else 404 if "NotFound" in code
+                  else 409 if "Conflict" in code else 502)
         raise BuildError(status, f"the Agent Registry answered {code}: {str(err.get('Message') or e)[:300]}") from e
 
 

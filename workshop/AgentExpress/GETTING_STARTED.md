@@ -86,6 +86,9 @@ Each top-level folder of `kb_docs/` is a corpus; an agent is scoped to one with 
 apply uploads, re-ingests and updates the Cedar permit, which allows retrieval only with a filter
 naming a declared corpus. A build can instead use Inspector uploads per corpus, your own bucket
 (`s3Uri`, optional `kmsKeyArn`) or an existing Knowledge Base (`knowledgeBaseId`, never deleted).
+A console deploy of a build whose uploaded corpus has no document is refused before it starts,
+naming the corpus and the tool; a bundle never carries documents, so put them under
+`kb_docs/<corpus>/` when you apply one yourself.
 
 ### `websearch`: the live web
 
@@ -269,6 +272,9 @@ only you can give (endpoint, ARN, key), and the deploy waits for them. Secrets g
 **Secrets** card, never the chat. **Undo** / **Redo** cover its changes, canvas edits and uploads.
 It reaches what the tabs reach: agents, steps, tools and their code, skills, interceptors (it
 checks templates and the server writes the code, as the tab does), triggers and the named blocks.
+It sees your library (your items and those shared with you) and reuses an item rather than writing a
+new one; a library item in the build is used as it is, never edited or re-created, and every edit is
+checked with the build's library items loaded, as the deploy checks it.
 Ask for something *from the registry* and it searches your AWS Agent Registry, asks which match
 and whether to keep it in sync, and imports it; it also brings registry items up to date. It
 cannot publish: that is an admin's **Publish to registry** button.
@@ -359,7 +365,10 @@ shows progress, errors and the log.
 URL, your user name and a temporary password (also emailed; first sign-in sets your own). It has
 runs, observability, the Run Assistant and its own Activity, but no Build view, AWS accounts,
 library or Admin page, and is titled "🧭 AgentExpress - <ui.title>". Each run records the workflow
-it ran with, so old runs keep their own graph.
+it ran with, so old runs keep their own graph. A run that ends early or fails says why at the top:
+the branch rule (or the branch's default) that sent it to END, the guardrail rule that blocked it,
+or the agent that failed and how. Its **Timeline** is the whole run, up to 1,000 events. On
+**Observability**, the Run Assistant's *this run* is the run shown in Run detail.
 
 ### Activity and admins
 
@@ -389,8 +398,12 @@ or replacing this one. To work in your own repo:
 ```bash
 cd orchestrator
 python3 scaffold.py apply ~/Downloads/my-workflow.agentexpress.json   # --dry-run to preview
-pytest
 ```
+Then deploy it with CDK or Terraform as in [DEPLOYMENT.md](DEPLOYMENT.md). `pytest` also checks the
+shipped sample's own conventions (`$schema`, key order and the sample's agents), so a bundle drafted
+with the Assistant fails some of those tests while it deploys fine; `cdk synth` or `terraform
+validate` is the check that matters for a deploy. A coding agent can edit a bundle too (Kiro,
+Claude Code, with the `agentexpress-author` skill in `.kiro/`) before you import it back.
 
 `apply` writes `workflow.json` and a folder per new agent, never overwriting code you edited: an
 existing `agent.py` is kept, and `prompts.py` is rewritten only while it carries the Builder's
@@ -532,7 +545,13 @@ policy isn't created.
 ```
 
 Strengths are `NONE|LOW|MEDIUM|HIGH` (`PROMPT_ATTACK` is input only); PII actions are `BLOCK` or
-`ANONYMIZE`. The sample's `BLOCKED_DEMO_TERM` and `LegalAdvice` exist to prove blocking works;
+`ANONYMIZE`. A check whose only finding is anonymized PII does not stop the agent: it carries on
+with the masked text (input) or hands it on masked (output). Anything blocked stops it, and the
+timeline names what blocked it (`denied topic LegalAdvice`, `content filter INSULTS`). Bedrock
+matches a denied topic on its `definition`, so keep it narrow (advice to one person about their
+own case, not the subject in general): at most 200 characters, with at most 5 `examples` of up to
+100 each, and a `name` of letters, digits, spaces and `-_!?.`; the validator flags anything past
+those limits. The sample's `BLOCKED_DEMO_TERM` and `LegalAdvice` exist to prove blocking works;
 replace them. The `ui` block (`title`, `heading`, `defaultTopic`, `topicPlaceholder`,
 `assistantTitle`) sets presentation strings. The build's name (renamed at the top of the Build
 view) and `ui.title`/`ui.heading` stay in step: renaming the build updates whichever of the two
@@ -573,7 +592,7 @@ checker flags, before deploy:
   `context.arguments` or `context.query` matches nothing or fails the deploy);
 - a `context.input` condition on a whole target (`action in …`) rather than one tool (`action == …`);
 - a web search or knowledge-base tool named by anything but its real tool, `<key>___WebSearch` or
-  `<key>___retrieve`;
+  `<key>___retrieve`, in a tool's policies or in `orchestrator.policy.custom`;
 - an unconditional `forbid`, which hides the tool from agents (an agent whose tools are all hidden
   fails the run with the reason). Who may start runs, approve
 gates, re-run or deploy is the `authorization` block; see [DEPLOYMENT.md](DEPLOYMENT.md).
@@ -586,9 +605,9 @@ Markdown.
 ## 11. Tests and redeploy
 
 ```bash
-cd orchestrator     && pytest      # runtime side: 1510 tests
+cd orchestrator     && pytest      # runtime side: 1526 tests
 cd orchestrator/cdk && npm test    # IaC + Terraform/CDK parity + cdk-nag: 315 tests in 7 files
-cd orchestrator/web && npm test    # UI and Builder: 400 tests in 42 files
+cd orchestrator/web && npm test    # UI and Builder: 409 tests in 43 files
 ```
 
 None needs AWS credentials, a model or a container builder. They test the config plane

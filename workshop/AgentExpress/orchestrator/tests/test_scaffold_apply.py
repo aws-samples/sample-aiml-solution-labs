@@ -337,6 +337,10 @@ def test_exact_deletes_every_agent_tool_folder_and_corpus_the_bundle_does_not_na
 def test_exact_keeps_a_tool_folder_a_tool_still_uses(tree, tmp_path):
     wf = claims_workflow()
     wf["tools"] = {"pricing": {"type": "lambda", "source": "pricing"}}
+    # Not left to the sample: after `scaffold.py reset` the tree has no tool folders.
+    folder = tree / "app" / "tools" / "pricing"
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "openapi.json").write_text("{}\n")
     assert run(tree, str(bundle(tmp_path, wf)), "--exact").returncode == 0
     assert sorted(d.name for d in (tree / "app" / "tools").iterdir() if d.is_dir()) == ["pricing"]
 

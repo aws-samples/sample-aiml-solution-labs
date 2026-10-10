@@ -21,7 +21,10 @@ describe("SKILL.md", () => {
     expect(skillKey("refund-policy")).toBe("refundPolicy");
     expect(skillKey("2fa setup")).toBe("skill2faSetup");
     const md = toSkillMd("refundPolicy", { description: "When a customer\nasks.", instructions: "1. Check." });
-    expect(md).toBe("---\nname: refund-policy\ndescription: When a customer asks.\n---\n\n1. Check.\n");
+    expect(md).toBe('---\nname: refund-policy\ndescription: "When a customer asks."\n---\n\n1. Check.\n');
+    // Quoted, so ": " in a description stays valid YAML, and it reads back as written.
+    const desc = 'Use when writing the headline (title): how to draft it, and "why".';
+    expect(parseSkillMd(toSkillMd("headlineRules", { description: desc, instructions: "1." })).description).toBe(desc);
     expect(parseSkillMd(md).instructions).toBe("1. Check.");
   });
 });

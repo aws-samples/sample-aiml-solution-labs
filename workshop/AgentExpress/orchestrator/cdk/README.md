@@ -101,7 +101,7 @@ Outputs include `uiUrl` (CloudFront), `apiEndpoint`, `agentRuntimeArn`, `memoryI
 ## Test
 
 ```bash
-npm test        # 287 tests in 7 files; no AWS credentials
+npm test        # 315 tests in 7 files; no AWS credentials
 ```
 
 Synthesizing the stack builds the UI bundle (see Prerequisites), so `stack.test.ts` and

@@ -361,6 +361,10 @@ def _run(event: dict) -> dict:
 
 #: The model list changes when AWS ships a model or the account's access changes, not
 #: per request — and listing costs two control-plane calls. Cached per warm Lambda.
+#: The most timeline events a run's snapshot returns (the newest, in order): enough for a
+#: long run of many tool-calling agents, bounded so a runaway run cannot blow up a response.
+TIMELINE_MAX = 1000
+
 _MODELS_TTL_S = 3600
 _models_cache: dict = {"at": 0.0, "body": None}
 
@@ -1369,9 +1373,17 @@ def _route(event: dict, context) -> dict:
         item = target["status"].get_item(Key={"session_id": sid}).get("Item")
         if not item:
             return _resp(404, {"error": "unknown session"})
-        evs = target["events"].query(
-            KeyConditionExpression=boto3.dynamodb.conditions.Key("session_id").eq(sid),
-            Limit=40, ScanIndexForward=False).get("Items", [])
+        # The whole timeline, up to TIMELINE_MAX events (newest kept). It used to be the
+        # newest 40, so on a long run (several tool-calling agents) the first agents'
+        # lines — a dedicated runtime's invocation, the first searches — never showed.
+        evs, kw = [], {"KeyConditionExpression": boto3.dynamodb.conditions.Key("session_id").eq(sid),
+                       "ScanIndexForward": False}
+        while len(evs) < TIMELINE_MAX:
+            page = target["events"].query(**kw, Limit=TIMELINE_MAX - len(evs))
+            evs += page.get("Items", [])
+            if not page.get("LastEvaluatedKey"):
+                break
+            kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
         evs.reverse()
         item["logs"] = [{"ts": e["ts"], "node": e.get("node"), "msg": e.get("msg", "")} for e in evs]
         return _resp(200, item)

@@ -18,6 +18,11 @@ describe("why a run ended where it did", () => {
       + `"destination equals ''" sent the run to END, so Researcher, writer did not run.` });
   });
 
+  it("names the branch's default when no rule matched", () => {
+    expect(endReason(run("done", "Branch after intake: no rule matched, took `default` -> END · skipping researcher"), wf)?.text)
+      .toBe("Ended early: after Intake Agent, the branch's default sent the run to END, so Researcher did not run.");
+  });
+
   it("says nothing for a run that ran to its last step or took another branch", () => {
     expect(endReason(run("done", "Writer complete (v1)"), wf)).toBeNull();
     expect(endReason(run("done", "Branch after intake: days gt 14 -> review"), wf)).toBeNull();

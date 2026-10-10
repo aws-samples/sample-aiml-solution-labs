@@ -6,7 +6,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-1510 tests in under two minutes. No AWS credentials, no model calls, no network — so this
+1526 tests in under two minutes. No AWS credentials, no model calls, no network — so this
 belongs in a pre-commit hook or a CI step, not a nightly job.
 
 **The UI has its own suite**, because it is a TypeScript application and `pytest` is the

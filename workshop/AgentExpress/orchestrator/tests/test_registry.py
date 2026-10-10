@@ -299,8 +299,15 @@ def test_a_skill_is_published_as_its_skill_md():
                                                  "instructions": "1. Check the date."})
     assert rec["recordType"] == "SKILL" and rec["name"] == "refund-policy"
     md = rec["descriptors"]["agentSkillsDefinition"]["additionalData"]["skillMd"]["data"]
-    assert md == "---\nname: refund-policy\ndescription: When asked for money back.\n---\n\n1. Check the date.\n"
+    assert md == '---\nname: refund-policy\ndescription: "When asked for money back."\n---\n\n1. Check the date.\n'
     assert registry.parse_skill_md(md)["instructions"] == "1. Check the date."
+    # A description with ": " in it is still valid YAML (seen live: refused unquoted), and
+    # reads back as written.
+    import yaml
+    desc = 'Use when writing the headline (title): how to draft it, and "why".'
+    md = registry.skill_md("headlineRules", {"description": desc, "instructions": "1. Draft."})
+    assert yaml.safe_load(md.split("---")[1])["description"] == desc
+    assert registry.parse_skill_md(md)["description"] == desc
 
 
 def test_statuses_are_read_live_and_a_destroy_deprecates_the_build_not_its_skills(ctl):
