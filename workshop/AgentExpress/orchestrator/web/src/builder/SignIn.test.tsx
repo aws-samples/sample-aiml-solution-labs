@@ -103,3 +103,22 @@ describe("Identity > Sign-in", () => {
     expect(hostOnly("acme.us.auth0.com/authorize?x=1")).toBe("acme.us.auth0.com");
   });
 });
+
+describe("Built-in sign-in (Amazon Cognito)", () => {
+  it("says what Cognito is, who gets in and which groups the pool has, before the first deploy", () => {
+    render(<SignInSettings project={base()} setProject={() => {}} />);
+    expect(screen.getByText("Built-in sign-in: Amazon Cognito")).toBeTruthy();
+    expect(screen.getByText(/Amazon Cognito, the AWS sign-in service/)).toBeTruthy();
+    expect(screen.getByText(/Nobody can sign themselves up/)).toBeTruthy();
+    expect(screen.getByText(/one group per role in Settings → authorization: approvers\./)).toBeTruthy();
+    expect(screen.getByText("Created on the first deploy.")).toBeTruthy();
+  });
+  it("names the deployed pool, with a link to it in the Cognito console", () => {
+    render(<SignInSettings project={base(false)} setProject={() => {}} userPoolId="us-east-1_AbC123" region="us-east-1" />);
+    expect(screen.getByText("us-east-1_AbC123")).toBeTruthy();
+    const link = screen.getByText("Open it in the Amazon Cognito console").closest("a")!;
+    expect(link.getAttribute("href")).toBe(
+      "https://us-east-1.console.aws.amazon.com/cognito/v2/idp/user-pools/us-east-1_AbC123/users?region=us-east-1");
+    expect(screen.getByText(/No roles: everyone who signs in/)).toBeTruthy();
+  });
+});

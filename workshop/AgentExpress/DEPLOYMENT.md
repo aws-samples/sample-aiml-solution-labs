@@ -372,8 +372,12 @@ agent name, with the tool the user picked:
 - Build secrets live in Secrets Manager under `agentexpress/<console agent name>/builds/<build id>`
   and are passed as the [Secrets](#secrets) variables
 - Who signs in to the build's app is chosen on its Identity tab, Sign-in (`authorization.signIn`
-  in its workflow): built in (Cognito) by default, or Okta, Entra ID or Auth0. The tab shows the
-  two values to copy from the provider and, after a deploy, the address to register there
+  in its workflow): built in (Cognito) by default, or Okta, Entra ID or Auth0. For the others the
+  tab shows the two values to copy from the provider and, after a deploy, the address to register
+  there. For built in there is nothing to set up, and the tab says what the deploy creates instead:
+  the Amazon Cognito user pool for that app, its password rules, who is invited, which group the
+  pool gets per role in `authorization.actions`, the pool id with a link to it in the Cognito
+  console once deployed, and that a destroy removes the pool and every login in it
 - After a deploy with built-in sign-in, the owner is invited into the build's app with a temporary
   password. With Okta, Entra ID or Auth0 there is no invite: people sign in with the provider
 - A CDK build in the console's own account needs that account and region CDK-bootstrapped; a
@@ -390,6 +394,10 @@ several the author picks.
 - **Add from registry** (Tools tab, Skills tab, and the agent list): search what is APPROVED and
   take it into the build. An MCP server becomes an `mcp` tool with its endpoint and its tool list
   (choose How it connects afterwards), an A2A agent card a remote agent, a SKILL record a skill.
+  A published AgentExpress workflow (an AGENT record with no A2A card) is listed with the reason
+  it cannot be added: the workflow runs as its own app and serves no A2A endpoint. Its Gateway's
+  MCP record carries no credentials, so a tool taken from it needs **How it connects** set to
+  something that Gateway accepts.
   **Keep in sync** refreshes the item to each newer approved version when the build is opened and
   before each deploy; off, it stays as taken and the Builder offers the update.
 - **Publish to registry** (admins only: the `admin` action): the deployed build (an AGENT record

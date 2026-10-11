@@ -29,7 +29,7 @@ import { Canvas } from "./Canvas";
 import { deployState } from "./DeployPanel";
 import { Markdown } from "./markdown";
 import type { Project } from "./model";
-import type { BuildSummary, DesignDoc } from "./storage";
+import { withUpdatedAt, type BuildSummary, type DesignDoc } from "./storage";
 import { Groups } from "./Groups";
 import { validate } from "./validate";
 // Admin is its own lazy chunk: without this the canvas has no height when Build was never opened.
@@ -152,7 +152,7 @@ export function Admin({ canDestroy, notify, onOpenRun, runs: withRuns = true }: 
     setError("");
     try {
       const [b, r] = await Promise.all([
-        api.get<AdminBuild[]>("/api/builds?scope=all"),
+        api.get<AdminBuild[]>("/api/builds?scope=all").then((list) => list.map(withUpdatedAt)),
         withRuns ? api.get<SessionSummary[]>("/api/sessions?scope=all") : Promise.resolve([]),
       ]);
       setBuilds(b); setRuns(r);

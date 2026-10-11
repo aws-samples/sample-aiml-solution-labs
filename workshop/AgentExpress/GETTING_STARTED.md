@@ -256,7 +256,9 @@ backed by a shipped Lambda (`"source": "a2a_lambda"` plus `skill`).
 ## 4. The console and the Builder
 
 Open **Build** (marked *Preview*) in the side navigation. Builds save to your account as you type
-and follow you to any browser. Builds and runs are private to their creator unless shared.
+and follow you to any browser. Builds and runs are private to their creator unless shared. Under
+a build's name, two lines say when it was created and by whom, and when it was last edited and by
+whom.
 
 ### AgentExpress Assistant
 
@@ -321,7 +323,9 @@ its skills are added to its instructions in full. Skills never run code.
 **AWS Agent Registry.** With a registry in the console's account and region, **Add from registry**
 (Tools tab, Skills tab and the Agents palette) lists what your organization approved: an MCP
 server becomes an `mcp` tool (its endpoint and tools; you choose how it signs in), an A2A agent
-card a remote agent (place it in a stage before deploying), a SKILL.md a skill. Choose **Keep in
+card a remote agent (place it in a stage before deploying), a SKILL.md a skill. A published
+AgentExpress workflow is listed but cannot be added as an agent: it is a catalog entry for a
+workflow that runs as its own app, not an A2A server. Choose **Keep in
 sync** to take each newer approved version when the build opens and before each deploy, or
 import it once and press **Update** when the Builder says a newer one is out. Admins publish with
 **Publish to registry**: on the Deployment panel for the deployed build (its workflow, and its
@@ -350,7 +354,10 @@ change (a deployed build picks it up on its next deploy).
 **Deploy** in the *Deployment* panel asks **AWS CDK or Terraform**, freezes the build as its next
 version, and deploys it as its own stack (`ax-xxxxxxxx-stack`), so builds sit side by side. It
 runs in CodeBuild (2-hour limit), usually takes 5 to 15 minutes, and continues if you sign out. The panel
-shows progress, errors and the log.
+shows progress, errors and the log. It folds down to one line (its status and buttons) to give the
+canvas and the chat more room, and opens again by itself when a deploy starts or fails. **History**
+lists every deploy and destroy: when, which version, the tool, where, who started it and how it
+ended, with the reason for a failure. Someone the build is shared with sees it too.
 
 - **Deploy to** is this console's account (its region) or a connected account (any region).
   *Connect an AWS account* launches one CloudFormation stack creating a deploy role only this
@@ -369,8 +376,10 @@ URL, your user name and a temporary password (also emailed; first sign-in sets y
 runs, observability, the Run Assistant and its own Activity, but no Build view, AWS accounts,
 library or Admin page, and is titled "🧭 AgentExpress - <ui.title>". Each run records the workflow
 it ran with, so old runs keep their own graph. A run that ends early or fails says why at the top:
-the branch rule (or the branch's default) that sent it to END, the guardrail rule that blocked it,
-or the agent that failed and how. Its **Timeline** is the whole run, up to 1,000 events. On
+the branch rule (or the branch's default) that sent it to END, the gate a reviewer denied it at
+(with their note), the guardrail rule that blocked it, or the agent that failed and how. Its
+**Timeline** is the whole run, up to 1,000 events; each gate decision there carries the reviewer's
+note. On
 **Observability**, the Run Assistant's *this run* is the run shown in Run detail.
 
 ### Activity and admins
@@ -383,7 +392,7 @@ groups and sharing are logged too. Filter by kind or any text. With the `audit` 
 **Everyone** shows all users' activity over a date range of up to 31 days (the last 7 by default).
 
 A member of a group granted `admin`, `audit` and `insights` (`admins` in the sample) gets an
-**Admin** page: every user's builds and runs read-only, everyone's activity, and **destroy** on any
+**Admin** page: every user's builds (with when each was last updated) and runs read-only, everyone's activity, and **destroy** on any
 build. Admins can't edit, deploy, chat, decide, re-run, cancel or delete for another user, or read
 their app password; each look is logged as `admin.viewed`. Admins are made only from the backend
 (the deploy refuses a self-sign-up group holding those actions):
@@ -608,9 +617,9 @@ Markdown.
 ## 11. Tests and redeploy
 
 ```bash
-cd orchestrator     && pytest      # runtime side: 1533 tests
+cd orchestrator     && pytest      # runtime side: 1535 tests
 cd orchestrator/cdk && npm test    # IaC + Terraform/CDK parity + cdk-nag: 315 tests in 7 files
-cd orchestrator/web && npm test    # UI and Builder: 415 tests in 44 files
+cd orchestrator/web && npm test    # UI and Builder: 424 tests in 44 files
 ```
 
 None needs AWS credentials, a model or a container builder. They test the config plane

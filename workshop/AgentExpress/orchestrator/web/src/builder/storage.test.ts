@@ -77,3 +77,26 @@ describe("localStore", () => {
     expect(await store.list()).toEqual([]);
   });
 });
+
+describe("when a build was created and last edited", () => {
+  const fmt = (iso: string) => iso.slice(0, 10);
+  it("says both, and who edited it last", async () => {
+    const { editedLines } = await import("./storage");
+    expect(editedLines({ created: "2026-10-09T16:09:04Z", ownerEmail: "alice@example.com",
+      updatedAt: "2026-10-10T17:46:12Z", lastEditor: "bob@example.com" }, fmt))
+      .toEqual(["Created 2026-10-09 by alice@example.com", "Last edited 2026-10-10 by bob@example.com"]);
+  });
+  it("leaves out what it does not know", async () => {
+    const { editedLines } = await import("./storage");
+    expect(editedLines({ updatedAt: "2026-10-10T17:46:12Z" }, fmt)).toEqual(["Last edited 2026-10-10"]);
+    expect(editedLines({ created: "2026-10-09T16:09:04Z" }, fmt)).toEqual(["Created 2026-10-09"]);
+    expect(editedLines({}, fmt)).toEqual([]);
+    expect(editedLines(null, fmt)).toEqual([]);
+  });
+  it("gives the Admin page the server's `updated` as `updatedAt`", async () => {
+    const { withUpdatedAt } = await import("./storage");
+    const fromServer = { id: "b1", name: "B", updated: "2026-10-10T17:46:12Z" } as unknown as { id: string; updatedAt?: string };
+    expect(withUpdatedAt(fromServer).updatedAt).toBe("2026-10-10T17:46:12Z");
+    expect(withUpdatedAt({ id: "b2", updatedAt: "2026-01-01T00:00:00Z" }).updatedAt).toBe("2026-01-01T00:00:00Z");
+  });
+});

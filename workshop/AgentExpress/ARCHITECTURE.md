@@ -302,7 +302,7 @@ draft instead of stopping. It has no deploy or publish tool.
 console's account and region. Search reads only APPROVED records (the discoverable API);
 `to_entry` maps an MCP record to an `mcp` tool (an https streamable-HTTP remote; its tools
 as `toolSchema`; never auth), an A2A card to a `runtime: "a2a"` agent and a SKILL.md to a
-skill, each carrying `registry {registryId, recordId, name, version, sync}`. A record's URLs
+skill (a published AgentExpress workflow, with no A2A card, maps to nothing and says why), each carrying `registry {registryId, recordId, name, version, sync}`. A record's URLs
 are never fetched. Items with `sync` are refreshed on `GET /api/builds/{id}/registry` and in
 the deploy after `library.resolve`; an update replaces only the registry's fields
 (`_TAKES`). `POST /api/builds/{id}/publish` (admin) writes the deployed version as an AGENT
@@ -373,6 +373,10 @@ deployer/runner.py, on a fresh copy of the framework:
 
 - Versions count successful deploys, so a failed attempt retries the same number from a
   newly frozen bundle. Destroy runs the same steps with the tool the build deployed with.
+- The runner files each outcome (`deploy.*`, `destroy.*`) under the build's owner, with the
+  email of whoever started the job. `GET /api/builds/{id}/deployments` (`builds.deployments`,
+  behind the same access check as the build) reads those back as the Deployment panel's
+  **History**, so a collaborator sees the owner's deploys and their own alike.
 - Connected accounts (`bff/accounts.py`): the user launches a stack creating
   `AgentExpressDeploy-<id>`, which trusts only this console's deploy project and BFF and
   requires a per-user External ID. The runner assumes it for the job.
@@ -449,9 +453,9 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
 
 | Suite | Runner | Count | Covers |
 |---|---|---|---|
-| `tests/` | pytest | 1533 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
+| `tests/` | pytest | 1535 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
 | `cdk/test/` | jest | 315 in 7 files | Projections, validators, synthesized template, Terraform ↔ CDK parity, cdk-nag |
-| `web/` | vitest | 415 in 44 files | Asset renderer, token refresh, gates, Builder views, validator parity |
+| `web/` | vitest | 424 in 44 files | Asset renderer, token refresh, gates, Builder views, validator parity |
 
 None need AWS credentials. Prompt quality is not unit-tested; the HITL gates and
 Evaluations cover it. Each suite's directory has a `README.md`.

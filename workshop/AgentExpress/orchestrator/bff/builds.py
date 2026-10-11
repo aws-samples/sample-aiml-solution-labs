@@ -759,6 +759,45 @@ def delete_doc(build_id: str, owner: str, corpus: str, name: str) -> None:
     _s3.delete_object(Bucket=BUILDS_BUCKET, Key=_doc_key(build_id, corpus, name))
 
 
+#: The outcomes the deploy runner logs (deployer/runner.py audit), one per finished job.
+DEPLOY_OUTCOMES = ("deploy.succeeded", "deploy.failed", "destroy.succeeded", "destroy.failed")
+
+
+def deployments(build_id: str, who, limit: int = 50, read_max: int = 5000) -> dict:
+    """A build's deploy and destroy history, newest first: what, which version, with which
+    tool, where, who started it, when and how it ended, plus the job running now.
+
+    Read from the audit log the runner already writes. Every outcome is filed under the
+    build's OWNER, with the email of whoever started the job, so someone the build is
+    shared with sees each deploy, theirs and the owner's alike. Reads at most `read_max`
+    of the owner's events, which covers years of a person's activity."""
+    from boto3.dynamodb.conditions import Attr, Key
+    item = _meta(build_id, who)
+    owner = str(item.get("owner") or "")
+    kw = {"KeyConditionExpression": Key("pk").eq(f"AUDIT#{owner}"), "ScanIndexForward": False,
+          "FilterExpression": Attr("detail.build").eq(build_id) & Attr("action").is_in(list(DEPLOY_OUTCOMES))}
+    out: list[dict] = []
+    read = 0
+    while owner and len(out) < limit and read < read_max:
+        page = _table.query(**kw)
+        read += int(page.get("ScannedCount") or 0)
+        for e in page.get("Items", []):
+            d = e.get("detail") or {}
+            action, _, result = str(e.get("action") or "").partition(".")
+            out.append({"at": e.get("ts", ""), "action": action, "result": result,
+                        "version": int(d["version"]) if str(d.get("version") or "").isdigit() else d.get("version"),
+                        "tool": d.get("tool", ""), "account": d.get("account", ""), "region": d.get("region", ""),
+                        "by": e.get("email", ""), **({"error": str(d["error"])[-300:]} if d.get("error") else {})})
+        if "LastEvaluatedKey" not in page:
+            break
+        kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    job = item.get("job") or {}
+    running = ({"action": job.get("action", ""), "version": job.get("version"), "tool": job.get("tool", ""),
+                "by": job.get("by", ""), "at": job.get("startedAt", ""), "phase": job.get("phase", "")}
+               if job.get("status") in ("QUEUED", "RUNNING") else None)
+    return {"deployments": out[:limit], "running": running}
+
+
 def job_log(build_id: str, owner: str, limit: int = 200) -> dict:
     """The tail of the latest job's CodeBuild log, so a failure is readable in place."""
     job = _meta(build_id, owner).get("job") or {}

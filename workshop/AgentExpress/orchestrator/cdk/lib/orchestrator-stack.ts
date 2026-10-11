@@ -3000,6 +3000,7 @@ export class OrchestratorStack extends cdk.Stack {
       { path: "/api/builds/{id}/deploy", methods: [HttpMethod.POST] },
       { path: "/api/builds/{id}/destroy", methods: [HttpMethod.POST] },
       { path: "/api/builds/{id}/log", methods: [HttpMethod.GET] },
+      { path: "/api/builds/{id}/deployments", methods: [HttpMethod.GET] },
       { path: "/api/builds/{id}/login", methods: [HttpMethod.GET] },
       // AgentExpress Assistant: the conversation that edits a build (bff/designer.py).
       { path: "/api/builds/{id}/design", methods: [HttpMethod.GET, HttpMethod.POST, HttpMethod.DELETE] },

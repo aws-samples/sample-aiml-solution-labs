@@ -258,3 +258,13 @@ def test_a_collaborators_app_login_is_shown_again_until_they_set_their_own(env):
     # The owner, whose own login the deploy never stored here, is told so rather than
     # handed an empty one from the collaborators' secret.
     assert call(env, "GET /api/builds/{id}/login", params={"id": B})[0] == 404
+
+
+def test_someone_a_build_is_shared_with_sees_its_deployment_history(env):
+    """The history is filed under the owner; reading it goes through the same check as the
+    build, so a collaborator gets it and a stranger does not."""
+    call(env, "PUT /api/builds/{id}", params={"id": B}, body={"project": project()})
+    assert call(env, "GET /api/builds/{id}/deployments", params={"id": B}, sub="u2")[0] == 404
+    _share(env, emails=["u2@example.com"])
+    status, got = call(env, "GET /api/builds/{id}/deployments", params={"id": B}, sub="u2")
+    assert status == 200 and got == {"deployments": [], "running": None}

@@ -9,10 +9,8 @@
 
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
-import Container from "@cloudscape-design/components/container";
 import ExpandableSection from "@cloudscape-design/components/expandable-section";
 import FormField from "@cloudscape-design/components/form-field";
-import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
 import Modal from "@cloudscape-design/components/modal";
 import SpaceBetween from "@cloudscape-design/components/space-between";
@@ -25,9 +23,10 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { Action } from "../types";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
+import Table from "@cloudscape-design/components/table";
 import {
-  accountName, accounts, appLogin, jobActive, jobLog, type Account, type AccountLaunch, type AppLogin, type BuildSummary,
-  type Tool,
+  accountName, accounts, appLogin, deploymentHistory, jobActive, jobLog, type Account, type AccountLaunch, type AppLogin,
+  type BuildSummary, type DeploymentHistory, type Tool,
 } from "./storage";
 
 /** Regions offered for a connected account. Any other can be typed. */
@@ -360,6 +359,7 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, si
   onRun?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [history, setHistory] = useState(false);
   const state = deployState(build);
   const active = jobActive(build ?? undefined);
   const deployBlocked = !build ? "Saving the build first."
@@ -368,14 +368,26 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, si
         : !can("deploy") ? "You do not have permission to deploy." : undefined;
   const destroyBlocked = !can("destroy") ? "You do not have permission to destroy." : undefined;
   const failed = build?.job?.status === "FAILED" ? build.job : null;
+  // Collapsible, so the canvas and the chat get the room. The choice is remembered, and
+  // the panel opens by itself when a deploy or destroy starts or fails, so its log shows.
+  const [expanded, setExpanded] = useState(() => readExpanded());
+  const toggle = (v: boolean) => { setExpanded(v); writeExpanded(v); };
+  const jobKey = `${build?.job?.startedAt ?? ""}|${build?.job?.status ?? ""}`;
+  useEffect(() => {
+    if (active || failed) setExpanded(true);
+  }, [jobKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Container
-      header={
-        <Header variant="h2"
-          description={build?.agentName ? <>Deploys as <b>{build.tool || build.deployed ? stackOf(build) : "its own stack"}</b>. Every AWS name in it starts with {build.agentName}.</> : undefined}
-          actions={
+    <ExpandableSection variant="container" expanded={expanded} onChange={({ detail }) => toggle(detail.expanded)}
+      headerText="Deployment"
+      headerInfo={<StatusIndicator type={state.type}>{state.text}</StatusIndicator>}
+      // Collapsed, the header is one line: the name, the status and the actions.
+      headerDescription={expanded && build?.agentName
+        ? `Deploys as ${build.tool || build.deployed ? stackOf(build) : "its own stack"}. Every AWS name in it starts with ${build.agentName}.`
+        : undefined}
+      headerActions={
             <SpaceBetween direction="horizontal" size="xs">
+              {build ? <Button iconName="status-pending" onClick={() => setHistory(true)}>History</Button> : null}
               {build?.deployed?.uiUrl && !active ? (
                 <Button href={build.deployed.uiUrl} target="_blank" iconName="external" iconAlign="right">Open app</Button>
               ) : null}
@@ -394,12 +406,9 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, si
               <Button variant="primary" iconName="upload" disabled={Boolean(deployBlocked)} disabledReason={deployBlocked}
                 onClick={() => setOpen(true)}>Deploy</Button>
             </SpaceBetween>
-          }
-        >Deployment</Header>
       }
     >
       <SpaceBetween size="s">
-        <StatusIndicator type={state.type}>{state.text}</StatusIndicator>
         {failed?.error ? <pre className="axb-code axb-log">{failed.error}</pre> : null}
         {build?.deployed?.uiUrl && !active ? (
           <Box variant="small" color="text-body-secondary">
@@ -414,8 +423,66 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, si
       </SpaceBetween>
       {build && open ? (
         <DeployModal build={build} visible onDismiss={() => setOpen(false)}
-          onDeploy={async (t, a, r) => { await onDeploy(t, a, r); setOpen(false); }} />
+          onDeploy={async (t, a, r) => { await onDeploy(t, a, r); setOpen(false); toggle(true); }} />
       ) : null}
-    </Container>
+      {build && history ? <HistoryModal build={build} onDismiss={() => setHistory(false)} /> : null}
+    </ExpandableSection>
+  );
+}
+
+/** Whether the Deployment panel is open: the person's last choice, open by default. */
+const EXPANDED_KEY = "agentexpress.deployPanel.expanded";
+export function readExpanded(): boolean {
+  try { return localStorage.getItem(EXPANDED_KEY) !== "false"; } catch { return true; }
+}
+function writeExpanded(v: boolean): void {
+  try { localStorage.setItem(EXPANDED_KEY, String(v)); } catch { /* private mode: not remembered */ }
+}
+
+/** "this console's account · us-east-1", or "account 123456789012 · eu-west-1". */
+function whereOf(account?: string, region?: string): string {
+  const acc = !account || account === "console" ? "this console's account" : `account ${account}`;
+  return [acc, region].filter(Boolean).join(" · ");
+}
+
+/** Every deploy and destroy of a build: when, what, how it ended, where and by whom. */
+export function HistoryModal({ build, onDismiss }: { build: BuildSummary; onDismiss: () => void }) {
+  const [got, setGot] = useState<DeploymentHistory | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    deploymentHistory(build.id).then(setGot).catch((e: Error) => setError(e.message));
+  }, [build.id]);
+  type Row = { at: string; what: string; result: "succeeded" | "failed" | "running"; tool?: string;
+    where: string; by?: string; error?: string };
+  const rows: Row[] = [
+    ...(got?.running ? [{ at: got.running.at ?? "", what: `${got.running.action === "destroy" ? "Destroy" : "Deploy"} version ${got.running.version ?? "?"}`,
+      result: "running" as const, tool: got.running.tool, where: "", by: got.running.by }] : []),
+    ...(got?.deployments ?? []).map((d) => ({ at: d.at, what: `${d.action === "destroy" ? "Destroy" : "Deploy"} version ${d.version ?? "?"}`,
+      result: d.result, tool: d.tool, where: whereOf(d.account, d.region), by: d.by, error: d.error })),
+  ];
+  return (
+    <Modal visible onDismiss={onDismiss} size="max" header={`Deployment history: ${build.name}`}
+      footer={<Box float="right"><Button variant="primary" onClick={onDismiss}>Close</Button></Box>}>
+      {error ? <StatusIndicator type="error">{error}</StatusIndicator> : (
+        <Table variant="embedded" wrapLines loading={!got} loadingText="Reading the history" items={rows}
+          empty={<Box textAlign="center" color="inherit">Not deployed yet.</Box>}
+          columnDefinitions={[
+            { id: "at", header: "When", cell: (r) => <span className="axb-nowrap">{r.at ? new Date(r.at).toLocaleString() : "—"}</span> },
+            { id: "what", header: "What", cell: (r) => <span className="axb-nowrap">{r.what}</span> },
+            { id: "result", header: "Result", cell: (r) => (
+              <span className="axb-nowrap">
+                <StatusIndicator type={r.result === "succeeded" ? "success" : r.result === "failed" ? "error" : "in-progress"}>
+                  {r.result === "succeeded" ? "Succeeded" : r.result === "failed" ? "Failed" : "Running"}
+                </StatusIndicator>
+              </span>) },
+            { id: "tool", header: "Tool", cell: (r) => <span className="axb-nowrap">{r.tool ? TOOL_NAMES[r.tool as Tool] ?? r.tool : "—"}</span> },
+            { id: "where", header: "Where", cell: (r) => <span className="axb-nowrap">{r.where || "—"}</span> },
+            { id: "by", header: "By", cell: (r) => <span className="axb-nowrap">{r.by || "—"}</span> },
+            // The end of a failure is where the reason is; "…" says the start was cut.
+            { id: "error", header: "Details", cell: (r) => (r.error
+              ? <Box variant="small">{r.error.length > 200 ? `…${r.error.slice(-200)}` : r.error}</Box> : "—") },
+          ]} />
+      )}
+    </Modal>
   );
 }

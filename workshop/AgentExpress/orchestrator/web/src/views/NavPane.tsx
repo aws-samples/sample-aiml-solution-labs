@@ -115,9 +115,7 @@ function Group({ group, active, onFollow }: {
   );
 }
 
-export function NavPane({ heading, homeHref, groups, links, active, onFollow }: {
-  heading: ReactNode;
-  homeHref: string;
+export function NavPane({ groups, links, active, onFollow }: {
   groups: NavGroup[];
   links: NavItem[];
   active: string;
@@ -125,9 +123,9 @@ export function NavPane({ heading, homeHref, groups, links, active, onFollow }: 
 }) {
   return (
     <nav className="axn" aria-label="Navigation">
-      <div className="axn-header">
-        <a href={homeHref} onClick={(e) => { e.preventDefault(); onFollow(homeHref); }}>{heading}</a>
-      </div>
+      {/* No app name here: the top navigation already carries it, and repeating it stacked
+          below was the same word twice over the same link. The pane starts with its
+          groups, padded clear of the AppLayout collapse button (nav.css). */}
       <ul className="axn-groups">
         {groups.map((g) => <Group key={g.id} group={g} active={active} onFollow={onFollow} />)}
       </ul>

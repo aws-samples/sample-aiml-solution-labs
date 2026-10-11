@@ -996,6 +996,31 @@ def test_the_audit_log_records_who_deployed_and_destroyed_what_where_and_when(en
     assert activity(env, sub="u2")[1] == []
 
 
+def test_a_builds_deployment_history_names_each_outcome_and_who_started_it(env, runner, monkeypatch):
+    """The Deployment panel's history: read from the outcomes the runner logs under the
+    build's owner, so someone the build is shared with sees it too, and nobody else."""
+    save(env)
+    monkeypatch.setattr(runner, "run", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "deploy_cdk", lambda *a: {"uiUrl": "https://ui", "apiUrl": "x"})
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    assert runner.main(runner_env(env), env.table, env.s3) == 0
+    call(env, "POST /api/builds/{id}/destroy", params={"id": "pclaims01"})
+    monkeypatch.setattr(runner, "deploy_cdk", lambda *a: (_ for _ in ()).throw(
+        runner.StepFailed("`npx cdk destroy` failed (exit 1): stack is busy")))
+    assert runner.main(runner_env(env, action="destroy"), env.table, env.s3) == 1
+    save(env, "pother01")                                    # another build: not in this history
+    status, got = call(env, "GET /api/builds/{id}/deployments", params={"id": "pclaims01"})
+    assert status == 200 and got["running"] is None
+    rows = got["deployments"]
+    assert [(r["action"], r["result"], r["version"]) for r in rows] == [
+        ("destroy", "failed", 1), ("deploy", "succeeded", 1)]
+    assert rows[1] == {"at": rows[1]["at"], "action": "deploy", "result": "succeeded", "version": 1, "tool": "cdk",
+                       "account": "console", "region": "us-east-1", "by": "u1@example.com"}
+    assert "stack is busy" in rows[0]["error"] and rows[0]["at"] > rows[1]["at"]
+    # Private like the build: a stranger is told it does not exist.
+    assert call(env, "GET /api/builds/{id}/deployments", params={"id": "pclaims01"}, sub="u2")[0] == 404
+
+
 def test_everyones_activity_takes_the_audit_permission(env):
     save(env)
     call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})

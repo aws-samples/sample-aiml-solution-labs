@@ -292,6 +292,7 @@ resource "aws_apigatewayv2_route" "routes" {
     "POST /api/builds/{id}/deploy",
     "POST /api/builds/{id}/destroy",
     "GET /api/builds/{id}/log",
+    "GET /api/builds/{id}/deployments",
     "GET /api/builds/{id}/login",
     # AgentExpress Assistant: the conversation that edits a build (bff/designer.py).
     "GET /api/builds/{id}/design",

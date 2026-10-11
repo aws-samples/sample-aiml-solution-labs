@@ -313,3 +313,15 @@
 /* A tab's level note on one row with its own buttons (Add from registry...): note left,
    buttons right, and the buttons wrap under the note on a narrow screen. */
 .axb-levelbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 32px; }
+
+/* Under a build's name: when it was created and last edited, one bullet each. */
+.axb-edited {
+  margin: 2px 0 6px;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--awsui-color-text-body-secondary, #5f6b7a);
+}
+
+/* A table cell that must not wrap mid-word (the deployment history's short columns). */
+.axb-nowrap { white-space: nowrap; }

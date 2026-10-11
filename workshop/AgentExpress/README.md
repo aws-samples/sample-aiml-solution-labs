@@ -183,7 +183,8 @@ own stack.
   registry included, but cannot deploy or publish. Validation status shows in the header. **Export** gives a bundle or
   `workflow.json` only; **Import a file…** loads either.
 - **Deploy.** Each build deploys with CDK or Terraform from the console's CodeBuild
-  project. A build's own app (**Open app**) has no Build view, library or admin; it runs
+  project. **History** on the Deployment panel lists every deploy and destroy, who started
+  it and how it ended. A build's own app (**Open app**) has no Build view, library or admin; it runs
   and observes that build only and is titled "🧭 AgentExpress - \<ui.title\>".
 - **Console modes.** `console_mode` / `-c consoleMode` is `app` (default: this workflow's
   app with the Builder beside it) or `builder` (a control plane with no runs of its own).
@@ -198,7 +199,8 @@ own stack.
   sync** (refreshed when the build opens and before each deploy; otherwise the Builder
   offers **Update**). Admins **Publish to registry** a deployed build (its workflow and its
   Gateway's tools) and its skills; a curator approves them in the registry, and destroying
-  the build deprecates its records. See [DEPLOYMENT.md](DEPLOYMENT.md#aws-agent-registry).
+  the build deprecates its records. A published workflow is a catalog entry, not an agent
+  another build can add: it runs as its own app. See [DEPLOYMENT.md](DEPLOYMENT.md#aws-agent-registry).
 - **Sharing a build.** Share with emails, groups or everyone. A save based on an older
   copy is refused (409) so collaborators cannot overwrite each other.
 - **Moving a build.** Import the bundle into another console, or run
@@ -289,7 +291,7 @@ orchestrator/
   needs AWS credentials with Bedrock access. There is no offline mode: a failed model or
   tool call fails the run rather than inventing data. Steps in
   [GETTING_STARTED.md](GETTING_STARTED.md).
-- **Tests:** pytest (1533), CDK jest (315 in 7 files) and web vitest (415 in 44 files).
+- **Tests:** pytest (1535), CDK jest (315 in 7 files) and web vitest (424 in 44 files).
   The pytest suite needs no AWS account or model.
 
 ## Security summary

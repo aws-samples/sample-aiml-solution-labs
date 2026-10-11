@@ -22,7 +22,7 @@ function groups(over: Partial<Record<string, () => void>> = {}): NavGroup[] {
 }
 
 const pane = (g: NavGroup[], onFollow = vi.fn(), active = "#run:abc") =>
-  render(<NavPane heading="AgentExpress" homeHref="#runs" groups={g} links={[]} active={active} onFollow={onFollow} />);
+  render(<NavPane groups={g} links={[]} active={active} onFollow={onFollow} />);
 
 describe("NavPane", () => {
   it("puts + on the Build and Runs headings, and nowhere else", () => {
@@ -67,7 +67,7 @@ describe("a long group", () => {
     const { fireEvent, render, screen } = await import("@testing-library/react");
     const { NavPane } = await import("./NavPane");
     const entries = Array.from({ length: 9 }, (_, i) => ({ href: `#build:b${i}`, text: i === 4 ? "Claims triage" : `Build ${i}` }));
-    render(<NavPane heading="H" homeHref="#" active="" onFollow={() => {}} links={[]}
+    render(<NavPane active="" onFollow={() => {}} links={[]}
       groups={[{ id: "build", text: "Build", href: "#build", entries }]} />);
     const box = screen.getByRole("searchbox", { name: "Find in Build" });
     fireEvent.change(box, { target: { value: "claims" } });
@@ -75,5 +75,16 @@ describe("a long group", () => {
     expect(screen.queryByText("Build 1")).toBeNull();
     fireEvent.change(box, { target: { value: "zzz" } });
     expect(screen.getByText(/Nothing matches/)).toBeTruthy();
+  });
+});
+
+describe("the app's name", () => {
+  it("is not repeated in the pane: the top navigation is the only place it appears", () => {
+    const { container } = pane(groups({}));
+    // It used to sit here too, the same word over the same link, stacked right below the
+    // top navigation's copy of it.
+    expect(container.querySelector(".axn-header")).toBeNull();
+    // The groups are the first thing in the pane.
+    expect(container.querySelector(".axn")!.firstElementChild!.className).toBe("axn-groups");
   });
 });

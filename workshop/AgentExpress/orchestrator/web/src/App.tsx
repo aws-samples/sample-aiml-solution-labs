@@ -726,7 +726,7 @@ export default function App() {
         }
         navigation={
           <NavPane
-            heading={heading} homeHref={home} groups={navGroups} active={activeHref}
+            groups={navGroups} active={activeHref}
             onFollow={navigate}
             links={[
               // The audit log lives with the Builder's store, so only a Builder console has it.

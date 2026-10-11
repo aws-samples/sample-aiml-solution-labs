@@ -56,9 +56,10 @@ import {
   renameProject, setUi, stageOf, toBundle, unplaced, type Entry, type Json, type Project, type Workflow,
 } from "./model";
 import { LibraryContext, LibraryPicker, NamedTab, ShareDialog, keptNote, publishEntries, sharedLabel, useShareEntries, type LibraryCtx } from "./Library";
+import { authConfig } from "../auth";
 import { DeployPanel, TOOL_NAMES } from "./DeployPanel";
 import {
-  buildStatus, deploy, destroy, jobActive, lastOpened, library, localStore, registryApi, setLastOpened, shareBuild,
+  buildStatus, deploy, destroy, editedLines, jobActive, lastOpened, library, localStore, registryApi, setLastOpened, shareBuild,
   type BuildStore, type BuildSummary, type LibraryItem, type RegistryKind, type RegistryUpdate, type Tool,
 } from "./storage";
 import { addHits, applyUpdate, RegistryPicker } from "./RegistryPicker";
@@ -570,6 +571,8 @@ function Editor({
 }) {
   const [selection, setSelection] = useState<Selection>(null);
   const [tab, setTab] = useState("design");
+  // "Created … · Last edited … by …", under the build's name.
+  const edited = editedLines(build ? { ...build, created: build.created ?? project.createdAt } : null);
   // AgentExpress Assistant needs the console (the conversation runs on its BFF).
   const [mode, setMode] = useState(server ? "ai" : "manual");
   /** What the file picker does with the file: put it into this build, or open it as a new one. */
@@ -865,7 +868,8 @@ function Editor({
             content: (
               <Tabs ariaLabel="Identity" tabs={[
                 { id: "signin", label: "Sign-in",
-                  content: <SignInSettings project={project} setProject={setProject} appUrl={build?.deployed?.uiUrl} /> },
+                  content: <SignInSettings project={project} setProject={setProject} appUrl={build?.deployed?.uiUrl}
+                    userPoolId={build?.deployed?.userPoolId} region={build?.deployed?.region || build?.region || authConfig().region} /> },
                 { id: "tools", label: "Tool access", content: (
                   <ToolAccess project={project} server={server} savedLogins={named("identity")} agentName={build?.agentName}
                     onEdit={(key) => { setSelection({ kind: "tool", id: key }); setTab("design"); }} />
@@ -907,8 +911,14 @@ function Editor({
     <SpaceBetween size="l">
       <Header
         variant="h1"
-        description={<>Drag agents onto the canvas, give them tools, gate the stages a human must sign off.
-          Every setting comes from the framework&apos;s own key spec.</>}
+        description={<>
+          {edited.length ? (
+            <ul className="axb-edited" data-testid="build-edited">
+              {edited.map((line) => <li key={line}>{line}</li>)}
+            </ul>
+          ) : null}
+          Drag agents onto the canvas, give them tools, and gate the stages a person signs off.
+          Then deploy anywhere in one click.</>}
         info={<Button variant="inline-link" ariaLabel="Show the problems" onClick={() => setShowProblems(true)}>
           <StatusIndicator type={errors ? "error" : warnings ? "warning" : "success"}>
             {errors ? `${errors} error${errors > 1 ? "s" : ""}` : "Valid"}{warnings ? ` · ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}

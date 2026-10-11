@@ -60,6 +60,8 @@ export interface Deployed {
   region?: string;
   /** The owner's login on the build's own console (invited on deploy). */
   appUser?: string;
+  /** The Cognito user pool of the build's own app (Built-in sign-in). */
+  userPoolId?: string;
   /** The framework release that deployed it (orchestrator/VERSION). */
   frameworkVersion?: string;
   /** Tool -> the redirect (callback) URL to register at its provider ("Each person's own account"). */
@@ -89,6 +91,8 @@ export interface BuildSummary {
   /** Saves so far: a save based on an older one is refused (someone else saved first). */
   rev?: number;
   lastEditor?: string;
+  /** When the build was created (ISO 8601). */
+  created?: string;
 }
 
 /** Who besides its owner may see and change a build or a library item. */
@@ -163,7 +167,7 @@ export function setLastOpened(id: string, storage: Storage = localStorage): void
   storage.setItem(LAST, id);
 }
 
-const summaryOf = (p: Project): BuildSummary => ({ id: p.id, name: p.name, updatedAt: p.updatedAt });
+const summaryOf = (p: Project): BuildSummary => ({ id: p.id, name: p.name, updatedAt: p.updatedAt, created: p.createdAt });
 
 /** `storage` is resolved on every call, not once: the global can be replaced (tests do). */
 export function localStore(storage?: Storage): BuildStore {
@@ -188,6 +192,26 @@ interface ServerBuild extends Omit<BuildSummary, "updatedAt"> {
 }
 
 const fromServer = (b: ServerBuild): BuildSummary => ({ ...b, updatedAt: b.updated });
+
+/** A build list straight from the server (as the Admin page reads it), with its `updated`
+ *  as the page's `updatedAt`. Without this the Admin page's Updated column read a field the
+ *  server never sends, and showed "—" for every build. */
+export function withUpdatedAt<T extends { updatedAt?: string }>(b: T): T {
+  const updated = (b as { updated?: string }).updated;
+  return !b.updatedAt && updated ? { ...b, updatedAt: updated } : b;
+}
+
+/** ["Created 9 Oct 2026, 11:09 by alice@example.com", "Last edited 10 Oct 2026, 12:46 by
+ *  bob@example.com"]: the lines under a build's name, one per bullet. Empty when it has
+ *  neither time yet. */
+export function editedLines(b: Partial<Pick<BuildSummary, "created" | "updatedAt" | "lastEditor" | "ownerEmail">> | null | undefined,
+  fmt: (iso: string) => string = (iso) => new Date(iso).toLocaleString()): string[] {
+  if (!b) return [];
+  const parts: string[] = [];
+  if (b.created) parts.push(`Created ${fmt(b.created)}${b.ownerEmail ? ` by ${b.ownerEmail}` : ""}`);
+  if (b.updatedAt) parts.push(`Last edited ${fmt(b.updatedAt)}${b.lastEditor ? ` by ${b.lastEditor}` : ""}`);
+  return parts;
+}
 const enc = encodeURIComponent;
 
 export const serverStore: BuildStore = {
@@ -230,6 +254,27 @@ export async function destroy(id: string): Promise<Job> {
   changed();
   return job;
 }
+
+/** One finished deploy or destroy of a build (bff/builds.py deployments). */
+export interface DeploymentEvent {
+  at: string;
+  action: "deploy" | "destroy";
+  result: "succeeded" | "failed";
+  version?: number;
+  tool?: string;
+  /** "console" for this console's account, else the account id. */
+  account?: string;
+  region?: string;
+  by?: string;
+  error?: string;
+}
+export interface DeploymentHistory {
+  deployments: DeploymentEvent[];
+  running: { action: string; version?: number; tool?: string; by?: string; at?: string; phase?: string } | null;
+}
+/** Who deployed or destroyed a build, when, and how it ended; newest first. */
+export const deploymentHistory = (id: string) =>
+  api.get<DeploymentHistory>(`/api/builds/${encodeURIComponent(id)}/deployments`);
 
 export async function jobLog(id: string): Promise<{ lines: string[]; logsUrl?: string }> {
   return api.get(`/api/builds/${enc(id)}/log`);

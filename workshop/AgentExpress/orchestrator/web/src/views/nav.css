@@ -26,15 +26,22 @@
 }
 .axn a:hover { color: #002b66; text-decoration: underline; }
 
-.axn-header { flex: none; padding: 12px 28px 16px; border-bottom: 1px solid #c6c6cd; margin-bottom: 12px; }
-.axn-header a { font-size: 18px; font-weight: 700; line-height: 24px; }
 
-.axn-groups { flex: 1 1 auto; min-height: 96px; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 0 8px; }
+/* As tall as its groups and no taller (it used to grow to fill the pane, leaving a gap
+   above the links below). When the pane is short, the links below give way first (their
+   shrink weight is far larger), so the lists keep their 8 rows whole where there is room. */
+/* The floor is ONE row, not three: a collapsed group is a 32px title row, and a taller
+   floor held the box open under it, leaving dead space above the divider. The links below
+   still give way first (their shrink weight is far larger), so this floor is only ever
+   reached on a very short window, where it keeps the group's own title reachable. */
+.axn-groups { flex: 0 1 auto; min-height: 32px; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 0 8px; }
 /* Each group's own list scrolls too, so one long list (Build) cannot push the next
    group (Runs) off the pane. */
-.axn-group > .axn-entries { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; }
-.axn-links, .axn > .axn-divider { flex: none; }
-.axn-links { max-height: 45vh; overflow-y: auto; }
+/* 10 rows (each is 32px tall, below), then it scrolls: the same on every screen size. */
+.axn-group > .axn-entries { max-height: calc(10 * 32px); overflow-y: auto; overscroll-behavior: contain; }
+.axn > .axn-divider { flex: none; }
+/* The links (AWS accounts, the library, Activity) take the rest of the pane and scroll. */
+.axn-links { flex: 0 1000 auto; min-height: 64px; overflow-y: auto; }
 .axn-group + .axn-group { margin-top: 4px; }
 
 .axn-head, .axn-entry {
@@ -43,6 +50,12 @@
   gap: 6px;
   min-height: 32px;
 }
+/* A gutter on the GROUP TITLE rows only, for AppLayout's own "Close the navigation"
+   button, which it draws over the pane's top-right. Without it that button lands on the
+   first group's + ; padding the whole pane instead left the button alone on a blank row.
+   On every group head, not just the first, so each + stays aligned with the others — and
+   the entry rows below keep their full width, so build names truncate no sooner. */
+.axn-head { padding-right: 34px; }
 .axn-caret {
   flex: none;
   display: grid;

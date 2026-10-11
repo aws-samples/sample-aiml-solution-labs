@@ -9,6 +9,7 @@ import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import FormField from "@cloudscape-design/components/form-field";
 import Header from "@cloudscape-design/components/header";
 import Input from "@cloudscape-design/components/input";
+import KeyValuePairs from "@cloudscape-design/components/key-value-pairs";
 import Link from "@cloudscape-design/components/link";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Tiles from "@cloudscape-design/components/tiles";
@@ -98,10 +99,56 @@ export function chooseProvider(project: Project, provider: Provider): Project {
   return withSignIn(project, { provider, ...keep }, claim);
 }
 
-export function SignInSettings({ project, setProject, appUrl }: {
+/** The groups the deploy creates in the app's Cognito user pool: every group named in
+ *  authorization.actions (cdk authzGroups, terraform local.authz_groups). */
+export function poolGroups(project: Project): string[] {
+  const auth = (project.workflow.authorization ?? {}) as Record<string, unknown>;
+  const actions = auth.actions && typeof auth.actions === "object" ? auth.actions as Record<string, unknown> : {};
+  return [...new Set(Object.values(actions).flatMap((g) => (Array.isArray(g) ? g.map(String) : [])))].sort();
+}
+
+/** Built in: what Amazon Cognito is here, what the deploy creates, and who gets in. */
+function CognitoDetails({ project, userPoolId, region }: { project: Project; userPoolId?: string; region?: string }) {
+  const groups = poolGroups(project);
+  const consoleUrl = userPoolId && region
+    ? `https://${region}.console.aws.amazon.com/cognito/v2/idp/user-pools/${encodeURIComponent(userPoolId)}/users?region=${region}`
+    : undefined;
+  return (
+    <Container header={<Header variant="h3" description="Nothing to set up: the deploy creates it, and there are no values to copy.">
+      Built-in sign-in: Amazon Cognito</Header>}>
+      <KeyValuePairs columns={2} items={[
+        { label: "What it is",
+          value: "Amazon Cognito, the AWS sign-in service. The deploy creates a user pool for this app in the AWS account and region it deploys to, so no outside provider is involved." },
+        { label: "How people sign in",
+          value: "With their email address and a password of at least 12 characters, with upper and lower case letters, a digit and a symbol. An authenticator app can be added as a second factor." },
+        { label: "Who gets in",
+          value: "You, when it deploys: the Deployment panel shows your temporary password, and Cognito emails it too. People you share the build with get their own login there. Nobody can sign themselves up, and the first sign-in sets a new password." },
+        { label: "Roles",
+          value: groups.length
+            ? `The pool has one group per role in Settings → authorization: ${groups.join(", ")}. Everyone invited joins all of them; remove someone from a group in the Cognito console to take that role away.`
+            : "No roles: everyone who signs in may do everything the app allows." },
+        { label: "User pool",
+          value: userPoolId ? (
+            <SpaceBetween size="xxs">
+              <CopyToClipboard variant="inline" textToCopy={userPoolId} copyButtonAriaLabel="Copy the user pool ID"
+                copySuccessText="User pool ID copied" copyErrorText="Could not copy" />
+              {consoleUrl ? <Link href={consoleUrl} external fontSize="body-s">Open it in the Amazon Cognito console</Link> : null}
+            </SpaceBetween>
+          ) : "Created on the first deploy." },
+        { label: "When you destroy the build",
+          value: "The user pool goes with it, and every login in it." },
+      ]} />
+    </Container>
+  );
+}
+
+export function SignInSettings({ project, setProject, appUrl, userPoolId, region }: {
   project: Project; setProject: (p: Project) => void;
   /** The deployed app's address, once there is one. */
   appUrl?: string;
+  /** The deployed app's Cognito user pool, and the region it is in (Built in only). */
+  userPoolId?: string;
+  region?: string;
 }) {
   const provider = providerOf(project);
   const s = signInOf(project);
@@ -119,7 +166,7 @@ export function SignInSettings({ project, setProject, appUrl }: {
         items={(Object.keys(PROVIDER_NAME) as Provider[]).map((p) => ({ value: p, label: PROVIDER_NAME[p], description: ABOUT[p] }))} />
 
       {provider === "cognito" ? (
-        <Box color="text-body-secondary">The app gets its own user list. You get a login when it deploys, and can invite others from the app.</Box>
+        <CognitoDetails project={project} userPoolId={userPoolId} region={region} />
       ) : (
         <Container header={<Header variant="h3">Connect {PROVIDER_NAME[provider]}</Header>}>
           <ol className="axb-steps">

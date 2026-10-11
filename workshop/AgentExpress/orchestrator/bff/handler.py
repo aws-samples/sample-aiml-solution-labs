@@ -47,6 +47,7 @@ Builder builds (bff/builds.py; only when the builder plane is deployed):
   POST   /api/builds/{id}/deploy     {tool}      -> job   tool: cdk | terraform
   POST   /api/builds/{id}/destroy                -> job
   GET    /api/builds/{id}/log                    -> tail of the latest job's log
+  GET    /api/builds/{id}/deployments            -> who deployed or destroyed it, when, how it ended
 
 A run can target a deployed build: POST /api/sessions takes {"build": id}, and
 GET /api/sessions and /api/workflow take ?build=id. Every per-run route then finds the
@@ -975,6 +976,10 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
         return _resp(200, login)
     if route_key == "GET /api/builds/{id}/log":
         return _resp(200, builds.job_log(build_id, reader))
+    # Who deployed or destroyed this build, when, and how it ended (bff/builds.py).
+    if route_key == "GET /api/builds/{id}/deployments":
+        viewed("deployments")
+        return _resp(200, builds.deployments(build_id, reader))
     if route_key == "POST /api/builds/{id}/deploy":
         denied = _forbidden("deploy", event)
         if denied:

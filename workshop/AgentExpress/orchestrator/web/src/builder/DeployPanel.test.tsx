@@ -51,7 +51,7 @@ describe("DeployPanel", () => {
     expect(stackOf({ ...base, tool: "terraform" })).toBe("the Terraform deployment ax_1a2b3c4d");
     const { unmount } = render(<DeployPanel build={{ ...base, tool: "terraform" }} errors={0} can={all}
       onDeploy={vi.fn()} onDestroy={vi.fn()} onRun={vi.fn()} />);
-    expect(screen.getAllByText("the Terraform deployment ax_1a2b3c4d").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Deploys as the Terraform deployment ax_1a2b3c4d\./).length).toBeGreaterThan(0);
     unmount();
   });
 
@@ -150,5 +150,68 @@ describe("DeployPanel", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show the temporary password" })); });
     expect(screen.getAllByText("Tmp9Pass8word7X").length).toBeGreaterThan(0);
     expect(screen.getByText(/first sign-in asks you to set your own/)).toBeTruthy();
+  });
+});
+
+describe("the Deployment panel collapses", () => {
+  beforeEach(() => {
+    const m = new Map<string, string>();
+    vi.stubGlobal("localStorage", { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => { m.set(k, String(v)); },
+      removeItem: (k: string) => { m.delete(k); }, clear: () => m.clear(), key: () => null, length: 0 });
+  });
+  const deployed = { ...base, versions: 1, tool: "cdk" as const,
+    deployed: { version: 1, tool: "cdk" as const, agentName: "ax_1a2b3c4d", uiUrl: "https://app.example.com" } };
+  const panel = (b: BuildSummary) => render(<DeployPanel build={b} errors={0} can={all}
+    onDeploy={vi.fn()} onDestroy={vi.fn()} onRun={vi.fn()} />);
+
+  it("keeps its status and Deploy in view when collapsed, and remembers the choice", () => {
+    const { container, unmount } = panel(deployed);
+    const section = createWrapper(container).findExpandableSection()!;
+    expect(section.findExpandedContent()).toBeTruthy();
+    act(() => { section.findExpandButton().click(); });
+    expect(section.findExpandedContent()).toBeNull();
+    expect(screen.getByText("Version 1 deployed with AWS CDK")).toBeTruthy();       // the status, in the header
+    expect(screen.getByRole("button", { name: "Deploy" })).toBeTruthy();
+    expect(localStorage.getItem("agentexpress.deployPanel.expanded")).toBe("false");
+    unmount();
+    const again = panel(deployed);
+    expect(createWrapper(again.container).findExpandableSection()!.findExpandedContent()).toBeNull();
+    again.unmount();
+  });
+
+  it("opens by itself when a deploy is running, so its log shows", () => {
+    localStorage.setItem("agentexpress.deployPanel.expanded", "false");
+    const running = { ...deployed, job: { status: "RUNNING", action: "deploy", tool: "cdk", version: 2, startedAt: "2026-10-11T00:00:00Z" } } as BuildSummary;
+    const { container, unmount } = panel(running);
+    expect(createWrapper(container).findExpandableSection()!.findExpandedContent()).toBeTruthy();
+    unmount();
+  });
+});
+
+describe("the deployment history", () => {
+  it("lists each deploy and destroy with how it ended, where and by whom, the running one first", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      running: { action: "deploy", version: 3, tool: "cdk", by: "bob@example.com", at: "2026-10-11T10:00:00Z" },
+      deployments: [
+        { at: "2026-10-10T10:00:00Z", action: "destroy", result: "failed", version: 2, tool: "terraform",
+          account: "123456789012", region: "eu-west-1", by: "alice@example.com", error: "stack is busy" },
+        { at: "2026-10-09T10:00:00Z", action: "deploy", result: "succeeded", version: 2, tool: "cdk",
+          account: "console", region: "us-east-1", by: "alice@example.com" },
+      ] }), { status: 200 })));
+    const { HistoryModal } = await import("./DeployPanel");
+    render(<HistoryModal build={base} onDismiss={vi.fn()} />);
+    expect(await screen.findByText("Deploy version 3")).toBeTruthy();
+    const rows = createWrapper(document.body).findTable()!.findRows();
+    expect(rows.map((r) => r.getElement().textContent)).toEqual([
+      expect.stringMatching(/Deploy version 3.*Running.*AWS CDK.*bob@example\.com/),
+      expect.stringMatching(/Destroy version 2.*Failed.*Terraform.*account 123456789012 · eu-west-1.*alice@example\.com.*stack is busy/),
+      expect.stringMatching(/Deploy version 2.*Succeeded.*AWS CDK.*this console's account · us-east-1.*alice@example\.com/),
+    ]);
+  });
+  it("says so when a build has never been deployed", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ running: null, deployments: [] }), { status: 200 })));
+    const { HistoryModal } = await import("./DeployPanel");
+    render(<HistoryModal build={base} onDismiss={vi.fn()} />);
+    expect(await screen.findByText("Not deployed yet.")).toBeTruthy();
   });
 });
