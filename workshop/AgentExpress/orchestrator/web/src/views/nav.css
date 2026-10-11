@@ -39,7 +39,10 @@
    group (Runs) off the pane. */
 /* 10 rows (each is 32px tall, below), then it scrolls: the same on every screen size. */
 .axn-group > .axn-entries { max-height: calc(10 * 32px); overflow-y: auto; overscroll-behavior: contain; }
-.axn > .axn-divider { flex: none; }
+/* `margin-top: auto` pushes this divider — and so everything after it: AWS accounts, the
+   three libraries, Activity, Admin and About — to the bottom of the pane. On a window too
+   short for all of it the auto margin resolves to 0 and the links scroll as before. */
+.axn > .axn-divider { flex: none; margin-top: auto; }
 /* The links (AWS accounts, the library, Activity) take the rest of the pane and scroll. */
 .axn-links { flex: 0 1000 auto; min-height: 64px; overflow-y: auto; }
 .axn-group + .axn-group { margin-top: 4px; }
