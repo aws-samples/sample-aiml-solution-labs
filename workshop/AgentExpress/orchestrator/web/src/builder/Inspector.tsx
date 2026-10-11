@@ -27,7 +27,7 @@ import { toolsOf } from "../lib/tools";
 import type { Selection } from "./Canvas";
 import { CodeTool } from "./CodeTool";
 import { EntryForm } from "./EntryForm";
-import { AGENT_ID_RE, TOOL_KEY_RE, vocab } from "./meta";
+import { AGENT_ID_RE, TOOL_KEY_RE, imageModelOf, vocab } from "./meta";
 import {
   setTools, defaultPrompt, insertStage, joinStage, moveMember, moveStage, removeAgent,
   removeTool, renameAgent, renameTool, setStageKind, stageKind, stageOf, stepAgents, stepName,
@@ -298,6 +298,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
             render: (value, set) => {
               const needs = needsOf(agent);
               const shown = models.models.filter((m) => fits(m, needs));
+              const image = imageModelOf(agent as Record<string, unknown>);
               const asks = [needs.vision ? "read images" : "", needs.tools ? "call tools itself" : ""].filter(Boolean);
               return (
                 <SpaceBetween size="xxs">
@@ -317,6 +318,13 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
                     <Box variant="small" color="text-body-secondary">
                       {`Showing ${shown.length} of ${models.models.length} models: the ones that can ${asks.join(" and ")}, as this agent does.`}
                     </Box>
+                  ) : null}
+                  {image ? (
+                    <Alert type="info" data-testid="image-model-note">
+                      This is an image agent, so it uses two models. The one above writes the
+                      image brief. The image itself is drawn by <b>{image.id}</b>
+                      {image.isDefault ? " (the default)" : ""}: change it under <b>Advanced → Images</b>, in <code>image.model</code>.
+                    </Alert>
                   ) : null}
                 </SpaceBetween>
               );

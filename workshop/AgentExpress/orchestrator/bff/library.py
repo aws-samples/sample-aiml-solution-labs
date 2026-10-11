@@ -318,7 +318,9 @@ def refs_for(project: dict, who, build_owner: str = "") -> dict:
     for iid in ids_in(project):
         item = _get(iid)
         if item and (sharing.can_access(item, who) or (build_owner and sharing.can_access(item, _Owner(build_owner)))):
-            out[iid] = _public(item)
+            # With `mine` for the CALLER: the Tools tab labels an item "yours" or by its
+            # owner's email, and without it someone a build is shared with saw "yours".
+            out[iid] = _public(item, who)
     return out
 
 

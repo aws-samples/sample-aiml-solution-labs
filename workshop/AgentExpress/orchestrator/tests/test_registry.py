@@ -103,6 +103,19 @@ def test_a_record_missing_what_it_needs_says_why(rec, kind, why):
     assert got["kind"] == kind and why in got["why"] and "entry" not in got
 
 
+def test_a_published_workflow_says_it_is_its_own_app_not_a_broken_agent_card():
+    """What `build_records` publishes for a deployed build is an AGENT record with a custom
+    descriptor and no A2A card. The picker used to call that "no A2A agent card with an
+    https URL", which read as a defect in the record rather than what it is."""
+    item = {"id": "b1", "agentName": "ax_1", "name": "Trip Planner",
+            "deployed": {"version": 2, "uiUrl": "https://app.example.com", "apiUrl": "https://api.example.com"}}
+    rec = {"recordId": "w1", "recordVersion": "2.0.0", **registry.build_records(item, {"agents": {}})["workflow"]}
+    got = registry.to_entry(rec, RID)
+    assert got["kind"] == "agent" and "entry" not in got
+    assert "an AgentExpress workflow, not an A2A agent" in got["why"] and "https://app.example.com" in got["why"]
+    assert "no A2A agent card" not in got["why"]
+
+
 def test_an_agent_card_and_a_skill_map_to_a_remote_agent_and_a_skill():
     a = registry.to_entry(agent(), RID)
     assert a["entry"] == {"name": "Orders agent", "runtime": "a2a", "agentCard": "https://agents.example.com/a2a",

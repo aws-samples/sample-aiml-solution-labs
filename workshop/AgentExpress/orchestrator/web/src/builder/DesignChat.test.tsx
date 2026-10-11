@@ -298,3 +298,30 @@ describe("the AgentExpress Assistant tab", () => {
     expect(screen.getByText("+ New agent")).toBeTruthy();
   });
 });
+
+describe("which element follows the reply", () => {
+  /** A box of `content` px shown in `visible` px; jsdom has no layout, so both are given. */
+  const box = (overflowY: string, content: number, visible: number, parent?: HTMLElement) => {
+    const e = document.createElement("div");
+    e.style.overflowY = overflowY;
+    Object.defineProperty(e, "scrollHeight", { value: content });
+    Object.defineProperty(e, "clientHeight", { value: visible });
+    parent?.appendChild(e);
+    return e;
+  };
+  it("is the Container's content when that is what scrolls, not the log inside it", async () => {
+    const { scrollParent } = await import("./DesignChat");
+    const cell = box("visible", 600, 600);
+    const content = box("auto", 949, 262, cell);
+    const log = box("auto", 937, 937, box("visible", 937, 925, content));
+    expect(scrollParent(log, cell)).toBe(content);
+  });
+  it("is the log when the log scrolls, and the log when nothing does", async () => {
+    const { scrollParent } = await import("./DesignChat");
+    const cell = box("visible", 600, 600);
+    const log = box("auto", 900, 400, box("auto", 600, 600, cell));
+    expect(scrollParent(log, cell)).toBe(log);
+    const still = box("auto", 100, 100, box("visible", 100, 100, cell));
+    expect(scrollParent(still, cell)).toBe(still);
+  });
+});

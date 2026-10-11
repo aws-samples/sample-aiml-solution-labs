@@ -36,4 +36,13 @@ describe("why a run ended where it did", () => {
       .toBe("Writer failed: ModelUnavailable: throttled");
     expect(endReason(run("failed"), wf)?.text).toMatch(/Timeline tab/);
   });
+  it("gives a denied run's gate and the reviewer's note", () => {
+    expect(endReason(run("denied", "Intake Agent complete (v1)",
+      'Human decision (intake): deny \u2014 note: "Personal trip, not covered by the policy."',
+      "intake denied; halting workflow", "Workflow finished (denied)"), wf))
+      .toEqual({ type: "info", text: 'Denied at the Intake Agent review gate by a reviewer: "Personal trip, not covered by the policy."' });
+    expect(endReason(run("denied", "Research review: deny"), wf)?.text)
+      .toBe("Denied at the Research review gate by a reviewer. No note was given.");
+    expect(endReason(run("denied"), wf)?.text).toMatch(/Timeline tab/);
+  });
 });

@@ -277,6 +277,18 @@ def _decision_of(resumed) -> tuple[str, str]:
     return (str(resumed) if resumed else "approve"), ""
 
 
+#: How much of a reviewer's note the Timeline line carries (the audit record keeps 200).
+NOTE_MAX = 300
+
+
+def _with_note(log: str, note: str) -> str:
+    """A gate decision's Timeline line, with the reviewer's note when there is one: the
+    note is the reason for a deny or a revise, and the Timeline is where a run's story is
+    read. Without it the line said only "deny"."""
+    note = " ".join(str(note or "").split())
+    return f'{log} — note: "{note[:NOTE_MAX]}"' if note else log
+
+
 async def _wait_or_auto(sid: str, state: dict, node: str, label: str, question: str, spec: dict,
                         outputs: list[str], payload: dict, log: str):
     """A decision for this gate: a person's (the run waits here), or the gate's own when
@@ -315,7 +327,7 @@ def make_gate_node(agent_id: str, agent_name: str, hitl=True):
 
         who = "Automatic" if isinstance(resumed, dict) and resumed.get("auto") else "Human"
         await emit(sid, {"type": "hitl_resolved", "node": agent_id,
-                         "log": f"{who} decision ({agent_id}): {decision}"})
+                         "log": _with_note(f"{who} decision ({agent_id}): {decision}", comment)})
 
         if decision == "approve":
             await emit(sid, {"type": "node_status", "node": agent_id, "status": "done",
@@ -360,7 +372,7 @@ def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str, hitl=T
         decision, comment = _decision_of(resumed)
 
         await emit(sid, {"type": "hitl_resolved", "node": gate_id,
-                         "log": f"{label} review: {decision}"})
+                         "log": _with_note(f"{label} review: {decision}", comment)})
 
         if decision == "revise":
             # Loop back to the first agent; the whole sequence re-runs. Feedback is
@@ -441,8 +453,12 @@ def make_group_gate_node(group_id: str, group_ids: list[str], label: str, hitl=T
                 feedback[a] = d.get("comment", "") if dec == "revise" else ""
 
         summary = "deny" if deny else (f"re-run {','.join(rerun)}" if rerun else "approved")
+        # The note: one for the whole stage, or each agent's own ("agent: note").
+        whole = str(resumed.get("comment") or "") if isinstance(resumed, dict) else ""
+        notes = whole or "; ".join(f"{a}: {(per.get(a) or {}).get('comment')}" for a in group_ids
+                                   if str((per.get(a) or {}).get("comment") or "").strip())
         await emit(sid, {"type": "hitl_resolved", "node": group_id,
-                         "log": f"{label} review: {summary}"})
+                         "log": _with_note(f"{label} review: {summary}", notes)})
 
         if deny:
             for a in group_ids:

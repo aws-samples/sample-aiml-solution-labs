@@ -33,6 +33,18 @@ export const POLL_MS = 700;
  *  the reader is looking back, so the log stays put and offers "Jump to latest". */
 const STICK_PX = 80;
 
+/** The element that actually scrolls the conversation. Meant to be the log itself, but
+ *  the Container's fitHeight content is the one that scrolls when the log's height does
+ *  not resolve, so following "the log" did nothing and a reply grew out of sight. The
+ *  nearest ancestor (up to the chat's cell) that scrolls wins, else the log. */
+export function scrollParent(log: HTMLElement | null, stop: HTMLElement | null): HTMLElement | null {
+  for (let e: HTMLElement | null = log; e && e !== stop; e = e.parentElement) {
+    const oy = getComputedStyle(e).overflowY;
+    if ((oy === "auto" || oy === "scroll") && e.scrollHeight > e.clientHeight + 1) return e;
+  }
+  return log;
+}
+
 const PHASE: Record<string, string> = {
   thinking: "Thinking…",
   writing: "Writing…",
@@ -174,6 +186,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
   };
   const seen = useRef(0);
   const logRef = useRef<HTMLDivElement>(null);
+  const cellRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const stick = useRef(true);
   const id = project.id;
@@ -217,13 +230,15 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
   }, [thinking, id, take]);
 
   const scrollToEnd = () => {
-    const el = logRef.current;
+    const el = scrollParent(logRef.current, cellRef.current);
     if (el) el.scrollTop = el.scrollHeight;
     stick.current = true;
     setAtBottom(true);
   };
+  // Captured on the chat's cell: the element that scrolls may be the log's ancestor, and
+  // a scroll event does not bubble.
   const onScroll = () => {
-    const el = logRef.current;
+    const el = scrollParent(logRef.current, cellRef.current);
     if (!el) return;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_PX;
     stick.current = near;
@@ -246,6 +261,8 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
       take(await designer.send(id, m, ready));
       setFiles([]);
       scrollToEnd();
+      // And the page: the chat's foot, where the reply grows, can be below the window.
+      (cellRef.current?.firstElementChild as HTMLElement | null)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
     } catch (e) {
       setText(m);                               // give the message back to edit or resend
       setError((e as Error).message);
@@ -276,7 +293,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
     <div className="axd-layout">
       {/* The chat is as tall as the column beside it (the workflow, and whatever shows
           under it): it fills its cell and scrolls, so it never sets the row's height. */}
-      <div className="axd-chat-cell"><div className="axd-chat-fill">
+      <div className="axd-chat-cell" ref={cellRef} onScrollCapture={onScroll}><div className="axd-chat-fill">
       <Container fitHeight
         header={
           <Header variant="h2"
@@ -322,7 +339,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
         }
       >
         <div className="axd-chat">
-          <div className="axd-log" ref={logRef} onScroll={onScroll} aria-live="polite" aria-busy={thinking}>
+          <div className="axd-log" ref={logRef} aria-live="polite" aria-busy={thinking}>
             {!doc.turns.length ? (
               <div className="axd-empty">
                 <SpaceBetween size="m">

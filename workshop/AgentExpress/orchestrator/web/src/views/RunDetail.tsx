@@ -60,7 +60,8 @@ interface EventRow {
 const EVENT_PAGE = 20;
 
 /** Why a finished run stopped where it did, read from its timeline: a branch rule that
- *  sent it to END, a guardrail block, or an agent that failed. Null for a run that ran
+ *  sent it to END, a guardrail block, an agent that failed, or a deny at a review gate
+ *  (with the reviewer's note). Null for a run that ran
  *  to its last step (or has not finished). Before this, the reason was only on the
  *  Timeline tab, so a run that ended early looked like one that produced nothing. */
 export function endReason(snap: SessionSnapshot, workflow?: Workflow): { type: "info" | "error"; text: string } | null {
@@ -84,6 +85,21 @@ export function endReason(snap: SessionSnapshot, workflow?: Workflow): { type: "
   if (overall === "failed") {
     const why = logs.find((l) => / blocked by guardrail: | failed: /.test(l.msg));
     return { type: "error", text: why ? why.msg : "The run failed. The Timeline tab has each step's events." };
+  }
+  if (overall === "denied") {
+    // nodes.py gate lines: 'Human decision (<agent>): deny — note: "<note>"' for one agent's
+    // gate, '<gate name> review: deny — note: "<note>"' for a sequence or parallel stage.
+    const agents = (workflow ?? snap.workflow)?.agents ?? {};
+    for (const l of logs) {
+      const m = /^(Human|Automatic) decision \((.+?)\): deny(?: \u2014 note: "(.*)")?$/.exec(l.msg)
+        ?? /^()(.+?) review: deny(?: \u2014 note: "(.*)")?$/.exec(l.msg);
+      if (!m) continue;
+      const where = agents[m[2]]?.name ?? m[2];
+      const how = m[1] === "Automatic" ? "automatically, by the gate's own rule" : "by a reviewer";
+      return { type: "info", text: `Denied at the ${where} review gate ${how}`
+        + (m[3] ? `: "${m[3]}"` : ". No note was given.") };
+    }
+    return { type: "info", text: "Denied at a review gate. The Timeline tab has the decision." };
   }
   return null;
 }

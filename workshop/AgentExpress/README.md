@@ -289,7 +289,7 @@ orchestrator/
   needs AWS credentials with Bedrock access. There is no offline mode: a failed model or
   tool call fails the run rather than inventing data. Steps in
   [GETTING_STARTED.md](GETTING_STARTED.md).
-- **Tests:** pytest (1526), CDK jest (315 in 7 files) and web vitest (409 in 43 files).
+- **Tests:** pytest (1533), CDK jest (315 in 7 files) and web vitest (415 in 44 files).
   The pytest suite needs no AWS account or model.
 
 ## Security summary

@@ -87,7 +87,8 @@
 .axn-links li { padding: 4px 0; }
 .axn-ext { margin-left: 4px; }
 /* A group heading among the links (the library's Agent library, Gateway and access library, Quality library). */
-.axn-links li.axn-heading { padding: 10px 0 2px; font-size: 12px; font-weight: 700; color: #656871; }
+/* 15px: a touch larger than the 14px entries under it, so it reads as their heading. */
+.axn-links li.axn-heading { padding: 10px 0 2px; font-size: 15px; font-weight: 700; color: #414d5c; }
 .axn-links li.axn-divider-li + li.axn-heading { padding-top: 0; }
 .axn-links li.axn-indent { padding-left: 14px; }
 

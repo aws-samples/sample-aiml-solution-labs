@@ -180,3 +180,14 @@ export function formGroups(name: BlockName, variant: string): { group: string; d
 export const AGENT_ID_RE = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 export const TOOL_KEY_RE = /^[A-Za-z][A-Za-z0-9]*$/;
 export const BRANCH_OPS = ["equals", "notEquals", "in", "contains", "exists", "gt", "gte", "lt", "lte"];
+
+/** The image model an image agent (`output: "image"`) renders with: its `image.model`,
+ *  else the framework default (the first of `imageModels`). Null for any other agent.
+ *  An image agent has TWO models — `model` writes the image brief, this one draws it —
+ *  and the page showed only the first, so the image model looked unset. */
+export function imageModelOf(agent: Record<string, unknown> | undefined): { id: string; isDefault: boolean } | null {
+  if (!agent || agent.output !== "image") return null;
+  const img = agent.image && typeof agent.image === "object" ? agent.image as Record<string, unknown> : {};
+  const set = typeof img.model === "string" && img.model.trim() ? img.model.trim() : "";
+  return { id: set || (vocab("imageModels")[0] ?? ""), isDefault: !set };
+}

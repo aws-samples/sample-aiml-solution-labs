@@ -449,9 +449,9 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
 
 | Suite | Runner | Count | Covers |
 |---|---|---|---|
-| `tests/` | pytest | 1526 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
+| `tests/` | pytest | 1533 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
 | `cdk/test/` | jest | 315 in 7 files | Projections, validators, synthesized template, Terraform ↔ CDK parity, cdk-nag |
-| `web/` | vitest | 409 in 43 files | Asset renderer, token refresh, gates, Builder views, validator parity |
+| `web/` | vitest | 415 in 44 files | Asset renderer, token refresh, gates, Builder views, validator parity |
 
 None need AWS credentials. Prompt quality is not unit-tested; the HITL gates and
 Evaluations cover it. Each suite's directory has a `README.md`.

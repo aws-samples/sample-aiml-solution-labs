@@ -24,6 +24,7 @@ import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react
 import { toolsLabel, toolsOf } from "../lib/tools";
 import { branchSummary, monogram } from "../views/Graph";
 import { AGENT_H, AGENT_W, hitTest, layout, type DropTarget } from "./layout";
+import { imageModelOf } from "./meta";
 import { stepAgents, type Workflow } from "./model";
 import type { Issue } from "./validate";
 
@@ -214,9 +215,11 @@ function CanvasInner({
     for (const a of l.agents) {
       const spec = workflow.agents[a.id] ?? {};
       const remote = spec.runtime === "a2a";
+      // An image agent says so, with the model that draws: "image · stability.sd3-5-large-v1:0".
+      const image = imageModelOf(spec as Record<string, unknown>);
       const subtitle = toolsOf(spec.tool).length
         ? toolsLabel(spec.tool, spec.corpus ? String(spec.corpus) : undefined)
-        : remote ? "remote agent (A2A)" : String(spec.runtime ?? "main");
+        : remote ? "remote agent (A2A)" : image ? `image · ${image.id}` : String(spec.runtime ?? "main");
       nodes.push({
         id: `agent-${a.id}`, type: "agent", parentId: `stage-${a.stage}`,
         position: { x: a.x, y: a.y }, draggable: !readOnly, selectable: false,

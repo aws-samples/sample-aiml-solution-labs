@@ -179,8 +179,15 @@
   align-items: stretch;
 }
 /* Out of the flow, so the row is as tall as the right column and the chat fills it. */
-.axd-chat-cell { position: relative; min-height: 480px; }
-.axd-chat-fill { position: absolute; inset: 0; display: flex; flex-direction: column; }
+/* `contain: size` keeps the chat from setting the row's height (the row is as tall as the
+   right column), and the chat is at most the window's height and sticks below the top bar,
+   so the newest message and the input stay in view when the right column grows. */
+.axd-chat-cell { position: relative; min-height: 480px; contain: size; }
+.axd-chat-fill {
+  position: sticky; top: 72px;
+  height: min(100%, calc(100vh - 140px)); min-height: 480px;
+  display: flex; flex-direction: column;
+}
 .axd-chat-fill > * { flex: 1; min-height: 0; }
 @media (max-width: 1100px) {
   .axd-layout { grid-template-columns: 1fr; }
@@ -238,7 +245,9 @@
   .axd-cursor, .axd-streaming > *::after, .axd-streaming li::after { animation: none; }
   .axd-log { scroll-behavior: auto; }
 }
-.axd-jump { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 1; }
+/* Sticky, so it stays at the visible bottom of whichever element scrolls the chat. */
+.axd-jump { position: sticky; bottom: 12px; display: flex; justify-content: center; z-index: 1; pointer-events: none; }
+.axd-jump > * { pointer-events: auto; }
 .axd-empty { padding: 24px 8px; }
 .axd-streaming > p:last-child::after,
 .axd-streaming > ul:last-child > li:last-child::after,

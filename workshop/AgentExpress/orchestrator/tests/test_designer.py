@@ -478,6 +478,18 @@ def test_the_spec_the_model_reads_is_every_key_the_framework_has(env):
     assert json.dumps(designer.TOOLS)                        # a valid Converse toolConfig
 
 
+def test_a_thin_brief_is_asked_about_before_it_is_drafted(env):
+    """A one-line brief used to get a complete guessed workflow. The model now builds only
+    when the brief gives at least 3 of input, output, sources and steps; otherwise it
+    asks about the missing ones, each with the answer it would assume, and "go" builds."""
+    text = " ".join(env.handler.designer.system_prompt()[0]["text"].split())
+    for part in ("(a) INPUT", "(b) OUTPUT", "(c) SOURCES", "(d) STEPS OR SIGN-OFF",
+                 "at least 3 of the 4", "do NOT call `apply_changes` yet",
+                 "each with the answer you would assume", 'say "go"',
+                 "the placeholder `first_agent`", '"ask me first"'):
+        assert part in text, part
+
+
 # --- attachments: files and s3:// paths a message brings -------------------------------
 
 def _upload(e, name, body, bid="pclaims01"):

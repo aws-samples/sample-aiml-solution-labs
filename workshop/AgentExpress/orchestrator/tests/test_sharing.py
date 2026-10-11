@@ -173,7 +173,10 @@ def test_someone_a_build_is_shared_with_sees_the_items_it_uses(env):
     wf["tools"] = {"docs": {"library": it["id"]}}
     call(env, "PUT /api/builds/{id}", params={"id": B}, body={"project": {**project(), "workflow": wf}})
     _share(env, emails=["u2@example.com"])
-    assert it["id"] in _get(env, "u2")[1]["refs"]
+    theirs = _get(env, "u2")[1]["refs"][it["id"]]
+    # The Tools tab labels it by whose it is: u2 must not see it as "yours".
+    assert theirs["mine"] is False and theirs["ownerEmail"]
+    assert _get(env, "u1")[1]["refs"][it["id"]]["mine"] is True
 
 
 def test_an_item_that_is_gone_stops_the_deploy_with_a_reason(env):

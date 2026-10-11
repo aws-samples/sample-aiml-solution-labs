@@ -172,6 +172,15 @@ def to_entry(rec: dict, registry_id: str, sync: bool = False) -> dict:
         card = _json((d.get("a2aAgentCard") or {}).get("data"))
         url = card.get("url")
         if not isinstance(url, str) or not url.startswith("https://"):
+            # A published AgentExpress build (build_records): a whole workflow with its own
+            # app, not an A2A server another build can call. Say so, rather than call it
+            # a record with a broken agent card.
+            custom = _json((d.get("custom") or {}).get("data"))
+            if custom.get("kind") == "agentexpress-workflow":
+                return {"kind": "agent", "why": (
+                    "an AgentExpress workflow, not an A2A agent: it runs as its own app"
+                    + (f" ({custom['app']})" if str(custom.get("app") or "").startswith("https://") else "")
+                    + ", so another build cannot call it as a step. Its Gateway tools are their own MCP record")}
             return {"kind": "agent", "why": "the record has no A2A agent card with an https URL"}
         return {"kind": "agent", "key": key, "entry": {
             "name": str(card.get("name") or rec.get("name") or key)[:80], "runtime": "a2a", "agentCard": url,

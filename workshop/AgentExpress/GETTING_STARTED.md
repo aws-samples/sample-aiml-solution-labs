@@ -260,8 +260,11 @@ and follow you to any browser. Builds and runs are private to their creator unle
 
 ### AgentExpress Assistant
 
-A build opens on the **AgentExpress Assistant** tab. Describe what you want; the designer drafts a
-complete workflow after an answer or two, then asks a few questions at a time. The default model
+A build opens on the **AgentExpress Assistant** tab. Describe what you want. If the brief gives at least three
+of input, output, sources and steps or sign-off, the designer drafts a complete workflow at once.
+If it gives fewer (`I want a trip planner`), it first asks up to three questions, each with the
+answer it would assume, and `go` builds with those. "Just build it" or "ask me first" overrides
+that. After the first draft it asks a few questions at a time. The default model
 is Claude Sonnet 5.5 at medium reasoning effort (Claude Sonnet 5 if the account may not use 5.5), through the console region's inference profile (change
 them with `-c designerModel` / `-c designerEffort`, Terraform `designer_model` / `designer_effort`); the chat doesn't
 show the model. Replies stream with what it is doing (Enter sends, Shift+Enter adds a line). The conversation is
@@ -605,9 +608,9 @@ Markdown.
 ## 11. Tests and redeploy
 
 ```bash
-cd orchestrator     && pytest      # runtime side: 1526 tests
+cd orchestrator     && pytest      # runtime side: 1533 tests
 cd orchestrator/cdk && npm test    # IaC + Terraform/CDK parity + cdk-nag: 315 tests in 7 files
-cd orchestrator/web && npm test    # UI and Builder: 409 tests in 43 files
+cd orchestrator/web && npm test    # UI and Builder: 415 tests in 44 files
 ```
 
 None needs AWS credentials, a model or a container builder. They test the config plane
