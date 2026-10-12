@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Guard the edit boundary",
+      "trigger": "PreToolUse",
+      "description": "Blocks writes outside the four surfaces a customer owns (workflow.json, app/subagents/, app/tools/, kb_docs/). Exit 2 blocks; it fails open with a warning if the payload cannot be parsed. To make a deliberate FRAMEWORK change, set matcher to \"__disabled__\" for the duration, then set it back to the value below.",
+      "matcher": "fs_write|fs_append|str_replace|delete_file",
+      "action": {
+        "type": "command",
+        "command": "bash \"$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.kiro/hooks/guard-edit-boundary.sh\"",
+        "timeout": 15
+      }
+    }
+  ]
+}
