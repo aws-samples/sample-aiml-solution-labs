@@ -480,8 +480,8 @@ export function NamedTab({ kind, project, view, setProject, refs, addRefs, issue
     if (kind === "skill") return hit(a, (e) => ((e.skills ?? []) as string[]).includes(key));
     return hit(t, (e) => ((e.policies ?? []) as string[]).includes(key));
   };
-  const errorsAt = (key: string) => issues.filter((i) => i.path === `${info.map}.${key}` || i.path.startsWith(`${info.map}.${key}.`)
-    || (kind === "tool" && i.where.kind === "tool" && i.where.id === key)).length;
+  const issuesAt = (key: string) => issues.filter((i) => i.path === `${info.map}.${key}` || i.path.startsWith(`${info.map}.${key}.`)
+    || (kind === "tool" && i.where.kind === "tool" && i.where.id === key));
   const publish = async (keys: string[]) => {
     const r = await publishEntries(kind, keys, project, view, notify, addRefs);
     if (r) { setProject(r.project); setSelected([]); }
@@ -520,8 +520,15 @@ export function NamedTab({ kind, project, view, setProject, refs, addRefs, issue
               : <StatusIndicator type="error">Missing from the library</StatusIndicator>;
           } },
           { id: "used", header: "Used by", cell: (r) => usedBy(r.key).join(", ") || "—" },
-          { id: "issues", header: "Problems", cell: (r) => (errorsAt(r.key)
-            ? <StatusIndicator type="error">{errorsAt(r.key)}</StatusIndicator> : <StatusIndicator type="success">OK</StatusIndicator>) },
+          { id: "issues", header: "Problems", cell: (r) => {
+            const all = issuesAt(r.key);
+            const errors = all.filter((i) => i.severity === "error");
+            // One problem: say what it is. Several: count them; the Problems panel lists each.
+            if (!all.length) return <StatusIndicator type="success">OK</StatusIndicator>;
+            const shown = errors.length ? errors : all;
+            return <StatusIndicator type={errors.length ? "error" : "warning"}>
+              {shown.length === 1 ? shown[0].message : `${shown.length}`}</StatusIndicator>;
+          } },
           { id: "actions", header: "Actions", cell: (r) => (
             <SpaceBetween direction="horizontal" size="xs">
               <Button variant="inline-link" ariaLabel={`Edit ${r.key}`} onClick={() => setEditing(r.key)}>Edit</Button>

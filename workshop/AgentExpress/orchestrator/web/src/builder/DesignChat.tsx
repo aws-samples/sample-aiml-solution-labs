@@ -28,6 +28,13 @@ import type { Project } from "./model";
 import { designChanges, designer, type DesignChange, type DesignDoc, type DesignTurn } from "./storage";
 import type { Issue } from "./validate";
 
+/** Literal \\uXXXX sequences as the characters they name. The model sometimes
+ *  double-escapes one in a change summary (an arrow arrives as "\\u2192"); summaries
+ *  stored before bff/designer.py unescaped them still carry it. */
+export function unescape(text: string): string {
+  return text.replace(/\\u([0-9a-fA-F]{4})/g, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+}
+
 export const POLL_MS = 700;
 /** Within this many pixels of the bottom, a new line scrolls the log with it; further up,
  *  the reader is looking back, so the log stays put and offers "Jump to latest". */
@@ -97,7 +104,7 @@ function Turn({ turn: t }: { turn: DesignTurn }) {
         ) : t.text ? <Markdown text={t.text} streaming={live && t.phase === "writing"} /> : null}
         {(t.changes ?? []).map((c) => (
           <div key={c.revision + c.summary} className="axd-change">
-            <StatusIndicator type={c.undo ? "info" : "success"}>{c.summary || "Updated the build"}</StatusIndicator>
+            <StatusIndicator type={c.undo ? "info" : "success"}>{unescape(c.summary) || "Updated the build"}</StatusIndicator>
           </div>
         ))}
         {live && t.phase !== "writing" ? (
@@ -381,7 +388,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
 
       <SpaceBetween size="m">
         <Container header={<Header variant="h2"
-          description={latest ? `Last change: ${latest.summary}` : "The build, as the conversation shapes it."}
+          description={latest ? `Last change: ${unescape(latest.summary)}` : "The build, as the conversation shapes it."}
           info={<StatusIndicator type={errors ? "warning" : "success"}>{errors ? `${errors} to fix` : "Valid"}</StatusIndicator>}>
           Workflow</Header>}>
           <div className="axd-preview">

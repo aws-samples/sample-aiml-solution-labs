@@ -24,6 +24,7 @@ import { fmtTime } from "../lib/clock";
 import { requestTitle } from "../lib/request";
 import { statusIndicator } from "../lib/status";
 import type { SessionSummary } from "../types";
+import { workflowVersionLabel } from "../lib/workflowVersion";
 
 const PAGE_SIZE = 12;
 
@@ -139,6 +140,14 @@ export function RunsTable({
           sortingField: "session_id",
           cell: (r) => <Box fontSize="body-s" variant="code">{r.session_id}</Box>,
           width: 180,
+        },
+        {
+          id: "workflow",
+          header: "Workflow",
+          // The deployed version of the workflow the run ran on, to trace an output back to it.
+          sortingField: "workflowVersion",
+          cell: (r) => workflowVersionLabel(r.workflowVersion),
+          width: 110,
         },
         {
           id: "created",

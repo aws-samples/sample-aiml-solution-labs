@@ -1184,7 +1184,7 @@ def _check_skill(entry: dict, path: str, where: dict, add, agents: dict, key: st
             add("error", where, f"{path}.files", f"a skill holds at most {SKILL_MAX_CHARS // 1000} KB of text, "
                 "instructions and files together")
     if not any(_is_obj(a) and isinstance(a.get("skills"), list) and key in a["skills"] for a in agents.values()):
-        add("warning", where, path, "no agent uses it: add it to an agent's Skills")
+        add("warning", where, path, "no agent uses it: on the Design tab, select an agent and add it under Skills")
 
 
 def _check_features(core: dict, path: str, where: dict, add, shared: list | None = None) -> None:

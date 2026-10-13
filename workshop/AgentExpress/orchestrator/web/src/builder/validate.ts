@@ -829,7 +829,7 @@ function checkSkill(entry: Record<string, unknown>, path: string, where: Where, 
     }
   }
   if (!Object.values(agents).some((a) => isObj(a) && Array.isArray(a.skills) && a.skills.includes(key))) {
-    add("warning", where, path, "no agent uses it: add it to an agent's Skills");
+    add("warning", where, path, "no agent uses it: on the Design tab, select an agent and add it under Skills");
   }
 }
 

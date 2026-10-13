@@ -818,3 +818,12 @@ def test_a_library_item_not_shared_with_the_caller_is_not_loaded(env, model):
     result = script.calls[1]["messages"][-1]["content"][0]["toolResult"]["content"][0]["json"]
     assert result["status"] == "rejected"
     assert any(e["path"] == "tools.docs" and "could not be loaded" in e["message"] for e in result["errors"])
+
+
+def test_a_change_summary_has_no_literal_unicode_escapes():
+    """The model sometimes writes an arrow as the six characters \\u2192 in a tool
+    argument; the change summary the UI shows must carry the arrow itself."""
+    import designer
+    assert designer.unescape("intake \\u2192 review \\u2192 research") == "intake → review → research"
+    assert designer.unescape("plain text, no escapes") == "plain text, no escapes"
+    assert designer.unescape("a real \\n stays") == "a real \\n stays"

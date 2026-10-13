@@ -171,6 +171,22 @@ describe("publishing to the library", () => {
     expect(calls.find((c) => c.method === "PUT" && c.path === "/api/library/abcd0001/shares")!.body).toMatchObject({ everyone: true });
     confirm.mockRestore();
   });
+  it("shows a warning as a warning, with what it says, and an error as an error", async () => {
+    const p = { ...base(), workflow: { ...base().workflow, memories: { notes: { strategies: ["summary"] }, logs: { strategies: ["summary"] } } } } as Project;
+    const issues = [
+      { severity: "warning", where: { kind: "build" }, path: "memories.notes", message: "no agent uses it" },
+      { severity: "error", where: { kind: "build" }, path: "memories.logs.strategies", message: "bad strategy" },
+    ] as unknown as Parameters<typeof NamedTab>[0]["issues"];
+    await act(async () => {
+      render(<NamedTab kind="memory" project={p} view={p} setProject={() => {}} refs={{}} addRefs={() => {}}
+        issues={issues} server notify={vi.fn()} />);
+    });
+    const rows = createWrapper(document.body).findTable()!.findRows();
+    const text = (key: string) => rows.find((r) => r.getElement().textContent?.includes(key))!.getElement();
+    expect(text("notes").querySelector('[class*="status-warning"]')).toBeTruthy();
+    expect(text("notes").textContent).toContain("no agent uses it");
+    expect(text("logs").querySelector('[class*="status-error"]')).toBeTruthy();
+  });
   it("makes a library name from any key", () => {
     expect(libraryName("my_tool-1", [])).toBe("mytool1");
     expect(libraryName("9lives", [])).toBe("x9lives");

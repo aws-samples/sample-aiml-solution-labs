@@ -187,6 +187,21 @@ describe("the BFF deployment package", () => {
     ]);
   });
 
+  it("passes the deployed workflow version to the BFF only when the deploy tags one", () => {
+    // The deploy runner tags a build's stack agentexpress:version=N (deployer/runner.py).
+    expect(bffFunction().Properties.Environment.Variables).not.toHaveProperty("WORKFLOW_VERSION");
+    const app = new cdk.App({ context: { tags: JSON.stringify({ "agentexpress:version": "4" }) } });
+    const stack = new OrchestratorStack(app, "VersionedStack", {
+      env: { account: "123456789012", region: "us-east-1" }, agentName: "multiagent_orchestrator",
+      modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0", memoryEventExpiryDays: 30, idp: "cognito",
+      createCognito: true, cognitoUserPoolId: "", cognitoClientId: "", cognitoDomainPrefix: "", auth0Domain: "",
+      auth0ClientId: "", enableGateway: false, gatewayClientId: "", gatewayClientSecret: "dummy", gatewayAudience: "",
+      toolApiKeys: {}, a2aTokens: {}, transactionSearchIndexingPercentage: 100,
+    });
+    const fn = Object.values<any>(Template.fromStack(stack).findResources("AWS::Lambda::Function"))
+      .find((f) => String(f.Properties?.FunctionName ?? "").startsWith("AgentCoreBFF-"));
+    expect(fn.Properties.Environment.Variables.WORKFLOW_VERSION).toBe("4");
+  });
   it("keeps the whole environment well inside Lambda's 4 KB limit", () => {
     // Trivially true now, and kept because the limit is the reason the projection
     // moved: if anything large is ever put back in here, this is where it shows up.

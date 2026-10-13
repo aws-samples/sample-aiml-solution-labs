@@ -35,6 +35,7 @@ import type { Action, NodeStatus, SessionSnapshot, Workflow } from "../types";
 import { Graph } from "./Graph";
 import { ConnectAccount } from "./ConnectAccount";
 import { toolsLabel } from "../lib/tools";
+import { workflowVersionLabel } from "../lib/workflowVersion";
 
 /** One row of the Steps table. FLATTENED on purpose: a sortable column needs a scalar
  *  `sortingField`, so anything the table sorts by is computed once here rather than
@@ -226,6 +227,7 @@ export function RunDetail({
             { label: "Started", value: fmtTime(snap.created) || "—" },
             { label: "Duration", value: duration(snap.created, snap.updated_at) },
             { label: "Run ID", value: <Box variant="code" fontSize="body-s">{snap.session_id}</Box> },
+            { label: "Workflow", value: workflowVersionLabel(snap.workflowVersion ?? snap.workflow?.deployment?.version) },
             { label: "Started by", value: snap.user || "—" },
             { label: "Subject", value: snap.subject_id || "—" },
             ...(snap.attachments?.length ? [{

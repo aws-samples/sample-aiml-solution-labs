@@ -2663,6 +2663,12 @@ export class OrchestratorStack extends cdk.Stack {
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
 
+    const workflowVersion = (() => {
+      try {
+        const t = JSON.parse(String(this.node.tryGetContext("tags") ?? "") || "{}") as Record<string, unknown>;
+        return /^\d{1,6}$/.test(String(t["agentexpress:version"] ?? "")) ? String(t["agentexpress:version"]) : "";
+      } catch { return ""; }
+    })();
     const bff = new lambda.Function(this, "Bff", {
       functionName: bffFunctionName,
       logGroup: lambdaLogGroup("BffLogGroup", bffFunctionName),
@@ -2681,6 +2687,9 @@ export class OrchestratorStack extends cdk.Stack {
           EVENTS_TABLE: plane.eventsTable.tableName,
           TELEMETRY_TABLE: plane.telemetryTable.tableName,
           RUNTIME_ARN: plane.orchestratorArn,
+          // The Control Plane's version number of the workflow deployed here, from the tag
+          // the deploy runner sets (deployer/runner.py build_tags). Each run records it.
+          ...(workflowVersion ? { WORKFLOW_VERSION: workflowVersion } : {}),
         } : {}),
         // No WORKFLOW_JSON: the workflow travels IN the package (stageBffPackage)
         // because Lambda's whole environment is capped at 4 KB, which held about

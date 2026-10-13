@@ -100,6 +100,13 @@ NOT_HERE = ("this console builds and deploys; runs live in each build's own app.
 # page has no business holding. See bff/workflow.py for where it comes from and why
 # it is no longer built by the IaC and shipped in an environment variable.
 WORKFLOW = workflow.VIEW
+#: The Control Plane's version number of the workflow deployed here (the deploy runner's
+#: agentexpress:version tag, passed by the IaC). None outside a Control Plane deploy.
+_v = os.environ.get("WORKFLOW_VERSION", "")
+WORKFLOW_VERSION: int | None = int(_v) if _v.isdigit() else None
+if WORKFLOW_VERSION is not None:
+    # The page shows it ("Workflow v2"): a number, nothing it has no business holding.
+    WORKFLOW = {**WORKFLOW, "deployment": {"version": WORKFLOW_VERSION}}
 NODE_IDS = workflow.NODE_IDS
 DEFAULT_TOPIC = workflow.DEFAULT_TOPIC
 #: Longest run request accepted (web/src/lib/request.ts REQUEST_MAX says the same).
@@ -145,7 +152,7 @@ def _skeleton(session_id: str, topic: str, node_ids: list[str] | None = None) ->
 def _default_target() -> dict:
     if status_tbl is None:
         raise builds.BuildError(404, NOT_HERE)
-    return {"build": "", "name": "", "version": None, "status": status_tbl,
+    return {"build": "", "name": "", "version": WORKFLOW_VERSION, "status": status_tbl,
             "events": events_tbl, "telemetry": telemetry_tbl, "runtimeArn": RUNTIME_ARN,
             "view": WORKFLOW, "raw": workflow.RAW}
 
@@ -1064,6 +1071,11 @@ def _begin_run(context, target: dict, topic: str, owner: str, user: str, *, file
     item["workflow"] = target["view"]
     if build_id:
         item["build"] = {"id": build_id, "name": target["name"], "version": target["version"]}
+    # Which deployed version of the workflow this run ran on, so an output can be traced
+    # back to the workflow that produced it. Absent for an app deployed outside the
+    # Control Plane, which has no version numbers.
+    if target.get("version") is not None:
+        item["workflowVersion"] = int(target["version"])
     if subject_id:
         item["subject_id"] = subject_id  # so the UI can show it after a refresh
     if files:
@@ -1349,14 +1361,14 @@ def _route(event: dict, context) -> dict:
         if service and not owners:
             return _resp(200, [])
         scan_kwargs = ({"ProjectionExpression": "session_id, topic, overall, hitl, created, "
-                                                "#o, #u, #tr",
+                                                "#o, #u, #tr, workflowVersion",
                         "ExpressionAttributeNames": {"#o": "owner", "#u": "user", "#tr": "trigger"}}
                        if _everyone(event) else
-                       {"ProjectionExpression": "session_id, topic, overall, hitl, created, #o, #tr",
+                       {"ProjectionExpression": "session_id, topic, overall, hitl, created, #o, #tr, workflowVersion",
                         "ExpressionAttributeNames": {"#o": "owner", "#tr": "trigger"},
                         "FilterExpression": Attr("owner").is_in(owners)}
                        if service else
-                       {"ProjectionExpression": "session_id, topic, overall, hitl, created, #tr",
+                       {"ProjectionExpression": "session_id, topic, overall, hitl, created, #tr, workflowVersion",
                         "ExpressionAttributeNames": {"#tr": "trigger"},
                         "FilterExpression": Attr("owner").eq(_owner(event))})
         while True:

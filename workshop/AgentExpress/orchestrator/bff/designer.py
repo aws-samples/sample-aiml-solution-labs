@@ -70,6 +70,16 @@ MAX_TOKENS = 16000
 EFFORT = (os.environ.get("DESIGNER_EFFORT") or "medium").strip().lower()
 
 
+
+_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def unescape(text: str) -> str:
+    """Text with literal \\uXXXX sequences turned back into the characters they name.
+    The model sometimes double-escapes a character in a tool argument (an arrow arrives
+    as the six characters \\u2192), and the UI would show it as typed."""
+    return _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+
 def _model_list(raw: str) -> list[tuple[str, str]]:
     """[(model id, effort)] from "a[:effort],b[:effort]"; an entry without one takes EFFORT."""
     out = []
@@ -1655,7 +1665,7 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
                   ContentType="application/json")
     _save_draft(build_id, owner, email, new)
     doc["revision"] = revision
-    record = {"summary": str(args.get("summary") or "")[:300], "revision": revision,
+    record = {"summary": unescape(str(args.get("summary") or ""))[:300], "revision": revision,
               "changed": changed,
               "defaultsUsed": [str(d)[:200] for d in args.get("defaults_used") or []][:30],
               "needsInput": [{"path": str(n.get("path"))[:120],

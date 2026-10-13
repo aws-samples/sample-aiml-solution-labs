@@ -9007,7 +9007,7 @@
       "name": "skills"
      },
      "path": "skills.refunds",
-     "message": "no agent uses it: add it to an agent's Skills"
+     "message": "no agent uses it: on the Design tab, select an agent and add it under Skills"
     }
    ],
    "ops": [

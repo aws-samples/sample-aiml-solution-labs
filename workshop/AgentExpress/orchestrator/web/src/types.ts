@@ -70,6 +70,9 @@ export interface Workflow {
   attachments?: RunAttach | null;
   /** What starts runs besides a person (bff/triggers.py). */
   triggers?: { name: string; type: string; runAs: string }[] | null;
+  /** Which version of the workflow is deployed here, set when the Control Plane deployed it
+   *  (bff/handler.py WORKFLOW_VERSION). */
+  deployment?: { version: number } | null;
 }
 /** The Start run form's files: limits, readable types, and S3 locations it may name. */
 export interface RunAttach {
@@ -118,6 +121,9 @@ export interface SessionSummary {
   user?: string;
   /** Set when a trigger started it, not a person (bff/triggers.py). */
   trigger?: { name: string; type: string; source: string; runAs: string };
+  /** The deployed version of the workflow this run ran on. Absent on runs started before
+   *  versions were recorded, and on apps deployed outside the Control Plane. */
+  workflowVersion?: number;
 }
 
 export interface SessionSnapshot extends SessionSummary {

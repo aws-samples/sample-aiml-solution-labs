@@ -204,7 +204,7 @@ resource "aws_lambda_function" "bff" {
       # about eleven agents' worth of it.
       # Where image agents' images are (images.tf), for GET /api/images.
       ASSETS_BUCKET = local.assets_bucket
-    }, local.bff_run_env, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env) # builder.tf, audit.tf, triggers.tf
+    }, local.bff_run_env, local.workflow_plane ? local.bff_version_env : {}, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env) # builder.tf, audit.tf, triggers.tf
   }
   # The log group must exist BEFORE the function, or Lambda creates
   # /aws/lambda/<name> itself and Terraform's CreateLogGroup then fails with
@@ -420,4 +420,9 @@ locals {
     TELEMETRY_TABLE = aws_dynamodb_table.telemetry[0].name
     RUNTIME_ARN     = awscc_bedrockagentcore_runtime.orchestrator[0].agent_runtime_arn
   }
+  # The Control Plane's version number of the workflow deployed here, from the tag the deploy
+  # runner sets (deployer/runner.py build_tags). Each run records it. Mirrors CDK.
+  bff_version_env = can(regex("^[0-9]{1,6}$", lookup(var.tags, "agentexpress:version", ""))) ? {
+    WORKFLOW_VERSION = var.tags["agentexpress:version"]
+  } : {}
 }

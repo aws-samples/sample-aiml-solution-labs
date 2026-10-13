@@ -16,6 +16,7 @@ import { useMemo } from "react";
 import type { Workflow } from "../types";
 import { toolsOf } from "../lib/tools";
 import { FRAMEWORK_VERSION } from "../builder/meta";
+import { workflowVersionLabel } from "../lib/workflowVersion";
 
 type Item = { title: string; body: string };
 
@@ -143,6 +144,7 @@ export function AboutPanel({ workflow, heading, console: isConsole = false }: {
           <KeyValuePairs
             columns={1}
             items={[
+              { label: "Workflow", value: workflowVersionLabel(workflow.deployment?.version) },
               { label: "Framework", value: FRAMEWORK_VERSION || "—" },
               { label: "Stages", value: String(facts.steps.length) },
               { label: "Agents", value: String(facts.ids.length) },
