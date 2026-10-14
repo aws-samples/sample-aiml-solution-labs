@@ -133,7 +133,7 @@ def sample_events(point: str, wf: dict, templates: dict) -> list:
             "gatewayRequest": request(call_body),
             "gatewayResponse": {"statusCode": 200, "body": {"jsonrpc": "2.0", "id": 2, "result": {"content": [
                 {"type": "text",
-                 "text": "Contact jane.doe@example.com or 555-123-4567 about card 4111 1111 1111 1111."}]}}}}}},
+                 "text": "Contact jane.doe@example.com or 202-555-0123 about card 4111 1111 1111 1111."}]}}}}}},
     ]
 
 

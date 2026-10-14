@@ -62,7 +62,10 @@ SKEW_S = 300
 IDEMPOTENCY_TTL_S = 86_400
 DELIVERY_TTL_S = 7 * 86_400
 VALUE_MAX = 4000
-PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_\-]+(?:\.[A-Za-z0-9_\-]+)*)\s*\}\}")
+#: {{dot.path}}. One flat character class, no nested quantifier, so matching is linear;
+#: render() leaves a path with an empty segment ("a..b", ".a") as written, exactly as the
+#: stricter pattern this replaced did.
+PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
 #: Headers never handed to a prompt: the proof of the delivery, and credentials.
 SECRET_HEADERS = ("authorization", "cookie", "x-ax-signature", "x-ax-token", "x-hub-signature",
                   "x-hub-signature-256", "x-slack-signature", "stripe-signature")
@@ -119,6 +122,8 @@ def render(template: str, ctx: dict, limit: int = 10_000) -> str:
     """The trigger's prompt with each {{dot.path}} filled from the delivery: text as is,
     anything else as JSON, a missing value as nothing. No expressions, no code."""
     def value(m):
+        if "" in m.group(1).split("."):
+            return m.group(0)
         v = _lookup(ctx, m.group(1))
         if v is None:
             return ""

@@ -85,7 +85,7 @@ export function GrantsForm({ code, onChange }: { code: Code; onChange: (c: Code)
         </FormField>
         <FormField label="An S3 prefix" description="s3://bucket/prefix/, ending in /. Read as S3_PREFIX.">
           <SpaceBetween size="xs" direction="horizontal">
-            <Input value={g.s3Prefix ?? ""} placeholder="s3://my-bucket/refunds/" onChange={({ detail }) => set({ s3Prefix: detail.value.trim() || undefined })} />
+            <Input value={g.s3Prefix ?? ""} placeholder="s3://amzn-s3-demo-bucket/refunds/" onChange={({ detail }) => set({ s3Prefix: detail.value.trim() || undefined })} />
             {g.s3Prefix ? (
               <Select selectedOption={ACCESS.find((a) => a.value === (g.s3Access ?? "read"))!} options={ACCESS}
                 onChange={({ detail }) => set({ s3Access: detail.selectedOption.value === "read" ? undefined : detail.selectedOption.value })} />

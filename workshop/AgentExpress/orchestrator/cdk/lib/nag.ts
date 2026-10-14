@@ -25,8 +25,6 @@ export const NAG_ACKNOWLEDGED: Array<{ id: string; reason: string }> = [
   { id: "AwsSolutions-S1",
     reason: "S3 server access logs are off by default for cost; CloudTrail data events cover audit. " +
       "Every bucket blocks public access, is encrypted and refuses plain HTTP." },
-  { id: "AwsSolutions-CFR3",
-    reason: "CloudFront standard logs are off by default for cost; API access logs are on." },
   { id: "AwsSolutions-CFR4",
     reason: "The default *.cloudfront.net certificate, so TLS 1.2 cannot be pinned without a custom " +
       "domain; bring one with an ACM certificate to set the minimum protocol." },

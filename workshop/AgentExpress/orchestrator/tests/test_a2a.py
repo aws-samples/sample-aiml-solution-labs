@@ -85,7 +85,7 @@ class Ctx:
     `state["outputs"][id]`, nothing more.
     """
 
-    def __init__(self, outputs=None, feedback="", token="", agent_id="partner"):
+    def __init__(self, outputs=None, feedback="", token="", agent_id="partner"):  # nosec B107 - test double
         self.topic = "assess this applicant"
         self.session_id = "sess-1"
         self.agent_id = agent_id
@@ -419,8 +419,10 @@ def fake_aws_credentials(monkeypatch):
     ambient ones passes on a developer's laptop and fails in CI. Signing is pure
     arithmetic over the request, so fake keys exercise it exactly as real ones would.
     """
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAIOSFODNN7EXAMPLE")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+    # Built at runtime so no key-shaped literal sits in the source: a fake access-key id
+    # (the AKIA prefix botocore expects, then padding) and a fake secret. Neither is real.
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIA" + "TESTFAKE" * 2)
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake-secret-for-signing-tests-" + "0" * 10)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
 
@@ -458,7 +460,7 @@ def test_oauth2_auth_uses_the_existing_per_agent_identity_feature():
     no new config concept and no long-lived secret anywhere."""
     defn = remote_wf(auth="oauth2",
                      agentcore={"identity": {"outbound": ["partner-oauth"]}})
-    _, wire = run(defn, Wire(send=ARTIFACT_OK), Ctx(token="minted"))
+    _, wire = run(defn, Wire(send=ARTIFACT_OK), Ctx(token="minted"))  # nosec B106 - test double
     assert wire.of("message/send")[0]["headers"]["authorization"] == "Bearer minted"
 
 

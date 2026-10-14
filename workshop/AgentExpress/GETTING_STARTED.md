@@ -556,6 +556,13 @@ policy isn't created.
 }
 ```
 
+> **Regulated data.** A guardrail's PII filters are a control, not a compliance programme. If your
+> workflow handles protected health information (HIPAA), cardholder data (PCI DSS) or personal data
+> (GDPR, CCPA), meeting those obligations is your responsibility under the
+> [AWS shared responsibility model](https://aws.amazon.com/compliance/shared-responsibility-model/);
+> see [AWS Compliance Programs](https://aws.amazon.com/compliance/programs/). This sample uses
+> synthetic data only.
+
 Strengths are `NONE|LOW|MEDIUM|HIGH` (`PROMPT_ATTACK` is input only); PII actions are `BLOCK` or
 `ANONYMIZE`. A check whose only finding is anonymized PII does not stop the agent: it carries on
 with the masked text (input) or hands it on masked (output). Anything blocked stops it, and the

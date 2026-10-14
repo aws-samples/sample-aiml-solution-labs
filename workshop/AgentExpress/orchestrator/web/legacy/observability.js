@@ -74,11 +74,33 @@
   // "allowed" when index.html hasn't defined them, so this file still works alone.
   const authzCan = (a) => (window.can ? window.can(a) : true);
   const authzGate = (a) => (window.gate ? window.gate(a) : "");
-  /* A JS STRING LITERAL inside an inline handler: onclick="f(${jsq(x)})". esc() is
-     the wrong tool there and undoes itself — the HTML parser decodes attribute
-     entities BEFORE the JS is compiled, so esc()'s &#39; becomes a live quote that
-     closes the argument. Returns the quoted literal; add no quotes of your own. */
-  const jsq = window.jsq || ((v) => esc(JSON.stringify(String(v == null ? "" : v))));
+  /* EVERY HTML STRING THIS MODULE RENDERS GOES THROUGH setHtml(). Templates still
+     esc() each value, and DOMPurify (handed in by views/Observability.tsx, bundled and
+     version-pinned) then strips <script>, inline on*= handlers and javascript: URLs, so
+     a value that reached a template unescaped still cannot execute. That is also why no
+     template carries an on*= handler: a control names its action in data-obs-click /
+     data-obs-input / data-obs-change (argument in data-obs-arg, data-obs-arg2), and
+     onAction() below dispatches it. FAILS CLOSED: without the sanitizer nothing renders. */
+  function setHtml(el, html) {
+    if (!el) return;
+    const purify = window.DOMPurify;
+    if (!purify || typeof purify.sanitize !== "function") {
+      el.textContent = "Observability cannot render: the HTML sanitizer did not load.";
+      return;
+    }
+    // DOMPurify returns nodes, not a string, so the sanitized markup is never re-parsed
+    // (no innerHTML round trip, which is what mutation-XSS relies on).
+    el.replaceChildren(purify.sanitize(String(html == null ? "" : html), { RETURN_DOM_FRAGMENT: true }));
+  }
+  /* An element id built from data (an agent id) is escaped before it becomes a
+     selector. window.CSS, because this module's own `CSS` is its stylesheet string. */
+  const byId = (id) => {
+    const s = String(id);
+    const sel = window.CSS && window.CSS.escape
+      ? "#" + window.CSS.escape(s)
+      : '[id="' + s.replace(/["\\]/g, "\\$&") + '"]';   // no CSS.escape: a quoted attribute match
+    return (host ? host.querySelector(sel) : null) || document.getElementById(s);
+  };
 
   const fmtUsd = (x) => "$" + Number(x || 0).toLocaleString(undefined,
     { minimumFractionDigits: 2, maximumFractionDigits: 6 });
@@ -625,7 +647,7 @@
     return chartLoading;
   }
   function draw(id, config) {
-    const canvas = $(id);
+    const canvas = byId(id);
     if (!canvas) return;
     if (!window.Chart) { void ensureChart().then(() => draw(id, config)); return; }
     if (charts[id]) charts[id].destroy();
@@ -641,7 +663,7 @@
     if (built) return; built = true;
     const todayStr = etDateStr();                       // ET "today"
     const fromStr = shiftDays(todayStr, -29);           // 30-day default window
-    host.innerHTML = `
+    setHtml(host, `
      <div class="obs-view" id="obsView">
      <div class="obs-inner">
       <div class="obs-hero">
@@ -662,9 +684,9 @@
       </div>
 
       <div class="obs-tabs">
-        <button class="obs-tab active" id="obsTabOverview" onclick="obsGoto('overview')">Overview</button>
-        <button class="obs-tab" id="obsTabFlow" onclick="obsGoto('flow')">Run detail</button>
-        <button class="obs-tab" id="obsTabInsights" onclick="obsGoto('insights')">Insights</button>
+        <button class="obs-tab active" id="obsTabOverview" data-obs-click="goto" data-obs-arg="overview">Overview</button>
+        <button class="obs-tab" id="obsTabFlow" data-obs-click="goto" data-obs-arg="flow">Run detail</button>
+        <button class="obs-tab" id="obsTabInsights" data-obs-click="goto" data-obs-arg="insights">Insights</button>
       </div>
 
       <section id="obsOverview">
@@ -679,11 +701,11 @@
                 <option value="user">User</option>
               </select>
             </label>
-            <button class="obs-btn" onclick="obsLoadOverview()">Apply</button>
+            <button class="obs-btn" data-obs-click="loadOverview">Apply</button>
             <span class="grow"></span>
             <div class="obs-exports">
-              <button class="obs-btn ghost" onclick="obsExport('csv')" title="Download the breakdown as CSV">⬇ CSV</button>
-              <button class="obs-btn ghost" onclick="obsExport('json')" title="Download the breakdown as JSON">⬇ JSON</button>
+              <button class="obs-btn ghost" data-obs-click="exportOverview" data-obs-arg="csv" title="Download the breakdown as CSV">⬇ CSV</button>
+              <button class="obs-btn ghost" data-obs-click="exportOverview" data-obs-arg="json" title="Download the breakdown as JSON">⬇ JSON</button>
             </div>
           </div>
         </div>
@@ -706,10 +728,10 @@
                 <div class="obs-combo-list" id="obsComboList" style="display:none"></div>
               </div>
             </label>
-            <button class="obs-btn" onclick="obsLoadFlow()">Load</button>
+            <button class="obs-btn" data-obs-click="loadFlow">Load</button>
             <div class="obs-exports">
-              <button class="obs-btn ghost" onclick="obsExportFlow('csv')" title="Download this run's calls as CSV">⬇ CSV</button>
-              <button class="obs-btn ghost" onclick="obsExportFlow('json')" title="Download this run's calls as JSON">⬇ JSON</button>
+              <button class="obs-btn ghost" data-obs-click="exportFlow" data-obs-arg="csv" title="Download this run's calls as CSV">⬇ CSV</button>
+              <button class="obs-btn ghost" data-obs-click="exportFlow" data-obs-arg="json" title="Download this run's calls as JSON">⬇ JSON</button>
             </div>
           </div>
         </div>
@@ -740,14 +762,14 @@
                 <option value="720">Last 30 days</option>
               </select>
             </label>
-            <button class="obs-btn"${authzGate("insights")} onclick="obsRunInsights()">Run insights</button>
-            <button class="obs-btn ghost" onclick="obsLoadInsights()">Refresh</button>
+            <button class="obs-btn"${authzGate("insights")} data-obs-click="runInsights">Run insights</button>
+            <button class="obs-btn ghost" data-obs-click="loadInsights">Refresh</button>
           </div>
         </div>
         <div class="obs-card"><div id="obsInsightsBody"><div class="obs-note" style="margin:0">Loading…</div></div></div>
       </section>
      </div>
-     </div>`;
+     </div>`);
     wireCombo();
   }
 
@@ -767,6 +789,10 @@
      definition (agent names + evalAgents). Idempotent: mounting twice re-renders into
      the new host rather than duplicating anything. */
   function mount(el, token, wf, opts) {
+    // Fail closed, and say why: views/Observability.tsx shows this message.
+    if (!window.DOMPurify || typeof window.DOMPurify.sanitize !== "function")
+      throw new Error("Observability needs its HTML sanitizer (DOMPurify), which did not load.");
+    bindActions();
     host = el;
     authToken = token || null;
     wfDef = wf || {};
@@ -793,7 +819,7 @@
     const by = $("obsBy").value, from = $("obsFrom").value, to = $("obsTo").value;
     let data;
     try { data = await api(`/api/telemetry/aggregate?by=${by}&from=${from}&to=${to}`); }
-    catch (e) { $("obsTable").innerHTML = `<div class="obs-empty">Couldn't load telemetry: ${esc(e.message)}</div>`; return; }
+    catch (e) { setHtml($("obsTable"), `<div class="obs-empty">Couldn't load telemetry: ${esc(e.message)}</div>`); return; }
     const buckets = data.buckets || [];
     lastBuckets = buckets; lastBy = by;
     const tot = buckets.reduce((a, b) => ({
@@ -803,17 +829,17 @@
     const runs = Number(data.totalSessions || 0);
 
     const bucketLabel = { date: "Active days", model: "Models used", user: "Users" }[by];
-    $("obsKpis").innerHTML = kpi(fmtUsd(tot.cost), "Total cost", "#2563eb")
+    setHtml($("obsKpis"), kpi(fmtUsd(tot.cost), "Total cost", "#2563eb")
       + kpi(fmtInt(runs), "Runs", "#7c3aed")
       + kpi(fmtInt(tot.inp + tot.out), "Total tokens", "#0891b2",
             fmtInt(tot.inp) + " in · " + fmtInt(tot.out) + " out")
       + kpi(fmtInt(tot.calls), "Calls", "#059669")
-      + kpi(buckets.length, bucketLabel, "#d97706");
+      + kpi(buckets.length, bucketLabel, "#d97706"));
 
     renderProjection(tot.cost, runs);
 
     $("obsChartTitle").textContent = "Cost by " + by;
-    if (!buckets.length) { $("obsTable").innerHTML = `<div class="obs-empty">No telemetry in this range yet. Run a session, then come back.</div>`; if (charts.obsChart) charts.obsChart.destroy(); return; }
+    if (!buckets.length) { setHtml($("obsTable"), `<div class="obs-empty">No telemetry in this range yet. Run a session, then come back.</div>`); if (charts.obsChart) charts.obsChart.destroy(); return; }
 
     const labels = buckets.map((b) => String(b.key));
     const costs = buckets.map((b) => Number(b.costUsd || 0));
@@ -840,7 +866,7 @@
     // the customer can see the input/output unit price alongside the totals.
     const rateCols = by === "model";
     const rateCell = (v) => Number(v || 0) ? "$" + Number(v).toFixed(2) : "—";
-    $("obsTable").innerHTML = `<table class="obs"><thead><tr>
+    setHtml($("obsTable"), `<table class="obs"><thead><tr>
       <th>${esc(by[0].toUpperCase() + by.slice(1))}</th><th class="num">Cost</th>
       <th class="num">Input tok</th><th class="num">Output tok</th>${
       rateCols ? '<th class="num">In $/M</th><th class="num">Out $/M</th>' : ""}
@@ -851,8 +877,8 @@
         <td class="num">${fmtInt(b.outputTokens)}</td>${
         rateCols ? `<td class="num">${rateCell(b.inRate)}</td><td class="num">${rateCell(b.outRate)}</td>` : ""}
         <td class="num">${fmtInt(b.calls)}</td>
-        <td class="num">${fmtMs(b.latencyMs)}</td></tr>`).join("")}</tbody></table>`;
-    $("obsLegend").innerHTML = LEGEND;
+        <td class="num">${fmtMs(b.latencyMs)}</td></tr>`).join("")}</tbody></table>`);
+    setHtml($("obsLegend"), LEGEND);
   }
 
   // ---- run detail ------------------------------------------------------------
@@ -886,11 +912,11 @@
       : sessionsCache;
     const box = $("obsComboList");
     if (!box) return;
-    if (!sessionsCache.length) { box.innerHTML = `<div class="obs-combo-empty">No sessions yet — run one first.</div>`; return; }
-    if (!list.length) { box.innerHTML = `<div class="obs-combo-empty">No match for "${esc(filter)}"</div>`; return; }
-    box.innerHTML = list.map((s) =>
+    if (!sessionsCache.length) { setHtml(box, `<div class="obs-combo-empty">No sessions yet — run one first.</div>`); return; }
+    if (!list.length) { setHtml(box, `<div class="obs-combo-empty">No match for "${esc(filter)}"</div>`); return; }
+    setHtml(box, list.map((s) =>
       `<div class="obs-combo-opt" data-id="${esc(s.session_id)}" data-disp="${esc(s.disp)}">
-         <div class="ot">${esc(s.topic)}</div><div class="oid">${esc(s.session_id)}</div></div>`).join("");
+         <div class="ot">${esc(s.topic)}</div><div class="oid">${esc(s.session_id)}</div></div>`).join(""));
     // mousedown (not click) so the pick fires before the input's blur closes the list
     box.querySelectorAll(".obs-combo-opt").forEach((el) => {
       el.addEventListener("mousedown", (e) => {
@@ -937,7 +963,7 @@
     window.dispatchEvent(new CustomEvent("obs:session", { detail: sid }));
     let data;
     try { data = await api(`/api/sessions/${sid}/telemetry`); }
-    catch (e) { $("obsFlowTable").innerHTML = `<div class="obs-empty">Couldn't load: ${esc(e.message)}</div>`; return; }
+    catch (e) { setHtml($("obsFlowTable"), `<div class="obs-empty">Couldn't load: ${esc(e.message)}</div>`); return; }
     flowCalls = data.calls || [];
     // Also pull the session snapshot so the per-agent inspector can show the human
     // feedback that triggered each re-run (that lives in snapshot.history[agent],
@@ -956,15 +982,15 @@
       ranTile = kpi(day, "Run date", "#475569",
                     startT + (endT && endT !== startT ? " → " + endT : "") + " ET");
     }
-    $("obsFlowKpis").innerHTML = ranTile
+    setHtml($("obsFlowKpis"), ranTile
       + kpi(fmtUsd(t.costUsd), "Run cost", "#2563eb")
       + kpi(fmtInt((Number(t.inputTokens || 0) + Number(t.outputTokens || 0))), "Tokens", "#0891b2",
             fmtInt(t.inputTokens) + " in · " + fmtInt(t.outputTokens) + " out")
       + kpi(fmtInt(t.calls), "Calls", "#059669")
-      + kpi(fmtMs(t.latencyMs), "Model+tool latency", "#d97706");
+      + kpi(fmtMs(t.latencyMs), "Model+tool latency", "#d97706"));
 
     const agents = (data.byAgent || []).slice().sort((a, b) => Number(b.costUsd || 0) - Number(a.costUsd || 0));
-    if (!agents.length) { $("obsFlowTable").innerHTML = `<div class="obs-empty">No telemetry for this session yet.</div>`; if (charts.obsFlowChart) charts.obsFlowChart.destroy(); return; }
+    if (!agents.length) { setHtml($("obsFlowTable"), `<div class="obs-empty">No telemetry for this session yet.</div>`); if (charts.obsFlowChart) charts.obsFlowChart.destroy(); return; }
 
     draw("obsFlowChart", {
       type: "bar",
@@ -980,14 +1006,14 @@
       },
     });
 
-    $("obsFlowTable").innerHTML = `<table class="obs"><thead><tr>
+    setHtml($("obsFlowTable"), `<table class="obs"><thead><tr>
       <th>Agent</th><th>Model(s)</th><th class="num">Input</th><th class="num">Output</th>
       <th class="num">Tools</th><th class="num">Latency</th><th class="num">Cost</th></tr></thead><tbody>${
       agents.map((a) => `
-        <tr class="obs-agent" onclick="obsToggle(${jsq(a.agentId)})">
+        <tr class="obs-agent" data-obs-click="toggleAgent" data-obs-arg="${esc(a.agentId)}">
           <td><span class="caret" id="caret-${esc(a.agentId)}">▸</span> ${esc(friendlyAgent(a.agentId))}${
             a.agentId === "__session__" ? "" :
-            `<button class="obs-io" onclick="event.stopPropagation();obsAgentIO(${jsq(a.agentId)})" title="View this agent's system prompt, input, output and evaluation scores">⤢ Prompts &amp; I/O</button>`}</td>
+            `<button class="obs-io" data-obs-click="openAgentIO" data-obs-arg="${esc(a.agentId)}" title="View this agent's system prompt, input, output and evaluation scores">⤢ Prompts &amp; I/O</button>`}</td>
           <td>${(a.models || []).map((m) => esc(shortModel(m))).join(", ") || "—"}</td>
           <td class="num">${fmtInt(a.inputTokens)}</td>
           <td class="num">${fmtInt(a.outputTokens)}</td>
@@ -996,8 +1022,8 @@
           <td class="num">${fmtUsd(a.costUsd)}</td>
         </tr>
         <tr class="obs-calls" id="calls-${esc(a.agentId)}" style="display:none"><td colspan="7">
-          <div class="obs-calls-inner" id="calls-inner-${esc(a.agentId)}"></div></td></tr>`).join("")}</tbody></table>`;
-    $("obsFlowLegend").innerHTML = LEGEND;
+          <div class="obs-calls-inner" id="calls-inner-${esc(a.agentId)}"></div></td></tr>`).join("")}</tbody></table>`);
+    setHtml($("obsFlowLegend"), LEGEND);
   }
 
   function renderRates(calls) {
@@ -1008,16 +1034,16 @@
       }
     });
     const models = Object.keys(seen);
-    $("obsRates").innerHTML = models.length ? `<table class="obs"><thead><tr>
+    setHtml($("obsRates"), models.length ? `<table class="obs"><thead><tr>
       <th>Model</th><th class="num">Input $/1M tokens</th><th class="num">Output $/1M tokens</th></tr></thead><tbody>${
       models.map((m) => `<tr><td>${esc(shortModel(m))}</td>
         <td class="num">$${seen[m].in.toFixed(2)}</td>
         <td class="num">$${seen[m].out.toFixed(2)}</td></tr>`).join("")}</tbody></table>`
-      : `<div class="obs-note">No model calls in this session.</div>`;
+      : `<div class="obs-note">No model calls in this session.</div>`);
   }
 
   function toggleAgent(agentId) {
-    const row = $("calls-" + agentId), caret = $("caret-" + agentId);
+    const row = byId("calls-" + agentId), caret = byId("caret-" + agentId);
     if (!row) return;
     const open = row.style.display !== "none";
     row.style.display = open ? "none" : "";
@@ -1062,7 +1088,7 @@
         if (Number(c.embed_tokens_est || 0)) return `<span title="estimated embedding tokens">~${fmtInt(c.embed_tokens_est)} embed</span>`;
         return "—";
       };
-      $("calls-inner-" + agentId).innerHTML = calls.length ? `<table class="obs"><thead><tr>
+      setHtml(byId("calls-inner-" + agentId), calls.length ? `<table class="obs"><thead><tr>
         <th>Kind</th><th>Model / provider</th><th class="num">Input</th><th class="num">Output</th>
         <th class="num" title="The agent's system-prompt share of the input tokens — exact, via the Bedrock CountTokens API. A subset of Input. A leading ~ marks a rare estimate fallback.">Sys prompt</th>
         <th class="num">In $/M</th><th class="num">Out $/M</th>
@@ -1079,7 +1105,7 @@
           <td class="num">${fmtUsd(c.cost_usd)}</td>
           <td>${resultCell(c)}</td>
         </tr>`).join("")}</tbody></table>
-        <div class="obs-note">${LEGEND}</div>` : `<div class="obs-note">No calls recorded.</div>`;
+        <div class="obs-note">${LEGEND}</div>` : `<div class="obs-note">No calls recorded.</div>`);
     }
   }
 
@@ -1141,21 +1167,21 @@
     projAvg = runs > 0 ? totalCost / runs : 0;
     const el = $("obsProj");
     if (!el) return;
-    if (!runs) { el.innerHTML = `<div class="obs-note" style="margin:0">Run a session to see per-run cost and a monthly projection.</div>`; return; }
+    if (!runs) { setHtml(el, `<div class="obs-note" style="margin:0">Run a session to see per-run cost and a monthly projection.</div>`); return; }
     const perDay = Number(($("obsRunsPerDay") && $("obsRunsPerDay").value) || DEFAULT_RUNS_PER_DAY);
-    el.innerHTML = `
+    setHtml(el, `
       <div class="obs-proj">
         <div class="pcol"><span class="pv">${fmtUsd(projAvg)}</span><span class="pl">Avg cost / run</span></div>
         <div class="psep"></div>
         <div class="pcol"><span class="pv">${fmtInt(runs)}</span><span class="pl">Runs measured</span></div>
         <div class="psep"></div>
         <div class="pcol">
-          <div class="prunbox"><input id="obsRunsPerDay" type="number" min="0" step="1" value="${perDay}" oninput="obsReproject()"> <span class="pl" style="text-transform:none">runs / day</span></div>
+          <div class="prunbox"><input id="obsRunsPerDay" type="number" min="0" step="1" value="${perDay}" data-obs-input="reproject"> <span class="pl" style="text-transform:none">runs / day</span></div>
           <span class="pl">Planned volume</span>
         </div>
         <div class="psep"></div>
         <div class="pcol"><span class="pbig" id="obsProjMonthly">${fmtUsd(monthly(perDay))}</span><span class="pl">Projected / month (30 days)</span></div>
-      </div>`;
+      </div>`);
   }
   function reproject() {
     // Same default as renderProjection: these disagreed (10 vs 0), so clearing the
@@ -1229,7 +1255,7 @@
       : `<div class="obs-seg-empty">Not captured for this call (an older run, a tool/compute row, or content dropped on a cold-start container).</div>`;
     const cc = count != null ? `<span class="cc">${esc(count)}</span>` : "";
     const copy = (text && String(text).trim())
-      ? `<button class="obs-copy" onclick="event.preventDefault();obsCopy(this)">copy</button>` : "";
+      ? `<button class="obs-copy" data-obs-click="copyPre">copy</button>` : "";
     return `<details class="obs-seg ${cls}" open><summary><span class="tw">▸</span>${esc(title)}${copy}${cc}</summary>${body}</details>`;
   };
 
@@ -1533,7 +1559,7 @@
   function promptEvalBlock(agentId, prompt, sel) {
     const rows = evalRowsFor(agentId, prompt, sel);
     const cards = evalCards(rows);
-    const runBtn = `<button class="obs-eval-run"${authzGate("evaluate")} onclick="obsRunEval(${jsq(agentId)},${jsq(prompt)})">${rows.length ? "Re-evaluate" : "Evaluate"}</button>`;
+    const runBtn = `<button class="obs-eval-run"${authzGate("evaluate")} data-obs-click="runEval" data-obs-arg="${esc(agentId)}" data-obs-arg2="${esc(prompt)}">${rows.length ? "Re-evaluate" : "Evaluate"}</button>`;
     const title = prompt ? `Prompt <code>${esc(prompt)}</code>` : "Prompt";
     const emptyMsg = `Not evaluated yet${prompt ? ` for <code>${esc(prompt)}</code>` : ""} at <b>Version ${esc(String(sel))}</b>. Click <b>Evaluate</b> to score it.`;
     return `<div style="border-top:1px solid #eef0f3;padding-top:10px;margin-top:10px">
@@ -1575,7 +1601,7 @@
   async function refreshEval(agentId, sid, version) {
     try { const d = await api(`/api/sessions/${sid}/telemetry`); flowCalls = d.calls || []; }
     catch (e) { return; }
-    if ($("obsIOBody")) $("obsIOBody").innerHTML = agentIOBody(agentId, version);
+    if ($("obsIOBody")) setHtml($("obsIOBody"), agentIOBody(agentId, version));
   }
 
   // ---- the modal itself ------------------------------------------------------
@@ -1587,7 +1613,7 @@
       `<option value="${v}"${v === sel ? " selected" : ""}>Version ${esc(String(v))}` +
       `${v === versions[versions.length - 1] ? " (latest)" : ""}${v === 1 ? " · initial" : ""}</option>`).join("");
     return `<div class="obs-vercontrols"><label for="obsVerSel">Show version</label>
-      <select id="obsVerSel" class="obs-verselect" onchange="obsPickVersion(${jsq(agentId)}, Number(this.value))">${opts}</select>
+      <select id="obsVerSel" class="obs-verselect" data-obs-change="pickVersion" data-obs-arg="${esc(agentId)}">${opts}</select>
       <span class="obs-vercount">${versions.length} versions</span></div>`;
   }
 
@@ -1600,13 +1626,13 @@
         <div class="obs-modal-head">
           <div><div class="mt">${esc(friendlyAgent(agentId))}</div>
             <div class="ms">System prompt · input · output · features · evaluation${versions.length > 1 ? " — pick a version" : ""}</div></div>
-          <button class="obs-modal-x" onclick="obsCloseModal()" aria-label="Close">✕</button>
+          <button class="obs-modal-x" data-obs-click="closeModal" aria-label="Close">✕</button>
         </div>
         <div class="obs-modal-body">${versionPicker(agentId, sel)}<div id="obsIOBody">${agentIOBody(agentId, sel)}</div></div>
       </div></div>`;
     let host = $("obsModalHost");
     if (!host) { host = document.createElement("div"); host.id = "obsModalHost"; document.body.appendChild(host); }
-    host.innerHTML = html;
+    setHtml(host, html);
     $("obsModalBack").addEventListener("mousedown", (e) => { if (e.target.id === "obsModalBack") closeModal(); });
     document.addEventListener("keydown", escClose);
   }
@@ -1618,7 +1644,7 @@
   function pickVersion(agentId, v) {
     selectedVersion[agentId] = v;
     const el = $("obsIOBody");
-    if (el) el.innerHTML = agentIOBody(agentId, v);
+    if (el) setHtml(el, agentIOBody(agentId, v));
   }
   function escClose(e) { if (e.key === "Escape") closeModal(); }
   function closeModal() {
@@ -1644,7 +1670,7 @@
     if (available === false) {
       return `<span class="obs-sesslink obs-sesslink-dead" title="This run is no longer available (aged out of retention or deleted) — nothing to open">${s} · n/a</span>`;
     }
-    return `<a href="#" class="obs-sesslink" onclick="obsOpenSession(${jsq(sid)});return false;" title="Open run detail for ${s}">${s}</a>`;
+    return `<a href="#" class="obs-sesslink" data-obs-click="openSession" data-obs-arg="${esc(sid)}" title="Open run detail for ${s}">${s}</a>`;
   }
 
   function sectionHead(title, subtitle, n) {
@@ -1785,9 +1811,9 @@
     if (!el) return;
     try {
       const data = await api("/api/insights");
-      el.innerHTML = insightsHtml(data || {});
+      setHtml(el, insightsHtml(data || {}));
     } catch (e) {
-      el.innerHTML = `<div class="obs-note warn" style="margin:0">Couldn't load insights: ${esc(e.message)}</div>`;
+      setHtml(el, `<div class="obs-note warn" style="margin:0">Couldn't load insights: ${esc(e.message)}</div>`);
     }
   }
 
@@ -1799,10 +1825,10 @@
         body: JSON.stringify({ lookbackHours: lookback }),
       });
       if (r && r.ok === false) {
-        if ($("obsInsightsBody")) $("obsInsightsBody").innerHTML = `<div class="obs-note warn" style="margin:0">${esc(r.error || "Insights is not available here.")}</div>`;
+        if ($("obsInsightsBody")) setHtml($("obsInsightsBody"), `<div class="obs-note warn" style="margin:0">${esc(r.error || "Insights is not available here.")}</div>`);
         return;
       }
-      if ($("obsInsightsBody")) $("obsInsightsBody").innerHTML = `<div class="obs-note" style="margin:0"><span class="obs-mchip">Running…</span> analyzing the last ${lookback}h of runs. This takes a few minutes — click <b>Refresh</b> to check.</div>`;
+      if ($("obsInsightsBody")) setHtml($("obsInsightsBody"), `<div class="obs-note" style="margin:0"><span class="obs-mchip">Running…</span> analyzing the last ${lookback}h of runs. This takes a few minutes — click <b>Refresh</b> to check.</div>`);
       [60, 120, 180, 240].forEach((s) => setTimeout(loadInsights, s * 1000));
     } catch (e) {
       alert("Couldn't start insights: " + e.message);
@@ -1810,6 +1836,50 @@
   }
 
   // ---- the island's contract with the React shell ---------------------------
+  // ---- actions ---------------------------------------------------------------
+  /* The controls' handlers, by the name a template puts in data-obs-<event>. One
+     delegated listener per event on document covers the panel and the Prompts & I/O
+     modal alike; closest() picks the innermost control, so a button inside a clickable
+     row runs its own action and not the row's (what stopPropagation used to do). */
+  /* A Map, keyed "<event>:<action>", rather than an object: a name read from the DOM
+     can only ever select one of these entries, never an inherited property such as
+     "constructor" or "__proto__". */
+  const ACTIONS = new Map([
+    ["click:goto", (el) => goto(el.dataset.obsArg)],
+    ["click:loadOverview", () => loadOverview()],
+    ["click:exportOverview", (el) => exportOverview(el.dataset.obsArg)],
+    ["click:loadFlow", () => loadFlow()],
+    ["click:exportFlow", (el) => exportFlow(el.dataset.obsArg)],
+    ["click:runInsights", () => runInsights()],
+    ["click:loadInsights", () => loadInsights()],
+    ["click:toggleAgent", (el) => toggleAgent(el.dataset.obsArg)],
+    ["click:openAgentIO", (el) => openAgentIO(el.dataset.obsArg)],
+    ["click:copyPre", (el) => copyPre(el)],
+    ["click:runEval", (el) => runEval(el.dataset.obsArg, el.dataset.obsArg2 || "")],
+    ["click:closeModal", () => closeModal()],
+    ["click:openSession", (el) => openSession(el.dataset.obsArg)],
+    ["input:reproject", () => reproject()],
+    ["change:pickVersion", (el) => pickVersion(el.dataset.obsArg, Number(el.value))],
+  ]);
+  // Actions whose element has a default the old inline handler cancelled.
+  const PREVENT_DEFAULT = new Set(["click:copyPre", "click:openSession"]);
+  function onAction(ev) {
+    const t = ev.target;
+    const attr = "data-obs-" + ev.type;
+    const el = t && t.closest ? t.closest("[" + attr + "]") : null;
+    if (!el) return;
+    const key = ev.type + ":" + el.getAttribute(attr);
+    const run = ACTIONS.get(key);
+    if (!run) return;
+    if (PREVENT_DEFAULT.has(key)) ev.preventDefault();
+    run(el);
+  }
+  let actionsBound = false;
+  function bindActions() {
+    if (actionsBound) return;
+    actionsBound = true;
+    ["click", "input", "change"].forEach((type) => document.addEventListener(type, onAction));
+  }
   window.ObservabilityIsland = { mount: mount };
 
   // ---- the handlers this module's own inline HTML calls ---------------------

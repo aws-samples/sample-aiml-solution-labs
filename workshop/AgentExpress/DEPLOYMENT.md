@@ -51,7 +51,7 @@ source of truth. They create:
   Claude Sonnet 5.5 on a Builder console (the Assistant), and,
   with the tool plane, the embedding model (default Titan Text Embeddings V2, overridable with
   `embeddingModel` on the `kb` tool). Deploys and KB ingestion fail without both
-- Terraform 1.10+ (S3 native locking, `use_lockfile`), or the AWS CDK CLI (`npm i -g aws-cdk`)
+- Terraform 1.10+ (S3 native locking, `use_lockfile`), or the AWS CDK CLI (`npm i -g aws-cdk@2.1144.0`)
 
 ## Identity provider
 
@@ -479,7 +479,7 @@ cdk destroy                              # CDK; leaves Transaction Search enable
 
 `teardown.sh` is best-effort and idempotent. A re-deploy gets a new UI URL; re-create your login
 user. All data is removed, with the log groups of Lambdas this project creates (retention
-`log_retention_days` / `LOG_RETENTION`, default 30 days). Left behind are log groups it does not
+`log_retention_days` / `LOG_RETENTION`, default 365 days). Left behind are log groups it does not
 create (`/aws/bedrock-agentcore/runtimes/<runtime>-DEFAULT`, framework helper Lambdas):
 
 ```bash

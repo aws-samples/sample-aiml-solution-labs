@@ -544,7 +544,10 @@ export class ToolPlane extends Construct {
           "bedrock-agentcore:GetPolicyEngine",
           "bedrock-agentcore:ListPolicies",
           "bedrock-agentcore:GetPolicy",
-          "bedrock-agentcore:*Authorize*",
+          // AuthorizeAction on each tool call, PartiallyAuthorizeActions to filter
+          // tools/list. Named explicitly rather than globbed (least privilege).
+          "bedrock-agentcore:AuthorizeAction",
+          "bedrock-agentcore:PartiallyAuthorizeActions",
         ],
         resources: [
           `arn:aws:bedrock-agentcore:${region}:${account}:policy-engine/*`,
@@ -628,6 +631,8 @@ export class ToolPlane extends Construct {
           action: "lambda:InvokeFunction",
           principal: "bedrock-agentcore.amazonaws.com",
           sourceAccount: account,
+          // Only AgentCore Gateways in this account and Region (mirrors Terraform).
+          sourceArn: `arn:aws:bedrock-agentcore:${region}:${account}:gateway/*`,
         });
       }
     }
@@ -1041,6 +1046,7 @@ export class ToolPlane extends Construct {
         principal: new iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
         action: "lambda:InvokeFunction",
         sourceAccount: account,
+        sourceArn: `arn:aws:bedrock-agentcore:${region}:${account}:gateway/*`,
       });
     }
 
@@ -1218,6 +1224,7 @@ export class ToolPlane extends Construct {
           action: "lambda:InvokeFunction",
           principal: "bedrock-agentcore.amazonaws.com",
           sourceAccount: account,
+          sourceArn: `arn:aws:bedrock-agentcore:${region}:${account}:gateway/*`,
         });
       }
     }
@@ -1700,7 +1707,7 @@ export function cedarStatement(name: string, spec: ToolSpec, gatewayArn: string)
  * file — the reverse import would be circular. cdk/test/parity.test.ts asserts the two
  * stay equal.
  */
-export const LOG_RETENTION = logs.RetentionDays.ONE_MONTH;
+export const LOG_RETENTION = logs.RetentionDays.ONE_YEAR;
 
 export const KB_NON_FILTERABLE = ["AMAZON_BEDROCK_TEXT", "AMAZON_BEDROCK_METADATA"];
 

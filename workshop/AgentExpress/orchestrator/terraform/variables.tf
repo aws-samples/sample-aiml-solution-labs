@@ -42,9 +42,12 @@ variable "log_retention_days" {
     accruing cost forever. Verified: a full destroy of this stack orphaned eight such
     groups. Declaring them here makes them stack-owned, so they are retained for this
     many days and removed with everything else.
+
+    One year by default, the retention most security baselines ask for (Checkov
+    CKV_AWS_338). Lower it to cut storage cost where you do not need that history.
   EOT
   type        = number
-  default     = 30
+  default     = 365
 }
 
 variable "transaction_search_indexing_percentage" {

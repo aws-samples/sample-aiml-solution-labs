@@ -24,6 +24,7 @@ import {
   aws_codebuild as codebuild,
   aws_dynamodb as dynamodb,
   aws_iam as iam,
+  aws_kms as kms,
   aws_lambda as lambda,
   aws_logs as logs,
   aws_s3 as s3,
@@ -80,6 +81,8 @@ export interface BuilderPlaneProps {
   agentName: string;
   orchRoot: string;
   logRetention: logs.RetentionDays;
+  /** The stack's data key (DataKey): the builds table and the deploy project use it. */
+  dataKey: kms.IKey;
 }
 
 export class BuilderPlane extends Construct {
@@ -99,6 +102,8 @@ export class BuilderPlane extends Construct {
 
     this.table = new dynamodb.Table(this, "BuildsTable", {
       tableName: `${agentName}_builds`,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: props.dataKey,
       partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
       sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -139,6 +144,7 @@ export class BuilderPlane extends Construct {
       projectName,
       description: "Deploys and destroys AgentExpress Builder builds, one stack each",
       buildSpec: codebuild.BuildSpec.fromObject(buildSpecObject(props.orchRoot)),
+      encryptionKey: props.dataKey,
       environment: {
         // ARM, because the AgentCore runtime image is linux/arm64 and building it
         // natively is far faster than under emulation. Privileged for Docker.
@@ -227,6 +233,8 @@ export class BuilderPlane extends Construct {
     // Terraform path: the documented deploy permissions — plus read-only everywhere,
     // because a refresh reads far more of each resource than the write permissions name
     // (every Get* on a bucket, tags on a log group...), and a read gap fails the apply.
+    // SAMPLE: ReadOnlyAccess reads every service in the account. For production, replace
+    // it with a read policy covering only the services your workflows deploy.
     role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName("ReadOnlyAccess"));
     deployPolicyChunks(props.orchRoot).forEach((statements, i) => {
       role.addManagedPolicy(new iam.ManagedPolicy(this, `TerraformDeploy${i}`, {

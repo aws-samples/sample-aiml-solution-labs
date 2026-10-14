@@ -94,6 +94,8 @@ resource "aws_secretsmanager_secret" "triggers" {
   name_prefix             = "agentexpress/${var.agent_name}/triggers-"
   description             = "Webhook trigger secrets for ${var.agent_name} (bff/triggers.py)"
   recovery_window_in_days = 0
+
+  kms_key_id = aws_kms_key.data.arn
 }
 
 # --- schedule ----------------------------------------------------------------------------
@@ -121,14 +123,21 @@ resource "aws_iam_role_policy" "trigger_scheduler" {
       Effect   = "Allow"
       Action   = ["lambda:InvokeFunction"]
       Resource = aws_lambda_function.bff.arn
+      }, {
+      # The schedule's payload is encrypted with the data key (kms.tf); Scheduler decrypts
+      # it as this role, and does not use grants.
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt"]
+      Resource = aws_kms_key.data.arn
     }]
   })
 }
 
 resource "aws_scheduler_schedule" "trigger" {
-  # checkov:skip=CKV_AWS_297:The schedule's input is the trigger's name and two Scheduler placeholders, nothing secret; AWS-owned encryption applies.
-  for_each                     = local.schedule_triggers
-  name                         = local.trigger_resource_name[each.key]
+  for_each = local.schedule_triggers
+  name     = local.trigger_resource_name[each.key]
+  # Scheduler does not use grants: the execution role decrypts in IAM (trigger_scheduler).
+  kms_key_arn                  = aws_kms_key.data.arn
   schedule_expression          = each.value.expression
   schedule_expression_timezone = try(each.value.timezone, "UTC")
   state                        = local.trigger_on[each.key] ? "ENABLED" : "DISABLED"

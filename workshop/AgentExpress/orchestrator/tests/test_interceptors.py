@@ -12,8 +12,10 @@ What has to hold:
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
+import tempfile
 from pathlib import Path
 
 import codecheck  # bff/ is on sys.path (conftest)
@@ -29,9 +31,14 @@ TEMPLATES = ORCH / "web" / "src" / "builder" / "interceptor-templates"
 
 def load(source: str):
     """The handler module of a generated interceptor."""
-    ns: dict = {"__name__": "interceptor"}
-    exec(compile(source, "handler.py", "exec"), ns)  # noqa: S102 - the code under test
-    return ns["lambda_handler"]
+    # Imported from a file, the way Lambda loads it, rather than exec'd from a string.
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "handler.py"
+        path.write_text(source)
+        spec = importlib.util.spec_from_file_location("interceptor", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    return mod.lambda_handler
 
 
 def case(name: str):
@@ -154,19 +161,19 @@ def test_with_nothing_checked_an_answer_passes_unchanged():
 
 def test_redact_masks_only_the_types_checked():
     h = case("response: redact")
-    text = ("Mail jane.doe@example.com, call 555-123-4567, card 4111 1111 1111 1111, "
+    text = ("Mail jane.doe@example.com, call 202-555-0123, card 4111 1111 1111 1111, "
             "order 1234567890123456.")
     out = answered(h(res({"content": [{"type": "text", "text": text}]}), None))
     got = out["body"]["result"]["content"][0]["text"]
     assert "jane.doe" not in got and "4111" not in got
-    assert "555-123-4567" in got                      # phone is not checked in this case
+    assert "202-555-0123" in got                      # phone is not checked in this case
     assert "1234567890123456" in got                  # fails the Luhn check: not a card
     assert got.count("***") == 2
 
 
 def test_redact_everything_by_default():
     out = answered(case("response: everything")(res({"content": [{"type": "text",
-        "text": "ssn 123-45-6789 phone (555) 123-4567"}]}), None))
+        "text": "ssn 123-45-6789 phone (202) 555-0123"}]}), None))
     assert out["body"]["result"]["content"][0]["text"] == "ssn [REDACTED] phone [REDACTED]"
 
 

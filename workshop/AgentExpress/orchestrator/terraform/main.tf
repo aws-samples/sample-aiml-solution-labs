@@ -68,6 +68,12 @@ resource "aws_ecr_repository" "orchestrator" {
   image_scanning_configuration {
     scan_on_push = true
   }
+
+  # Changing a repository's encryption replaces it; the next apply pushes the image again.
+  encryption_configuration {
+    encryption_type = "KMS"
+    kms_key         = aws_kms_key.data.arn
+  }
 }
 
 # --- Build & push the ARM64 image -----------------------------------------
@@ -141,9 +147,10 @@ resource "aws_iam_role_policy" "runtime" {
         Resource = [aws_ecr_repository.orchestrator[0].arn]
       },
       {
-        Sid      = "ECRTokenAccess"
-        Effect   = "Allow"
-        Action   = ["ecr:GetAuthorizationToken"]
+        Sid    = "ECRTokenAccess"
+        Effect = "Allow"
+        # GetAuthorizationToken has no resource type in IAM, so it must be "*"; pulls are repo-scoped above.
+        Action   = ["ecr:GetAuthorizationToken"] # nosemgrep
         Resource = "*"
       },
       {
@@ -157,9 +164,10 @@ resource "aws_iam_role_policy" "runtime" {
         # own log group. Without it, unified spans never reach CloudWatch. (Docs:
         # observability-configure — "Span destination for agents hosted in
         # AgentCore runtime".) PutResourcePolicy is account-scoped -> Resource "*".
-        Sid      = "AgentCoreUnifiedSpanDelivery"
-        Effect   = "Allow"
-        Action   = ["logs:PutResourcePolicy"]
+        Sid    = "AgentCoreUnifiedSpanDelivery"
+        Effect = "Allow"
+        # PutResourcePolicy is account-scoped in IAM (no resource type); needed for AgentCore span delivery.
+        Action   = ["logs:PutResourcePolicy"] # nosemgrep
         Resource = ["*"]
       },
       {
@@ -169,16 +177,30 @@ resource "aws_iam_role_policy" "runtime" {
       },
       {
         # AgentCore Evaluations: the runtime scores an agent's run (LLM-as-judge
-        # over its OTEL spans / persisted prompt I/O). Evaluate uses the built-in
-        # evaluators (public ARNs); the Logs Insights query downloads the session's
-        # spans from the runtime log group. GetQueryResults/StopQuery are not
-        # resource-scopable, so this statement uses Resource "*".
-        Sid    = "AgentCoreEvaluations"
+        # over its OTEL spans / persisted prompt I/O). Evaluate takes an evaluator ARN:
+        # the built-in ones are public (no Region or account), custom ones live here.
+        Sid      = "AgentCoreEvaluations"
+        Effect   = "Allow"
+        Action   = ["bedrock-agentcore:Evaluate"]
+        Resource = ["arn:aws:bedrock-agentcore:*:*:evaluator/*"]
+      },
+      {
+        # The Logs Insights query that downloads a session's spans: only this
+        # deployment's runtime log groups and the Transaction Search group.
+        Sid    = "AgentCoreEvaluationsQuery"
         Effect = "Allow"
-        Action = [
-          "bedrock-agentcore:Evaluate",
-          "logs:DescribeLogGroups", "logs:StartQuery", "logs:GetQueryResults", "logs:StopQuery"
+        Action = ["logs:StartQuery"]
+        Resource = [
+          "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/${var.agent_name}-*",
+          "arn:aws:logs:${var.region}:${local.account_id}:log-group:aws/spans"
         ]
+      },
+      {
+        # DescribeLogGroups and StopQuery have no resource type in IAM; GetQueryResults
+        # takes only a query id. All three are read-or-cancel, so "*".
+        Sid      = "AgentCoreEvaluationsQueryResults"
+        Effect   = "Allow"
+        Action   = ["logs:DescribeLogGroups", "logs:GetQueryResults", "logs:StopQuery"]
         Resource = ["*"]
       },
       {
@@ -231,9 +253,10 @@ resource "aws_iam_role_policy" "runtime" {
         ]
       },
       {
-        Sid      = "AgentCoreIdentitySecrets"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:GetSecretValue"]
+        Sid    = "AgentCoreIdentitySecrets"
+        Effect = "Allow"
+        # Only AgentCore Identity's own token-vault secrets in this account and Region.
+        Action   = ["secretsmanager:GetSecretValue"] # nosemgrep
         Resource = ["arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:bedrock-agentcore-identity!*"]
       },
       {

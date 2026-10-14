@@ -6,6 +6,7 @@ import { Construct } from "constructs";
 import {
   aws_dynamodb as dynamodb,
   aws_iam as iam,
+  aws_kms as kms,
   aws_lambda as lambda,
   aws_ecr_assets as ecrAssets,
   aws_s3 as s3,
@@ -43,7 +44,7 @@ import { keyDefault, keyDefaultFor } from "./defaults";
  * was verified to orphan eight such groups. Keep in step with
  * terraform/variables.tf var.log_retention_days.
  */
-const LOG_RETENTION = logs.RetentionDays.ONE_MONTH;
+const LOG_RETENTION = logs.RetentionDays.ONE_YEAR;
 
 /** The BFF API's $default stage throttle (requests/s, burst). Keep in step with
  *  terraform/variables.tf var.api_throttle_rate / var.api_throttle_burst. */
@@ -227,7 +228,7 @@ export function validateTools(
       if (t.schemaS3Uri && !/^s3:\/\/[a-z0-9.-]{3,63}\/.+/.test(String(t.schemaS3Uri))) {
         throw new Error(
           `workflow.json tools.${name} has type="openapi" and so requires "schemaS3Uri": a full ` +
-            `s3:// URI including the object key, e.g. "s3://my-bucket/schemas/orders.json". ` +
+            `s3:// URI including the object key, e.g. "s3://amzn-s3-demo-bucket/schemas/orders.json". ` +
             `Got: ${JSON.stringify(t.schemaS3Uri)}.`
         );
       }
@@ -1407,6 +1408,30 @@ export class OrchestratorStack extends cdk.Stack {
     // answer the app would reach on its own. It used to be the cdk.json literal, which
     // silently overrode the workflow's defaultModel on every deployment.
     const region = cdk.Stack.of(this).region;
+    // One customer managed key for data at rest: the tables, the secrets, the Builder's
+    // CodeBuild project and scheduled-trigger payloads. Like an AWS managed key, any
+    // principal in this account may use it, but only through those services acting on
+    // its behalf, so existing table and secret grants keep working. Mirrors
+    // terraform/kms.tf (aws_kms_key.data).
+    const dataKey = new kms.Key(this, "DataKey", {
+      description: "AgentExpress data at rest: tables, secrets, builds and schedules",
+      enableKeyRotation: true,
+      pendingWindow: cdk.Duration.days(7),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    dataKey.addToResourcePolicy(new iam.PolicyStatement({
+      sid: "AccountUsesKeyThroughItsServices",
+      principals: [new iam.AnyPrincipal()],
+      actions: ["kms:Encrypt", "kms:Decrypt", "kms:ReEncrypt*", "kms:GenerateDataKey*",
+        "kms:CreateGrant", "kms:DescribeKey"],
+      resources: ["*"],
+      conditions: {
+        StringEquals: { "kms:CallerAccount": cdk.Stack.of(this).account },
+        StringLike: { "kms:ViaService": ["dynamodb.*.amazonaws.com",
+          `secretsmanager.${region}.amazonaws.com`, `codebuild.${region}.amazonaws.com`,
+          `s3.${region}.amazonaws.com`] },
+      },
+    }));
     const modelId = vocab.regionalModelId(
       props.modelId || workflow.orchestrator?.defaultModel || keyDefault<string>("orchestrator", "defaultModel"),
       cdk.Token.isUnresolved(region) ? undefined : region
@@ -1606,12 +1631,17 @@ export class OrchestratorStack extends cdk.Stack {
           },
         });
         if (props.selfSignUp) {
-          // Any pool in this account/region, not pool.userPoolArn: the pool references
-          // the function as its trigger, so naming the pool here would be a cycle.
-          signup.addToRolePolicy(new iam.PolicyStatement({
-            actions: ["cognito-idp:AdminAddUserToGroup"],
-            resources: [`arn:aws:cognito-idp:${this.region}:${this.account}:userpool/*`],
-          }));
+          // Scoped to THIS pool, in a policy of its own: the pool references the function
+          // as its trigger, and the function depends only on its role's default policy,
+          // so a separate Policy can name pool.userPoolArn without a cycle. Mirrors
+          // aws_iam_role_policy.signup_groups in terraform/signup.tf.
+          new iam.Policy(this, "SignupGroupsPolicy", {
+            roles: [signup.role!],
+            statements: [new iam.PolicyStatement({
+              actions: ["cognito-idp:AdminAddUserToGroup"],
+              resources: [pool.userPoolArn],
+            })],
+          });
           pool.addTrigger(cognito.UserPoolOperation.POST_CONFIRMATION, signup);
         }
         if (auditSignIns) {
@@ -1773,6 +1803,8 @@ export class OrchestratorStack extends cdk.Stack {
 
       // ---- DynamoDB: status, events, telemetry --------------------------------
       const statusTable = new dynamodb.Table(this, "StatusTable", {
+        encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+        encryptionKey: dataKey,
         tableName: `${agentName}_status`,
         partitionKey: { name: "session_id", type: dynamodb.AttributeType.STRING },
         billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -1783,6 +1815,8 @@ export class OrchestratorStack extends cdk.Stack {
       });
 
       const eventsTable = new dynamodb.Table(this, "EventsTable", {
+        encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+        encryptionKey: dataKey,
         tableName: `${agentName}_events`,
         partitionKey: { name: "session_id", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "ts", type: dynamodb.AttributeType.STRING },
@@ -1794,6 +1828,8 @@ export class OrchestratorStack extends cdk.Stack {
       });
 
       const telemetryTable = new dynamodb.Table(this, "TelemetryTable", {
+        encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+        encryptionKey: dataKey,
         tableName: `${agentName}_telemetry`,
         partitionKey: { name: "session_id", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
@@ -1814,6 +1850,8 @@ export class OrchestratorStack extends cdk.Stack {
       // ---- Insights findings store (AgentCore Optimization) -------------------
       // One reserved item (id="latest") holding the newest cross-run findings.
       const insightsTable = new dynamodb.Table(this, "InsightsTable", {
+        encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+        encryptionKey: dataKey,
         tableName: `${agentName}_insights`,
         partitionKey: { name: "id", type: dynamodb.AttributeType.STRING },
         billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
@@ -2114,33 +2152,48 @@ export class OrchestratorStack extends cdk.Stack {
         ],
         resources: [semanticMemoryArn, `${semanticMemoryArn}/*`, ...namedMemoryArns],
       });
-      // Evaluations + Insights: Evaluate/BatchEvaluation resources are created
-      // dynamically and the Logs query verbs aren't resource-scopable, so "*".
+      // Evaluations + Insights, scoped where IAM allows it. Mirrors AgentCoreEvaluations*
+      // in terraform/main.tf and InsightsBatchEvaluation* / OptimizationLogs* in
+      // terraform/optimization.tf.
+      const evaluationsScoped = [
+        // Evaluate takes an evaluator ARN: built-in ones are public, custom ones live here.
+        new iam.PolicyStatement({ actions: ["bedrock-agentcore:Evaluate"],
+          resources: ["arn:aws:bedrock-agentcore:*:*:evaluator/*"] }),
+        new iam.PolicyStatement({ actions: ["bedrock-agentcore:GetBatchEvaluation"],
+          resources: [`arn:aws:bedrock-agentcore:${region}:${this.account}:batch-evaluate/*`] }),
+        // Read the spans Evaluations/Insights analyze: log groups in this account only.
+        new iam.PolicyStatement({
+          actions: ["logs:StartQuery", "logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogGroups"],
+          resources: [`arn:aws:logs:${region}:${this.account}:log-group:*`],
+        }),
+      ];
+      // StartBatchEvaluation/ListBatchEvaluations and StopQuery have no resource type in
+      // IAM (a batch evaluation's id is assigned when it starts); GetQueryResults takes
+      // only a query id. So these four must be "*" — do not copy that to other actions.
       const evaluationsAndInsights = new iam.PolicyStatement({
         actions: [
-          "bedrock-agentcore:Evaluate",
           "bedrock-agentcore:StartBatchEvaluation",
-          "bedrock-agentcore:GetBatchEvaluation",
           "bedrock-agentcore:ListBatchEvaluations",
-          // Read the spans Evaluations/Insights analyze.
-          "logs:DescribeLogGroups",
-          "logs:StartQuery",
           "logs:GetQueryResults",
           "logs:StopQuery",
-          "logs:FilterLogEvents",
-          "logs:GetLogEvents",
-          // StartBatchEvaluation WRITES its output to a CloudWatch log group it
-          // creates on the caller's behalf (a forward access session), so these are
-          // required too — without them Insights fails with
-          // "FAS credentials do not have permission to create CloudWatch log groups".
-          // Note this cannot be scoped to the runtime log-group prefix: the group
-          // BatchEvaluation creates is outside it.
+        ],
+        resources: ["*"],
+      });
+      // StartBatchEvaluation WRITES its output to a CloudWatch log group it creates
+      // on the caller's behalf (a forward access session), so these are required too
+      // — without them Insights fails with "FAS credentials do not have permission
+      // to create CloudWatch log groups". The group is outside the runtime prefix
+      // (default /aws/bedrock-agentcore/evaluations/results/<id>), so the write verbs
+      // are scoped to the AgentCore log-group prefix in this account and Region.
+      // Mirrors OptimizationLogsWrite in terraform/optimization.tf.
+      const evaluationsLogsWrite = new iam.PolicyStatement({
+        actions: [
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
           "logs:PutRetentionPolicy",
         ],
-        resources: ["*"],
+        resources: [`arn:aws:logs:${region}:${this.account}:log-group:/aws/bedrock-agentcore/*`],
       });
 
       // ---- Tool plane: Gateway + Knowledge Base + Cedar policy ----------------
@@ -2233,6 +2286,7 @@ export class OrchestratorStack extends cdk.Stack {
         const secret = new secretsmanager.Secret(this, cid, {
           description: `Runtime credentials for ${agentName} (app/common/runtime_secret.py)`,
           secretStringValue: cdk.SecretValue.unsafePlainText(this.toJsonString(values)),
+          encryptionKey: dataKey,
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
         secret.grantRead(role);
@@ -2505,6 +2559,8 @@ export class OrchestratorStack extends cdk.Stack {
         guardrailApply,
         longTermMemory,
         evaluationsAndInsights,
+        ...evaluationsScoped,
+        evaluationsLogsWrite,
         ...(agentIdentities.length ? identityPerms : []),
       ].forEach((s) => runtimeRole.addToPolicy(s));
       if (assetsBucket) {
@@ -2777,7 +2833,7 @@ export class OrchestratorStack extends cdk.Stack {
 
     // ---- Builder control plane (builds store + deploy project) ----------------
     const builderPlane = props.builder === false ? undefined
-      : new BuilderPlane(this, "Builder", { agentName, orchRoot: ORCH_ROOT, logRetention: LOG_RETENTION });
+      : new BuilderPlane(this, "Builder", { agentName, orchRoot: ORCH_ROOT, logRetention: LOG_RETENTION, dataKey });
     builderPlane?.grantConsole(bff);
     // s3:// paths in an AgentExpress Assistant message: read only these (bff/designer.py).
     const designerS3 = builderPlane ? (props.designerS3Buckets ?? []) : [];
@@ -2816,6 +2872,8 @@ export class OrchestratorStack extends cdk.Stack {
     // builds. Mirrors aws_dynamodb_table.audit in terraform/audit.tf.
     if (!builderPlane) {
       const auditTable = new dynamodb.Table(this, "AuditTable", {
+        encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+        encryptionKey: dataKey,
         tableName: `${agentName}_audit`,
         partitionKey: { name: "pk", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "sk", type: dynamodb.AttributeType.STRING },
@@ -2855,6 +2913,7 @@ export class OrchestratorStack extends cdk.Stack {
         const hookSecret = new secretsmanager.Secret(this, "TriggerSecret", {
           description: `Webhook trigger secrets for ${agentName} (bff/triggers.py)`,
           secretStringValue: cdk.SecretValue.unsafePlainText("{}"),
+          encryptionKey: dataKey,
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
         hookSecret.grantRead(bff);
@@ -2877,8 +2936,11 @@ export class OrchestratorStack extends cdk.Stack {
         assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com", {
           conditions: { StringEquals: { "aws:SourceAccount": this.account } },
         }),
-        inlinePolicies: { invoke: new iam.PolicyDocument({ statements: [new iam.PolicyStatement({
-          actions: ["lambda:InvokeFunction"], resources: [bffArn] })] }) },
+        inlinePolicies: { invoke: new iam.PolicyDocument({ statements: [
+          new iam.PolicyStatement({ actions: ["lambda:InvokeFunction"], resources: [bffArn] }),
+          // The payload is encrypted with the data key; Scheduler decrypts as this role.
+          new iam.PolicyStatement({ actions: ["kms:Decrypt"], resources: [dataKey.keyArn] }),
+        ] }) },
       }) : undefined;
       const queues: Record<string, string> = {};
       for (const name of triggerNames) {
@@ -2890,6 +2952,8 @@ export class OrchestratorStack extends cdk.Stack {
             scheduleExpression: spec.expression!,
             scheduleExpressionTimezone: spec.timezone ?? "UTC",
             flexibleTimeWindow: { mode: "OFF" },
+            // Scheduler does not use grants: its execution role decrypts in IAM (below).
+            kmsKeyArn: dataKey.keyArn,
             state: spec.enabled === false ? "DISABLED" : "ENABLED",
             target: {
               arn: bff.functionArn, roleArn: schedulerRole!.roleArn,
@@ -3092,6 +3156,20 @@ export class OrchestratorStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: true,
     });
+    // CloudFront standard logs. CloudFront delivers with an object ACL, so this bucket
+    // allows ACLs (BucketOwnerPreferred) while public access stays fully blocked; logs
+    // expire after a year, like the stack's log groups. Mirrors aws_s3_bucket.ui_logs.
+    const uiLogsBucket = new s3.Bucket(this, "UiLogsBucket", {
+      // No fixed name: <prefix>-ui-logs-<account>-<region> runs past S3's 63 characters.
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      objectOwnership: s3.ObjectOwnership.BUCKET_OWNER_PREFERRED,
+      lifecycleRules: [{ id: "expire-access-logs", expiration: cdk.Duration.days(365),
+        abortIncompleteMultipartUploadAfter: cdk.Duration.days(1) }],
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
 
     const apiDomain = cdk.Fn.select(2, cdk.Fn.split("/", api.apiEndpoint));
     // Security headers on every response, UI and /api alike. No script-src policy: the
@@ -3115,6 +3193,9 @@ export class OrchestratorStack extends cdk.Stack {
     });
     const distribution: cf.Distribution = new cf.Distribution(this, "Ui", {
       comment: "Multi-agent orchestrator UI",
+      enableLogging: true,
+      logBucket: uiLogsBucket,
+      logFilePrefix: "cloudfront/",
       defaultRootObject: "index.html",
       defaultBehavior: {
         origin: origins.S3BucketOrigin.withOriginAccessControl(uiBucket),

@@ -30,6 +30,11 @@ resource "aws_dynamodb_table" "insights" {
     name = "id"
     type = "S"
   }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data.arn
+  }
 }
 
 # Runtime permissions for Insights: the findings store, the managed batch
@@ -51,32 +56,59 @@ resource "aws_iam_role_policy" "runtime_optimization" {
         Resource = [aws_dynamodb_table.insights[0].arn]
       },
       {
-        Sid    = "InsightsBatchEvaluation"
+        # StartBatchEvaluation and ListBatchEvaluations have no resource type in IAM
+        # (a batch evaluation's id is assigned when it starts), so they must be "*".
+        # Scope them if AgentCore adds resource-level support; do not copy "*" to
+        # actions that already have one.
+        Sid    = "InsightsBatchEvaluationStart"
         Effect = "Allow"
         Action = [
           "bedrock-agentcore:StartBatchEvaluation",
-          "bedrock-agentcore:GetBatchEvaluation",
           "bedrock-agentcore:ListBatchEvaluations"
         ]
         Resource = ["*"]
       },
       {
+        Sid      = "InsightsBatchEvaluationRead"
+        Effect   = "Allow"
+        Action   = ["bedrock-agentcore:GetBatchEvaluation"]
+        Resource = ["arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:batch-evaluate/*"]
+      },
+      {
         # Insights analyzes the traces the caller points it at in CloudWatch
         # Logs. DescribeLogGroups/StartQuery/GetQueryResults are also granted for
         # evaluations in main.tf; this adds the remaining log-read verbs the
-        # optimization APIs use. Query operations are not resource-scopable.
-        Sid    = "OptimizationLogsReadWrite"
+        # optimization APIs use. These take a log-group ARN, so they are scoped to
+        # this account and Region (the runtime groups and aws/spans both live here).
+        Sid    = "OptimizationLogsRead"
         Effect = "Allow"
         Action = [
           "logs:GetLogEvents", "logs:FilterLogEvents", "logs:DescribeLogGroups",
-          "logs:StartQuery", "logs:GetQueryResults",
-          # StartBatchEvaluation writes its output to a CloudWatch log group it
-          # creates on the caller's behalf (forward access session), so the
-          # runtime role needs the log-group/stream create + put verbs too.
+          "logs:StartQuery"
+        ]
+        Resource = ["arn:aws:logs:${var.region}:${local.account_id}:log-group:*"]
+      },
+      {
+        # GetQueryResults has no resource type in IAM: it must be "*".
+        Sid      = "OptimizationLogsQueryResults"
+        Effect   = "Allow"
+        Action   = ["logs:GetQueryResults"]
+        Resource = ["*"]
+      },
+      {
+        # StartBatchEvaluation writes its output to a CloudWatch log group it
+        # creates on the caller's behalf (forward access session), so the
+        # runtime role needs the log-group/stream create + put verbs too. Its
+        # default destination is /aws/bedrock-agentcore/evaluations/results/<id>,
+        # so the write verbs are scoped to the AgentCore log-group prefix in this
+        # account and Region rather than granted on every log group.
+        Sid    = "OptimizationLogsWrite"
+        Effect = "Allow"
+        Action = [
           "logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents",
           "logs:PutRetentionPolicy"
         ]
-        Resource = ["*"]
+        Resource = ["arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/*"]
       }
     ]
   })

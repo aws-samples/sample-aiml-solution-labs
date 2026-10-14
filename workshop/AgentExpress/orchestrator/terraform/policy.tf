@@ -48,7 +48,7 @@ locals {
 }
 
 resource "aws_bedrockagentcore_policy" "tool" {
-  for_each         = local.policy_enabled ? local.cedar_statements : {}
+  for_each         = { for k, v in local.cedar_statements : k => v if local.policy_enabled }
   name             = "permit_${each.key}_${local.cedar_policy_suffix}"
   description      = "Generated from workflow.json tools.${each.key}. Anything not permitted here is denied by Cedar's default-deny."
   policy_engine_id = aws_bedrockagentcore_policy_engine.main[0].policy_engine_id
@@ -140,7 +140,7 @@ resource "terraform_data" "custom_policy_validation" {
 }
 
 resource "aws_bedrockagentcore_policy" "custom" {
-  for_each         = local.policy_enabled ? local.custom_policies : {}
+  for_each         = { for k, v in local.custom_policies : k => v if local.policy_enabled }
   name             = "custom_${each.key}_${local.cedar_policy_suffix}"
   description      = substr(try(each.value.description, "") != "" ? each.value.description : "workflow.json orchestrator.policy.custom ${each.key}.", 0, 400)
   policy_engine_id = aws_bedrockagentcore_policy_engine.main[0].policy_engine_id

@@ -21,6 +21,11 @@ resource "aws_dynamodb_table" "audit" {
     name = "sk"
     type = "S"
   }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data.arn
+  }
 }
 
 resource "aws_iam_role_policy" "bff_audit" {

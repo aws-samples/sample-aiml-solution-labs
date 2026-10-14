@@ -4,6 +4,12 @@ Writes never raise — a telemetry failure must never break a workflow run. When
 TELEMETRY_TABLE is unset (local dev), writes are no-ops so the flow still runs.
 Reads and aggregation live in the BFF (bff/handler.py), which only sums the
 pre-computed cost per row.
+
+Regulated data: each record keeps the system prompt, the user input and the model output
+(that is what the Prompts & I/O inspector shows), so the table can hold whatever users type.
+If a deployment handles PHI, cardholder data or personal data, the customer is responsible
+for that table's access, retention (its TTL) and encryption meeting HIPAA, PCI DSS or GDPR
+requirements under the AWS shared responsibility model.
 """
 
 from __future__ import annotations

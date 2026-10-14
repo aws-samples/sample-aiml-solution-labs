@@ -60,7 +60,11 @@ resource "aws_iam_role_policy" "gateway" {
           "bedrock-agentcore:GetPolicyEngine",
           "bedrock-agentcore:ListPolicies",
           "bedrock-agentcore:GetPolicy",
-          "bedrock-agentcore:*Authorize*"
+          # The two actions a Gateway calls when a policy engine is attached:
+          # AuthorizeAction on each tool call, PartiallyAuthorizeActions to filter
+          # tools/list. Named explicitly rather than globbed (least privilege).
+          "bedrock-agentcore:AuthorizeAction",
+          "bedrock-agentcore:PartiallyAuthorizeActions"
         ]
         # AuthorizeAction is checked against BOTH the policy engine and the
         # gateway resource, so grant on both ARNs.

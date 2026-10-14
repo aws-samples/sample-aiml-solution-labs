@@ -70,6 +70,10 @@ def _deploy_statements() -> list[dict]:
 #: build's owner to its user pool, and delete the log groups a destroy leaves behind
 #: (named by the build's ax_<id>, which nothing else in the account carries).
 CDK_AND_RUNNER_STATEMENTS = [
+    # SAMPLE: "cloudformation:*" is scoped to the CDKToolkit stack only. For production,
+    # replace it with the actions `cdk bootstrap` calls (CreateStack, UpdateStack,
+    # DescribeStacks, DescribeStackEvents, GetTemplate, CreateChangeSet,
+    # DescribeChangeSet, ExecuteChangeSet, DeleteChangeSet, DeleteStack).
     {"Sid": "CdkBootstrapStack", "Effect": "Allow", "Action": "cloudformation:*",
      "Resource": "arn:aws:cloudformation:*:*:stack/CDKToolkit/*"},
     {"Sid": "CdkBootstrapRoles", "Effect": "Allow",
@@ -83,6 +87,11 @@ CDK_AND_RUNNER_STATEMENTS = [
                 "iam:CreatePolicyVersion", "iam:DeletePolicyVersion",
                 "iam:ListPolicyVersions"],
      "Resource": "arn:aws:iam::*:policy/cdk-hnb659fds-*"},
+    # SAMPLE: "s3:*" and "ecr:*" are scoped to the cdk-hnb659fds-* bootstrap bucket and
+    # repository only. For production, enumerate what bootstrap uses (s3:CreateBucket,
+    # s3:PutBucket*, s3:GetBucket*, s3:PutObject, s3:GetObject, s3:DeleteBucket;
+    # ecr:CreateRepository, ecr:DescribeRepositories, ecr:PutLifecyclePolicy,
+    # ecr:SetRepositoryPolicy, ecr:DeleteRepository).
     {"Sid": "CdkBootstrapStorage", "Effect": "Allow", "Action": ["s3:*", "ecr:*"],
      "Resource": ["arn:aws:s3:::cdk-hnb659fds-*", "arn:aws:ecr:*:*:repository/cdk-hnb659fds-*"]},
     {"Sid": "CdkBootstrapVersion", "Effect": "Allow",

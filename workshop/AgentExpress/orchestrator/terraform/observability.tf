@@ -53,6 +53,11 @@ resource "aws_dynamodb_table" "telemetry" {
     attribute_name = "ttl"
     enabled        = true
   }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data.arn
+  }
 }
 
 # Orchestrator runtime writes telemetry, and also READS it back: AgentCore

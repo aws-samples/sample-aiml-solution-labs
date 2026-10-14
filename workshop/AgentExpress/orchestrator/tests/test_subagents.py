@@ -209,7 +209,7 @@ def test_every_shipped_agent_declares_its_system_prompt_on_the_class(agent_id):
 
 
 def scaffold(*args: str):
-    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell  # nosec B603  # nosemgrep
         [sys.executable, str(ORCH_ROOT / "scaffold.py"), "agent", *args],
         capture_output=True, text=True, cwd=ORCH_ROOT, check=False)
 

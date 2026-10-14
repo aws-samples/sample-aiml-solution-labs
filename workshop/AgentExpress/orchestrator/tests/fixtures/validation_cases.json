@@ -3880,7 +3880,7 @@
         "secret": "payments/api-key",
         "table": "orders",
         "tableAccess": "readwrite",
-        "s3Prefix": "s3://my-bucket/refunds/",
+        "s3Prefix": "s3://amzn-s3-demo-bucket/refunds/",
         "s3Access": "read",
         "vpc": {
          "subnetIds": [
@@ -5263,7 +5263,7 @@
        "grants": {
         "table": "orders",
         "tableAccess": "readwrite",
-        "s3Prefix": "s3://my-bucket/p/"
+        "s3Prefix": "s3://amzn-s3-demo-bucket/p/"
        }
       }
      }
@@ -5329,7 +5329,7 @@
        "grants": {
         "table": "orders",
         "tableAccess": "readwrite",
-        "s3Prefix": "s3://my-bucket/p/"
+        "s3Prefix": "s3://amzn-s3-demo-bucket/p/"
        }
       },
       "policy": {
@@ -5398,7 +5398,7 @@
        "grants": {
         "table": "orders",
         "tableAccess": "readwrite",
-        "s3Prefix": "s3://my-bucket/p/"
+        "s3Prefix": "s3://amzn-s3-demo-bucket/p/"
        }
       }
      }
@@ -5467,7 +5467,7 @@
        "grants": {
         "table": "orders",
         "tableAccess": "readwrite",
-        "s3Prefix": "s3://my-bucket/p/"
+        "s3Prefix": "s3://amzn-s3-demo-bucket/p/"
        }
       }
      }
@@ -8539,7 +8539,7 @@
      {
       "type": "openapi",
       "description": "Orders.",
-      "schemaS3Uri": "s3://my-bucket/specs/orders.json",
+      "schemaS3Uri": "s3://amzn-s3-demo-bucket/specs/orders.json",
       "auth": "obo",
       "oauth": {
        "clientId": "abc",
@@ -8564,7 +8564,7 @@
      {
       "type": "openapi",
       "description": "Orders.",
-      "schemaS3Uri": "s3://my-bucket/specs/orders.json",
+      "schemaS3Uri": "s3://amzn-s3-demo-bucket/specs/orders.json",
       "auth": "obo",
       "oauth": {
        "clientId": "abc",
@@ -8690,7 +8690,7 @@
      {
       "type": "openapi",
       "description": "Orders.",
-      "schemaS3Uri": "s3://my-bucket/specs/orders.json",
+      "schemaS3Uri": "s3://amzn-s3-demo-bucket/specs/orders.json",
       "auth": "oauth2",
       "oauth": {
        "clientId": "abc",

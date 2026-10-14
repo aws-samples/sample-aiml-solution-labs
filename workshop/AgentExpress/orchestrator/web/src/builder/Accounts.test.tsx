@@ -4,15 +4,22 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+/** AWS's documented example account IDs, not real accounts. Hoisted because the
+ *  vi.mock factory below (itself hoisted above the imports) reads them. */
+const { EXAMPLE_ACCT_A, EXAMPLE_ACCT_B } = vi.hoisted(() => ({
+  EXAMPLE_ACCT_A: "111122223333",
+  EXAMPLE_ACCT_B: "444455556666",
+}));
+
 const calls: { method: string; path: string; body?: unknown }[] = [];
 let list: unknown[] = [];
 vi.mock("../api", () => {
   const answer = (method: string, path: string, body?: unknown) => {
     calls.push({ method, path, body });
     if (method === "GET" && path === "/api/accounts") return Promise.resolve(list);
-    if (method === "PUT") return Promise.resolve({ accountId: "111122223333", ...(body as object), status: "connected" });
+    if (method === "PUT") return Promise.resolve({ accountId: EXAMPLE_ACCT_A, ...(body as object), status: "connected" });
     if (path.endsWith("/launch")) {
-      return Promise.resolve({ accountId: "444455556666", region: "us-east-1", status: "pending",
+      return Promise.resolve({ accountId: EXAMPLE_ACCT_B, region: "us-east-1", status: "pending",
         launchUrl: "https://example.com/launch", templateUrl: "https://example.com/t", cli: "aws cloudformation deploy",
         stackName: "AgentExpressConnect-abcd" });
     }
@@ -29,10 +36,11 @@ vi.mock("../api", () => {
 });
 import { Accounts } from "./Accounts";
 
-const CONNECTED = { accountId: "111122223333", label: "Team sandbox", region: "eu-west-1", status: "connected",
+
+const CONNECTED = { accountId: EXAMPLE_ACCT_A, label: "Team sandbox", region: "eu-west-1", status: "connected",
   verifiedAt: "2026-09-09T10:00:00Z", stackName: "AgentExpressConnect-1111",
   builds: [{ id: "p1", name: "Claims", region: "us-west-2" }] };
-const PENDING = { accountId: "444455556666", region: "us-east-1", status: "pending", builds: [] };
+const PENDING = { accountId: EXAMPLE_ACCT_B, region: "us-east-1", status: "pending", builds: [] };
 
 beforeEach(() => { calls.length = 0; list = [CONNECTED, PENDING]; });
 

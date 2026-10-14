@@ -61,4 +61,7 @@ resource "aws_lambda_permission" "gateway_invoke_interceptor" {
   function_name  = each.value
   principal      = "bedrock-agentcore.amazonaws.com"
   source_account = local.account_id
+  # Only AgentCore Gateways in this account and Region may use the service-principal path
+  # (the Gateway normally invokes through its service role, which names this function).
+  source_arn = "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:gateway/*"
 }

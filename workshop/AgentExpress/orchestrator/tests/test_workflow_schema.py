@@ -84,7 +84,7 @@ def test_workflow_json_points_at_the_schema():
 def test_the_schema_is_in_sync_with_the_spec_it_is_generated_from():
     """`build_schema.py --check` in the gate, asserted here too so a spec edit without a
     regenerate fails the suite rather than only CI."""
-    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+    result = subprocess.run(  # noqa: S603 - fixed argv, no shell  # nosec B603  # nosemgrep
         [sys.executable, str(ORCH_ROOT / "build_schema.py"), "--check"],
         capture_output=True, text=True, cwd=ORCH_ROOT, check=False)
     assert result.returncode == 0, result.stderr or result.stdout

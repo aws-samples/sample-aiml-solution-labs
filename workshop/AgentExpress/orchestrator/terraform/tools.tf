@@ -651,7 +651,7 @@ resource "terraform_data" "tools_validation" {
     precondition {
       condition = alltrue([for n, t in local.external_openapi_tools :
       can(regex("^s3://[a-z0-9.-]{3,63}/.+", t.schema_s3_uri))])
-      error_message = "A type=\"openapi\" tool's \"schemaS3Uri\" must be a full s3:// URI including the object key, e.g. \"s3://my-bucket/schemas/orders.json\". Offending: ${join(", ", [for n, t in local.external_openapi_tools : n if !can(regex("^s3://[a-z0-9.-]{3,63}/.+", t.schema_s3_uri))])}."
+      error_message = "A type=\"openapi\" tool's \"schemaS3Uri\" must be a full s3:// URI including the object key, e.g. \"s3://amzn-s3-demo-bucket/schemas/orders.json\". Offending: ${join(", ", [for n, t in local.external_openapi_tools : n if !can(regex("^s3://[a-z0-9.-]{3,63}/.+", t.schema_s3_uri))])}."
     }
     # --- type=apigateway, and OAuth client credentials ---------------------
     # Mirrors validateTools in cdk/lib/orchestrator-stack.ts and bff/validate_build.py.
@@ -1533,6 +1533,9 @@ resource "aws_lambda_permission" "gateway_invoke_tool_lambda" {
   function_name  = local.lambda_tool_arns[each.key]
   principal      = "bedrock-agentcore.amazonaws.com"
   source_account = local.account_id
+  # Only AgentCore Gateways in this account and Region may use the service-principal path
+  # (the Gateway normally invokes through its service role, which names this function).
+  source_arn = "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}:gateway/*"
 }
 
 # --- Vaulted API keys -----------------------------------------------------

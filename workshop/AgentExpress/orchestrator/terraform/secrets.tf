@@ -23,6 +23,8 @@ resource "aws_secretsmanager_secret" "runtime" {
   name_prefix             = local.runtime_secret_prefix
   description             = "Runtime credentials for ${var.agent_name} (app/common/runtime_secret.py)"
   recovery_window_in_days = 0
+
+  kms_key_id = aws_kms_key.data.arn
 }
 
 resource "aws_secretsmanager_secret_version" "runtime" {
@@ -54,10 +56,12 @@ resource "aws_iam_role_policy" "runtime_secret" {
 # A dedicated agent's: its own Gateway client's secret when gatewayIdentity is "perAgent",
 # else the shared one. Never another agent's.
 resource "aws_secretsmanager_secret" "subagent" {
-  for_each                = local.gateway_enabled ? local.dedicated_agents : {}
+  for_each                = { for id, a in local.dedicated_agents : id => a if local.gateway_enabled }
   name_prefix             = "${local.runtime_secret_prefix}${each.key}-"
   description             = "Runtime credentials for ${var.agent_name}_${each.key} (app/common/runtime_secret.py)"
   recovery_window_in_days = 0
+
+  kms_key_id = aws_kms_key.data.arn
 }
 
 resource "aws_secretsmanager_secret_version" "subagent" {

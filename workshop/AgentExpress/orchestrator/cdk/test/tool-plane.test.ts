@@ -851,7 +851,7 @@ describe("a tool written in the build (tools.<key>.code)", () => {
     "def lambda_handler(event, context):\n    return {}\n");
   const spec: ToolSpec = {
     type: "lambda", description: "Refunds, written in the build.", arg: "question", toolSchema: [QUERY_CLAIMS],
-    code: { grants: { secret: "payments/key", table: "orders", tableAccess: "readwrite", s3Prefix: "s3://my-bucket/in/",
+    code: { grants: { secret: "payments/key", table: "orders", tableAccess: "readwrite", s3Prefix: "s3://amzn-s3-demo-bucket/in/",
       vpc: { subnetIds: ["subnet-0abc1234"], securityGroupIds: ["sg-0abc1234"] } },
       timeoutSeconds: 60, memoryMB: 512, environment: { CURRENCY: "USD" } },
   };
@@ -876,7 +876,7 @@ describe("a tool written in the build (tools.<key>.code)", () => {
     expect(fn.Properties.Timeout).toBe(60);
     expect(fn.Properties.MemorySize).toBe(512);
     expect(fn.Properties.Environment.Variables).toEqual({ CURRENCY: "USD", SECRET_NAME: "payments/key",
-      TABLE_NAME: "orders", S3_PREFIX: "s3://my-bucket/in/" });
+      TABLE_NAME: "orders", S3_PREFIX: "s3://amzn-s3-demo-bucket/in/" });
     expect(fn.Properties.VpcConfig).toEqual({ SubnetIds: ["subnet-0abc1234"], SecurityGroupIds: ["sg-0abc1234"] });
   });
   it("gives it a role of only its grants, capped by a boundary that denies the framework's data", () => {
@@ -885,7 +885,7 @@ describe("a tool written in the build (tools.<key>.code)", () => {
     expect(grants).toContain("secret:payments/key-??????");
     expect(grants).toContain("table/orders");
     expect(grants).toContain("dynamodb:PutItem");
-    expect(grants).toContain("arn:aws:s3:::my-bucket/in/*");
+    expect(grants).toContain("arn:aws:s3:::amzn-s3-demo-bucket/in/*");
     expect(grants).toContain("ec2:CreateNetworkInterface");
     expect(grants).not.toContain("s3:PutObject");           // read, by default
     const sids = boundary.Properties.PolicyDocument.Statement.map((s: any) => `${s.Sid}:${s.Effect}`);

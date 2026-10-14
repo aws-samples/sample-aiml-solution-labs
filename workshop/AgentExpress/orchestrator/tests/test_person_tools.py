@@ -13,6 +13,7 @@ What has to hold:
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextvars
 import json
 
@@ -23,7 +24,15 @@ from test_bff_routes import bff as bff  # the fixture
 from app.common.errors import ToolNeedsConsent, ToolUnavailable
 from app.features.gateway import client, person
 
-JWT = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2ln"
+
+
+def _b64(s: str) -> str:
+    return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
+
+
+# A shape-only JWT (header {"alg":"RS256"}, payload {"sub":"u1"}, signature "sig"), built
+# from its parts so no token-shaped literal sits in the source. Not a credential.
+JWT = ".".join([_b64('{"alg":"RS256"}'), _b64('{"sub":"u1"}'), _b64("sig")])
 CONSENT = ("https://bedrock-agentcore.us-east-1.amazonaws.com/identities/oauth2/authorize"
            "?request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabc&client_id=x")
 
@@ -121,7 +130,7 @@ def test_the_sign_in_goes_only_to_the_owner_of_a_run_with_person_tools(bff):
     assert bff._person_token(ev, plain_target, "user@example.com") == ""
     # Run from the Builder console: the console's sign-in is not the build's.
     assert bff._person_token(ev, {**person_target, "build": "b-1"}, "user@example.com") == ""
-    assert bff._person_token(_event(token=""), person_target, "user@example.com") == ""
+    assert bff._person_token(_event(token=""), person_target, "user@example.com") == ""  # nosec B106
 
 
 def test_connect_binds_the_session_to_the_callers_own_sign_in(bff, monkeypatch):

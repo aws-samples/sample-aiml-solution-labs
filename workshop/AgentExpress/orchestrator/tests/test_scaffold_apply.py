@@ -72,7 +72,7 @@ def claims_workflow() -> dict:
 
 
 def run(root: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(  # noqa: S603 - fixed argv, no shell
+    return subprocess.run(  # noqa: S603 - fixed argv, no shell  # nosec B603  # nosemgrep
         [sys.executable, str(root / "scaffold.py"), "apply", *args],
         capture_output=True, text=True, cwd=root, check=False)
 
@@ -116,7 +116,7 @@ def test_the_generated_agent_passes_the_contract_the_registry_enforces(tree, tmp
     env = {**os.environ, "PYTHONPATH": str(tree), "AWS_REGION": "us-east-1",
            "AWS_DEFAULT_REGION": "us-east-1"}
     env.pop("WORKFLOW_JSON", None)
-    result = subprocess.run([sys.executable, "-c", probe], cwd=tree, env=env,  # noqa: S603
+    result = subprocess.run([sys.executable, "-c", probe], cwd=tree, env=env,  # noqa: S603  # nosec B603  # nosemgrep
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout.strip().splitlines()[-1]) == ["claims_intake", 2000, TRICKY]
@@ -132,7 +132,8 @@ def test_the_written_workflow_is_already_in_canonical_form(tree, tmp_path):
                                      "agentcore": {"evaluations": {"enabled": True}}}
     wf["steps"][0] = {"hitl": True, "agent": "claims_intake"}
     assert run(tree, str(bundle(tmp_path, wf))).returncode == 0
-    check = subprocess.run([sys.executable, str(tree / "format_workflow.py"), "--check"],  # noqa: S603
+    argv = [sys.executable, str(tree / "format_workflow.py"), "--check"]
+    check = subprocess.run(argv,  # noqa: S603  # nosec B603  # nosemgrep
                            cwd=tree, capture_output=True, text=True, check=False)
     assert check.returncode == 0, check.stderr
     assert (tree / ".agentexpress-customer").exists()
@@ -248,7 +249,7 @@ def test_every_agent_framework_the_builder_offers_writes_an_agent_that_runs(tree
            "AWS_DEFAULT_REGION": "us-east-1",
            "TOOLS_JSON": json.dumps({"policyDocs": {"type": "kb"}, "claimsDb": {"type": "mcp"}})}
     env.pop("WORKFLOW_JSON", None)
-    probe = subprocess.run([sys.executable, "-c", RUN_PROBE], cwd=tree, env=env,  # noqa: S603
+    probe = subprocess.run([sys.executable, "-c", RUN_PROBE], cwd=tree, env=env,  # noqa: S603  # nosec  # nosemgrep
                            capture_output=True, text=True, check=False)
     assert probe.returncode == 0, probe.stderr[-2000:]
     got = json.loads(probe.stdout.strip().splitlines()[-1])
@@ -451,7 +452,7 @@ def test_an_image_agent_writes_a_brief_and_renders_it(tree, tmp_path):
     env = {**os.environ, "PYTHONPATH": str(tree), "AWS_REGION": "us-east-1",
            "AWS_DEFAULT_REGION": "us-east-1", "TOOLS_JSON": "{}"}
     env.pop("WORKFLOW_JSON", None)
-    probe = subprocess.run([sys.executable, "-c", IMAGE_PROBE], cwd=tree, env=env,  # noqa: S603
+    probe = subprocess.run([sys.executable, "-c", IMAGE_PROBE], cwd=tree, env=env,  # noqa: S603  # nosec  # nosemgrep
                            capture_output=True, text=True, check=False)
     assert probe.returncode == 0, probe.stderr[-2000:]
     got = json.loads(probe.stdout.strip().splitlines()[-1])

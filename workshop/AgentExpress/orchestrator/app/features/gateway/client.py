@@ -62,7 +62,7 @@ def _credentials() -> tuple[str, str]:
     return GATEWAY_CLIENT_ID, GATEWAY_CLIENT_SECRET
 
 
-def _token_request(client_id: str = "", client_secret: str = "") -> urllib.request.Request:
+def _token_request(client_id: str = "", client_secret: str = "") -> urllib.request.Request:  # nosec B107
     """Build the client-credentials request for the configured IdP.
 
     The providers differ in BOTH how the client authenticates and what it asks

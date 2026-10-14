@@ -4,6 +4,12 @@ by hand when it is not what its templates generate, so code the Assistant genera
 byte-identical to the page's. Both fixtures are written by the page's own generator:
   interceptor_cases.json        handler.py for many template sets (interceptorCode.test.ts)
   interceptor_files_cases.json  every file, settings in any order (interceptorCode.parity.test.ts)
+
+The card numbers, emails and phone numbers in these fixtures are synthetic (test card 4111...,
+example.com, and NANP fictional numbers NXX-555-0100..0199). The redactPii template they exercise is a
+pattern-matching backstop, not a PCI DSS or GDPR control: a deployment that handles real
+payment card or personal data needs managed controls (a Bedrock Guardrail sensitive-information
+filter, tokenization) and is the customer's responsibility under the shared responsibility model.
 """
 from __future__ import annotations
 

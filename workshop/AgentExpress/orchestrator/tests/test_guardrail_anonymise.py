@@ -59,13 +59,13 @@ def test_the_agent_gets_the_masked_request_and_feedback(monkeypatch):
     from app.orchestrator import nodes
 
     class Ctx:
-        topic, feedback, agent_name = "Mail jane@example.com", "Call 555-123-4567", "Planner"
+        topic, feedback, agent_name = "Mail jane@example.com", "Call 202-555-0123", "Planner"
 
         def __init__(self):
             self.logs: list = []
 
         async def guardrail(self, text, source):
-            return text.replace("jane@example.com", "{EMAIL}").replace("555-123-4567", "{PHONE}")
+            return text.replace("jane@example.com", "{EMAIL}").replace("202-555-0123", "{PHONE}")
 
         async def log(self, msg):
             self.logs.append(msg)

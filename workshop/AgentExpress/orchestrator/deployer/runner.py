@@ -56,7 +56,7 @@ def run(cmd: list[str], cwd: Path, env: dict | None = None, keep: int = 60) -> l
     """Run a command, streaming its output to the CodeBuild log, and keep the tail."""
     print(f"$ {' '.join(cmd)}", flush=True)
     tail: collections.deque[str] = collections.deque(maxlen=keep)
-    proc = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **(env or {})},  # noqa: S603
+    proc = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **(env or {})},  # noqa: S603  # nosec B603  # nosemgrep
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.stdout is not None
     for line in proc.stdout:
@@ -367,7 +367,7 @@ def store_login(env: dict, bid: str, login: dict) -> None:
                                      f"password for the build's own console")
 
 
-def invite_owner(session, pool_id: str, email: str, password: str = "") -> str:
+def invite_owner(session, pool_id: str, email: str, password: str = "") -> str:  # nosec B107 - "" = Cognito mints one
     """Give the build's owner a login to the build's own console.
 
     With `password`, that is the temporary password (the console shows it to the owner,
@@ -558,8 +558,9 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
     # finds no files, and the apply DELETES the build's whole UI from its bucket. So a
     # build step that is in state is rebuilt whenever its output is missing.
     if not (ROOT / "web" / "dist" / "index.html").exists():
-        listed = subprocess.run([tf, "state", "list"], cwd=tf_dir, capture_output=True,  # noqa: S603
-                                text=True, check=False, env={**os.environ, **sub_env}).stdout
+        listed = subprocess.run([tf, "state", "list"], cwd=tf_dir,  # noqa: S603  # nosec B603  # nosemgrep
+                                capture_output=True, text=True, check=False,
+                                env={**os.environ, **sub_env}).stdout
         if "null_resource.ui_build" in listed.split():
             build_ui.append("-replace=null_resource.ui_build")
     run(build_ui, tf_dir, sub_env)
@@ -567,8 +568,9 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
         run([tf, "destroy", "-auto-approve", "-input=false", "-no-color"], tf_dir, sub_env)
         return {}
     run([tf, "apply", "-auto-approve", "-input=false", "-no-color"], tf_dir, sub_env)
-    raw = subprocess.run([tf, "output", "-json"], cwd=tf_dir, capture_output=True,  # noqa: S603
-                         text=True, check=True, env={**os.environ, **sub_env}).stdout
+    raw = subprocess.run([tf, "output", "-json"], cwd=tf_dir,  # noqa: S603  # nosec B603  # nosemgrep
+                         capture_output=True, text=True, check=True,
+                         env={**os.environ, **sub_env}).stdout
     return {"stack": key, **tf_outputs(raw)}
 
 

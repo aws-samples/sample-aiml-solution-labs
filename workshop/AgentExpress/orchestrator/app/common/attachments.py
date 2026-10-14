@@ -8,6 +8,12 @@ Converse content: a document block per document, an image block per image.
 
 Only keys under this run's own folder are read, so a list that names anything else in
 the bucket, or another run's files, reads nothing.
+
+Regulated data: uploads are passed to the model as-is. If a deployment accepts files that
+contain protected health information (HIPAA), cardholder data (PCI DSS) or personal data
+(GDPR, CCPA), meeting those obligations is the customer's responsibility under the AWS shared
+responsibility model: a Bedrock Guardrail, the bucket's retention and access controls, and a
+compliance review of the workload. This sample uses synthetic files only.
 """
 
 from __future__ import annotations

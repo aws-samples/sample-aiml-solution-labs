@@ -45,13 +45,7 @@ resource "aws_iam_role_policy" "signup" {
         Effect   = "Allow"
         Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
         Resource = "${aws_cloudwatch_log_group.signup[0].arn}:*"
-        }], local.self_signup ? [{
-        # Any pool in this account/region, not the pool's ARN: the pool names this
-        # function as its trigger, so naming the pool here would be a dependency cycle.
-        Effect   = "Allow"
-        Action   = ["cognito-idp:AdminAddUserToGroup"]
-        Resource = "arn:aws:cognito-idp:${var.region}:${local.account_id}:userpool/*"
-        }] : [], local.audit_sign_ins ? [{
+        }], local.audit_sign_ins ? [{
         Effect   = "Allow"
         Action   = ["dynamodb:PutItem"]
         Resource = local.audit_table_arn
@@ -59,6 +53,22 @@ resource "aws_iam_role_policy" "signup" {
   })
 }
 
+# Self sign-up's group write, scoped to THIS pool. A policy of its own, not a statement in
+# the one above: the pool names the function as its trigger, and the function needs only
+# the role, so a separate policy can name the pool's ARN without a dependency cycle.
+resource "aws_iam_role_policy" "signup_groups" {
+  count = local.self_signup ? 1 : 0
+  name  = "AgentCoreSignupGroups-${var.agent_name}"
+  role  = aws_iam_role.signup[0].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["cognito-idp:AdminAddUserToGroup"]
+      Resource = aws_cognito_user_pool.this[0].arn
+    }]
+  })
+}
 resource "aws_cloudwatch_log_group" "signup" {
   count             = local.cognito_trigger ? 1 : 0
   name              = "/aws/lambda/AgentCoreSignup-${var.agent_name}"

@@ -60,7 +60,7 @@ def _changed_paths() -> list[str]:
     listed individually rather than as its parent — otherwise a stray file hides behind the
     directory that contains it.
     """
-    out = subprocess.run(
+    out = subprocess.run(  # nosec B603  # nosemgrep
         ["git", "status", "--porcelain", "-uall"],  # noqa: S607
         cwd=REPO, capture_output=True, text=True, check=False)
     if out.returncode != 0:

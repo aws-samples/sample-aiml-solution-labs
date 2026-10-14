@@ -116,7 +116,7 @@ resource "aws_iam_role_policy" "runtime_assets" {
 # A dedicated agent that reads images (`vision`) reads them from its own runtime.
 # Mirrors ReadRunImages in cdk/lib/orchestrator-stack.ts.
 resource "aws_iam_role_policy" "subagent_vision" {
-  for_each = local.assets_enabled ? { for id in local.vision_agents : id => id if contains(keys(local.dedicated_agents), id) } : {}
+  for_each = { for id in local.vision_agents : id => id if local.assets_enabled && contains(keys(local.dedicated_agents), id) }
   name     = "AgentCoreSubagentVision-${each.key}"
   role     = aws_iam_role.subagent[each.key].id
   policy = jsonencode({
@@ -166,7 +166,7 @@ resource "aws_iam_role_policy" "bff_assets" {
 # A dedicated agent that reads the run's files (`attachments`) reads them from its own
 # runtime. Mirrors ReadRunFiles in cdk/lib/orchestrator-stack.ts.
 resource "aws_iam_role_policy" "subagent_files" {
-  for_each = local.run_files ? { for id in local.file_agents : id => id if contains(keys(local.dedicated_agents), id) } : {}
+  for_each = { for id in local.file_agents : id => id if local.run_files && contains(keys(local.dedicated_agents), id) }
   name     = "AgentCoreSubagentFiles-${each.key}"
   role     = aws_iam_role.subagent[each.key].id
   policy = jsonencode({

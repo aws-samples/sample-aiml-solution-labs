@@ -1238,7 +1238,7 @@
       "s3": {
        "type": "array",
        "items": "string",
-       "doc": "Buckets, or bucket/prefix folders, a run's request may name as s3://... for agents with `attachments` to read, e.g. [\"my-docs\", \"my-bucket/contracts\"]. The deployment grants read on exactly these; none by default (uploads only)."
+       "doc": "Buckets, or bucket/prefix folders, a run's request may name as s3://... for agents with `attachments` to read, e.g. [\"my-docs\", \"amzn-s3-demo-bucket/contracts\"]. The deployment grants read on exactly these; none by default (uploads only)."
       }
      },
      "doc": "Files a run is started with, for agents that set `attachments`: which S3 locations a request may refer to, beside uploads.",

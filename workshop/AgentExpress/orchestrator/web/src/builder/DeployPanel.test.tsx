@@ -6,13 +6,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // The Deploy dialog lists the caller's connected accounts.
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
-    { accountId: "111122223333", label: "Team sandbox", region: "eu-west-1", status: "connected",
+    { accountId: EXAMPLE_ACCT_A, label: "Team sandbox", region: "eu-west-1", status: "connected",
       builds: [{ id: "pother1", name: "Other", region: "eu-west-1" }] },
   ]), { status: 200 })));
 });
 
 import { DeployPanel, deployState, stackOf } from "./DeployPanel";
 import type { BuildSummary } from "./storage";
+
+/** AWS's documented example account IDs, not real accounts. */
+const EXAMPLE_ACCT_A = "111122223333";
+const EXAMPLE_ACCT_C = "123456789012";
 
 const base: BuildSummary = { id: "pabc123", name: "Claims", updatedAt: "2026-09-09T00:00:00Z", agentName: "ax_1a2b3c4d", versions: 0 };
 const all = () => true;
@@ -117,8 +121,8 @@ describe("DeployPanel", () => {
   });
 
   it("opens a deployed build's own app, and runs one in another account only there", () => {
-    const deployed = { ...base, versions: 1, tool: "cdk" as const, account: "111122223333",
-      deployed: { version: 1, tool: "cdk" as const, agentName: "ax_1a2b3c4d", account: "111122223333",
+    const deployed = { ...base, versions: 1, tool: "cdk" as const, account: EXAMPLE_ACCT_A,
+      deployed: { version: 1, tool: "cdk" as const, agentName: "ax_1a2b3c4d", account: EXAMPLE_ACCT_A,
         region: "eu-west-1", uiUrl: "https://d1.cloudfront.net", appUser: "me@example.com" } };
     render(<DeployPanel build={deployed} errors={0} can={all} onDeploy={vi.fn()} onDestroy={vi.fn()} onRun={vi.fn()} />);
     const open = screen.getByRole("link", { name: /Open app/ }) as HTMLAnchorElement;
@@ -194,7 +198,7 @@ describe("the deployment history", () => {
       running: { action: "deploy", version: 3, tool: "cdk", by: "bob@example.com", at: "2026-10-11T10:00:00Z" },
       deployments: [
         { at: "2026-10-10T10:00:00Z", action: "destroy", result: "failed", version: 2, tool: "terraform",
-          account: "123456789012", region: "eu-west-1", by: "alice@example.com", error: "stack is busy" },
+          account: EXAMPLE_ACCT_C, region: "eu-west-1", by: "alice@example.com", error: "stack is busy" },
         { at: "2026-10-09T10:00:00Z", action: "deploy", result: "succeeded", version: 2, tool: "cdk",
           account: "console", region: "us-east-1", by: "alice@example.com" },
       ] }), { status: 200 })));

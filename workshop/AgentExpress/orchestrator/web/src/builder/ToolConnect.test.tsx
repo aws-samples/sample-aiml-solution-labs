@@ -74,7 +74,7 @@ describe("How it connects", () => {
   });
 
   it("App login: one address field takes a token URL or a discovery document", async () => {
-    await act(async () => { render(<Harness start={base({ type: "openapi", schemaS3Uri: "s3://my-bucket/specs/k.json" })} />); });
+    await act(async () => { render(<Harness start={base({ type: "openapi", schemaS3Uri: "s3://amzn-s3-demo-bucket/specs/k.json" })} />); });
     await pick("App login");
     const field = (l: string) => w().findAllInputs().find((i) => i.findNativeInput().getElement().getAttribute("aria-label") === l)!;
     await act(async () => { field("Provider address").setInputValue("https://idp.example.com/.well-known/openid-configuration"); });
@@ -115,7 +115,7 @@ describe("Acting as the person", () => {
 
   it("User login: a token URL also asks where people sign in, and shows the callback URL", async () => {
     await act(async () => { render(<Harness callbackUrl="https://bedrock-agentcore.us-east-1.amazonaws.com/identities/oauth2/callback/abc"
-      start={base({ type: "openapi", schemaS3Uri: "s3://my-bucket/specs/k.json" })} />); });
+      start={base({ type: "openapi", schemaS3Uri: "s3://amzn-s3-demo-bucket/specs/k.json" })} />); });
     await pick("User login");
     expect(crm().auth).toBe("user");
     expect(field("Sign-in address")).toBeUndefined();
@@ -142,7 +142,7 @@ describe("Acting as the person", () => {
   });
 
   it("On behalf of user: writes obo with the tool's API, and is off with Entra ID sign-in", async () => {
-    await act(async () => { render(<Harness start={base({ type: "openapi", schemaS3Uri: "s3://my-bucket/specs/k.json" })} />); });
+    await act(async () => { render(<Harness start={base({ type: "openapi", schemaS3Uri: "s3://amzn-s3-demo-bucket/specs/k.json" })} />); });
     await pick("On behalf of user");
     await act(async () => { field("Provider address")!.setInputValue("https://idp.example.com/oauth2/token"); });
     await act(async () => { field("Client ID")!.setInputValue("abc"); });
@@ -153,7 +153,7 @@ describe("Acting as the person", () => {
   });
 
   it("with Entra ID sign-in the person's sign-in tile is disabled", async () => {
-    const p = base({ type: "openapi", schemaS3Uri: "s3://my-bucket/specs/k.json" });
+    const p = base({ type: "openapi", schemaS3Uri: "s3://amzn-s3-demo-bucket/specs/k.json" });
     (p.workflow as Record<string, unknown>).authorization = { signIn: { provider: "entra", tenantId: "t", clientId: "c" } };
     await act(async () => { render(<Harness start={p} />); });
     const obo = w().findTiles()!.findItems().find((i) => i.getElement().textContent?.startsWith("On behalf of user"))!;

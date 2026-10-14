@@ -81,7 +81,12 @@ def _luhn(text: str) -> bool:
 
 def redact_pii(body: dict, request: dict) -> dict:
     """Mask personal data in a tool's result. Patterns, so a backstop: a Bedrock
-    guardrail is the managed check."""
+    guardrail is the managed check.
+
+    Not a compliance control. Regex redaction does not meet PCI DSS, GDPR, HIPAA or
+    similar obligations on its own; if real card numbers or personal data reach this
+    tool, you are responsible for those controls under the AWS shared responsibility
+    model. Use a Bedrock Guardrail sensitive-information filter as the managed control."""
     if request.get("method") != "tools/call" or "result" not in body:
         return body
     s = SETTINGS.get("redactPii") or {}

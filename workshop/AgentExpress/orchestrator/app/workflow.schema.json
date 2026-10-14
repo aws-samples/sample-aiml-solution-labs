@@ -2581,7 +2581,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "Buckets, or bucket/prefix folders, a run's request may name as s3://... for agents with `attachments` to read, e.g. [\"my-docs\", \"my-bucket/contracts\"]. The deployment grants read on exactly these; none by default (uploads only)."
+              "description": "Buckets, or bucket/prefix folders, a run's request may name as s3://... for agents with `attachments` to read, e.g. [\"my-docs\", \"amzn-s3-demo-bucket/contracts\"]. The deployment grants read on exactly these; none by default (uploads only)."
             }
           }
         },

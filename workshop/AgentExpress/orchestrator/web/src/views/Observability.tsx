@@ -25,6 +25,7 @@ import Box from "@cloudscape-design/components/box";
 import Container from "@cloudscape-design/components/container";
 import Header from "@cloudscape-design/components/header";
 import Spinner from "@cloudscape-design/components/spinner";
+import DOMPurify from "dompurify";
 import { useEffect, useRef, useState } from "react";
 
 import { getToken } from "../api";
@@ -32,6 +33,9 @@ import type { Workflow } from "../types";
 
 declare global {
   interface Window {
+    /** Handed to legacy/observability.js, which sanitizes every HTML string it renders
+     *  through it. Bundled and version-pinned here rather than loaded from a CDN. */
+    DOMPurify?: typeof DOMPurify;
     /** Set by legacy/observability.js when it loads. */
     ObservabilityIsland?: {
       mount(el: HTMLElement, token: string | null, workflow: Workflow,
@@ -46,6 +50,8 @@ let loading: Promise<void> | null = null;
 
 /** Load the module once per session, not once per mount. */
 function loadIsland(): Promise<void> {
+  // Before the module loads: it refuses to render without a sanitizer (fail closed).
+  window.DOMPurify ??= DOMPurify;
   if (window.ObservabilityIsland) return Promise.resolve();
   loading ??= new Promise<void>((resolve, reject) => {
     const s = document.createElement("script");

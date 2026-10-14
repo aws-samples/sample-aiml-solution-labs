@@ -220,41 +220,53 @@
       "Resource": "*"
     },
     {
-      "Sid": "BedrockAgentCoreControlPlane",
+      "Sid": "BedrockAgentCoreControlPlaneCreate",
       "Effect": "Allow",
       "Action": [
         "bedrock-agentcore:CreateMemory",
+        "bedrock-agentcore:ListMemories",
+        "bedrock-agentcore:CreateAgentRuntime",
+        "bedrock-agentcore:ListAgentRuntimes",
+        "bedrock-agentcore:ListAgentRuntimeEndpoints",
+        "bedrock-agentcore:CreateGateway",
+        "bedrock-agentcore:ListGateways",
+        "bedrock-agentcore:CreatePolicyEngine",
+        "bedrock-agentcore:ListPolicyEngines",
+        "bedrock-agentcore:CreateEvaluator",
+        "bedrock-agentcore:ListEvaluators",
+        "bedrock-agentcore:CreateTokenVault",
+        "bedrock-agentcore:ManageAdminPolicy",
+        "bedrock-agentcore:ListPolicyEngineSummaries"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockAgentCoreControlPlane",
+      "Effect": "Allow",
+      "Action": [
         "bedrock-agentcore:DeleteMemory",
         "bedrock-agentcore:GetMemory",
-        "bedrock-agentcore:ListMemories",
         "bedrock-agentcore:UpdateMemory",
-        "bedrock-agentcore:CreateAgentRuntime",
         "bedrock-agentcore:UpdateAgentRuntime",
         "bedrock-agentcore:DeleteAgentRuntime",
         "bedrock-agentcore:GetAgentRuntime",
-        "bedrock-agentcore:ListAgentRuntimes",
         "bedrock-agentcore:CreateAgentRuntimeEndpoint",
         "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
         "bedrock-agentcore:GetAgentRuntimeEndpoint",
-        "bedrock-agentcore:ListAgentRuntimeEndpoints",
         "bedrock-agentcore:CreateWorkloadIdentity",
         "bedrock-agentcore:DeleteWorkloadIdentity",
-        "bedrock-agentcore:CreateGateway",
         "bedrock-agentcore:UpdateGateway",
         "bedrock-agentcore:DeleteGateway",
         "bedrock-agentcore:GetGateway",
-        "bedrock-agentcore:ListGateways",
         "bedrock-agentcore:CreateGatewayTarget",
         "bedrock-agentcore:UpdateGatewayTarget",
         "bedrock-agentcore:DeleteGatewayTarget",
         "bedrock-agentcore:GetGatewayTarget",
         "bedrock-agentcore:ListGatewayTargets",
         "bedrock-agentcore:SynchronizeGatewayTargets",
-        "bedrock-agentcore:CreatePolicyEngine",
         "bedrock-agentcore:UpdatePolicyEngine",
         "bedrock-agentcore:DeletePolicyEngine",
         "bedrock-agentcore:GetPolicyEngine",
-        "bedrock-agentcore:ListPolicyEngines",
         "bedrock-agentcore:CreatePolicy",
         "bedrock-agentcore:UpdatePolicy",
         "bedrock-agentcore:DeletePolicy",
@@ -268,22 +280,17 @@
         "bedrock-agentcore:GetApiKeyCredentialProvider",
         "bedrock-agentcore:UpdateApiKeyCredentialProvider",
         "bedrock-agentcore:DeleteApiKeyCredentialProvider",
-        "bedrock-agentcore:CreateEvaluator",
         "bedrock-agentcore:GetEvaluator",
         "bedrock-agentcore:UpdateEvaluator",
         "bedrock-agentcore:DeleteEvaluator",
-        "bedrock-agentcore:ListEvaluators",
         "bedrock-agentcore:CreateOauth2CredentialProvider",
         "bedrock-agentcore:GetOauth2CredentialProvider",
         "bedrock-agentcore:UpdateOauth2CredentialProvider",
         "bedrock-agentcore:DeleteOauth2CredentialProvider",
-        "bedrock-agentcore:CreateTokenVault",
         "bedrock-agentcore:GetTokenVault",
         "bedrock-agentcore:GetWorkloadIdentity",
         "bedrock-agentcore:UpdateWorkloadIdentity",
         "bedrock-agentcore:InvokeGateway",
-        "bedrock-agentcore:ManageAdminPolicy",
-        "bedrock-agentcore:ListPolicyEngineSummaries",
         "bedrock-agentcore:GetPolicyEngineSummary",
         "bedrock-agentcore:ListPolicySummaries",
         "bedrock-agentcore:GetPolicySummary",
@@ -291,7 +298,21 @@
         "bedrock-agentcore:GetPolicyGeneration",
         "bedrock-agentcore:StartPolicyGeneration"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:bedrock-agentcore:*:*:evaluator/*",
+        "arn:aws:bedrock-agentcore:*:*:gateway/*",
+        "arn:aws:bedrock-agentcore:*:*:memory/*",
+        "arn:aws:bedrock-agentcore:*:*:policy-engine/*",
+        "arn:aws:bedrock-agentcore:*:*:policy-engine/*/policy-generation/*",
+        "arn:aws:bedrock-agentcore:*:*:policy-engine/*/policy/*",
+        "arn:aws:bedrock-agentcore:*:*:runtime/*",
+        "arn:aws:bedrock-agentcore:*:*:runtime/*/runtime-endpoint/*",
+        "arn:aws:bedrock-agentcore:*:*:token-vault/*",
+        "arn:aws:bedrock-agentcore:*:*:token-vault/*/apikeycredentialprovider/*",
+        "arn:aws:bedrock-agentcore:*:*:token-vault/*/oauth2credentialprovider/*",
+        "arn:aws:bedrock-agentcore:*:*:workload-identity-directory/*",
+        "arn:aws:bedrock-agentcore:*:*:workload-identity-directory/*/workload-identity/*"
+      ]
     },
     {
       "Sid": "AgentCoreIdentityReadsAtTargetCreation",
@@ -311,19 +332,31 @@
       ]
     },
     {
-      "Sid": "BedrockGuardrailManage",
+      "Sid": "BedrockGuardrailManageCreate",
       "Effect": "Allow",
       "Action": [
         "bedrock:CreateGuardrail",
+        "bedrock:ListGuardrails"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockGuardrailManage",
+      "Effect": "Allow",
+      "Action": [
         "bedrock:UpdateGuardrail",
         "bedrock:DeleteGuardrail",
         "bedrock:GetGuardrail",
-        "bedrock:ListGuardrails",
         "bedrock:ListTagsForResource",
         "bedrock:TagResource",
         "bedrock:UntagResource"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:bedrock:*:*:automated-reasoning-policy/*",
+        "arn:aws:bedrock:*:*:automated-reasoning-policy/*:*",
+        "arn:aws:bedrock:*:*:guardrail-profile/*",
+        "arn:aws:bedrock:*:*:guardrail/*"
+      ]
     },
     {
       "Sid": "EvaluatorJudgeModel",
@@ -340,14 +373,21 @@
       ]
     },
     {
-      "Sid": "BedrockKnowledgeBaseAndVectors",
+      "Sid": "BedrockKnowledgeBaseAndVectorsCreate",
       "Effect": "Allow",
       "Action": [
         "bedrock:CreateKnowledgeBase",
+        "bedrock:ListKnowledgeBases"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "BedrockKnowledgeBaseAndVectors",
+      "Effect": "Allow",
+      "Action": [
         "bedrock:UpdateKnowledgeBase",
         "bedrock:DeleteKnowledgeBase",
         "bedrock:GetKnowledgeBase",
-        "bedrock:ListKnowledgeBases",
         "bedrock:CreateDataSource",
         "bedrock:UpdateDataSource",
         "bedrock:DeleteDataSource",
@@ -369,7 +409,11 @@
         "bedrock:ListTagsForResource",
         "s3vectors:ListTagsForResource"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:bedrock:*:*:knowledge-base/*",
+        "arn:aws:s3vectors:*:*:bucket/*",
+        "arn:aws:s3vectors:*:*:bucket/*/index/*"
+      ]
     },
     {
       "Sid": "DynamoDbManageTables",
@@ -542,7 +586,13 @@
         "s3:GetObjectTagging",
         "s3:DeleteObjectTagging",
         "s3:PutEncryptionConfiguration",
-        "s3:GetEncryptionConfiguration"
+        "s3:GetEncryptionConfiguration",
+        "s3:PutBucketOwnershipControls",
+        "s3:GetBucketOwnershipControls",
+        "s3:PutLifecycleConfiguration",
+        "s3:GetLifecycleConfiguration",
+        "s3:GetBucketAcl",
+        "s3:PutBucketAcl"
       ],
       "Resource": [
         "arn:aws:s3:::agentcore-*-ui-*",
@@ -587,34 +637,109 @@
       ]
     },
     {
-      "Sid": "CloudFrontManage",
+      "Sid": "CloudFrontManageCreate",
       "Effect": "Allow",
       "Action": [
         "cloudfront:CreateDistribution",
+        "cloudfront:CreateOriginAccessControl",
+        "cloudfront:CreateResponseHeadersPolicy"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFrontManage",
+      "Effect": "Allow",
+      "Action": [
         "cloudfront:UpdateDistribution",
         "cloudfront:DeleteDistribution",
         "cloudfront:GetDistribution",
         "cloudfront:GetDistributionConfig",
         "cloudfront:TagResource",
         "cloudfront:ListTagsForResource",
-        "cloudfront:CreateOriginAccessControl",
         "cloudfront:UpdateOriginAccessControl",
         "cloudfront:DeleteOriginAccessControl",
         "cloudfront:GetOriginAccessControl",
-        "cloudfront:CreateResponseHeadersPolicy",
         "cloudfront:UpdateResponseHeadersPolicy",
         "cloudfront:DeleteResponseHeadersPolicy",
         "cloudfront:GetResponseHeadersPolicy"
       ],
+      "Resource": [
+        "arn:aws:cloudfront::*:distribution/*",
+        "arn:aws:cloudfront::*:origin-access-control/*",
+        "arn:aws:cloudfront::*:response-headers-policy/*"
+      ]
+    },
+    {
+      "Sid": "KmsDataKeyCreate",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateKey"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "Null": {
+          "aws:RequestTag/agentexpress:app": "false"
+        }
+      }
+    },
+    {
+      "Sid": "KmsListAliases",
+      "Effect": "Allow",
+      "Action": [
+        "kms:ListAliases"
+      ],
       "Resource": "*"
     },
     {
-      "Sid": "ObservabilitySetup",
+      "Sid": "KmsDataKeyRead",
       "Effect": "Allow",
       "Action": [
-        "logs:CreateLogGroup",
+        "kms:DescribeKey",
+        "kms:GetKeyPolicy",
+        "kms:GetKeyRotationStatus",
+        "kms:ListKeyRotations",
+        "kms:ListResourceTags",
+        "kms:TagResource",
+        "kms:UntagResource"
+      ],
+      "Resource": "arn:aws:kms:*:*:key/*"
+    },
+    {
+      "Sid": "KmsDataKeyManage",
+      "Effect": "Allow",
+      "Action": [
+        "kms:PutKeyPolicy",
+        "kms:EnableKeyRotation",
+        "kms:ScheduleKeyDeletion",
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+      ],
+      "Resource": "arn:aws:kms:*:*:key/*",
+      "Condition": {
+        "Null": {
+          "aws:ResourceTag/agentexpress:app": "false"
+        }
+      }
+    },
+    {
+      "Sid": "KmsDataKeyAlias",
+      "Effect": "Allow",
+      "Action": [
+        "kms:CreateAlias",
+        "kms:DeleteAlias",
+        "kms:UpdateAlias"
+      ],
+      "Resource": [
+        "arn:aws:kms:*:*:alias/agentexpress-*",
+        "arn:aws:kms:*:*:key/*"
+      ]
+    },
+    {
+      "Sid": "ObservabilitySetupNoResourceType",
+      "Effect": "Allow",
+      "Action": [
         "logs:DescribeLogGroups",
-        "logs:PutRetentionPolicy",
         "logs:PutResourcePolicy",
         "logs:DeleteResourcePolicy",
         "logs:DescribeResourcePolicies",
@@ -627,6 +752,17 @@
         "logs:ListLogDeliveries"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "ObservabilitySetup",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:PutRetentionPolicy"
+      ],
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:*"
+      ]
     },
     {
       "Sid": "TransactionSearchEnable",
@@ -768,27 +904,76 @@
       ]
     },
     {
-      "Sid": "TagResources",
+      "Sid": "TagCloudFront",
       "Effect": "Allow",
       "Action": [
         "cloudfront:TagResource",
         "cloudfront:UntagResource",
-        "cloudfront:ListTagsForResource",
+        "cloudfront:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:cloudfront::*:distribution/*"
+      ]
+    },
+    {
+      "Sid": "TagCognito",
+      "Effect": "Allow",
+      "Action": [
         "cognito-idp:TagResource",
         "cognito-idp:UntagResource",
-        "cognito-idp:ListTagsForResource",
+        "cognito-idp:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:cognito-idp:*:*:userpool/*"
+      ]
+    },
+    {
+      "Sid": "TagEcr",
+      "Effect": "Allow",
+      "Action": [
         "ecr:TagResource",
         "ecr:UntagResource",
-        "ecr:ListTagsForResource",
+        "ecr:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:ecr:*:*:repository/agentcore-*"
+      ]
+    },
+    {
+      "Sid": "TagIamPolicies",
+      "Effect": "Allow",
+      "Action": [
         "iam:TagPolicy",
         "iam:UntagPolicy",
-        "iam:ListPolicyTags",
+        "iam:ListPolicyTags"
+      ],
+      "Resource": [
+        "arn:aws:iam::*:policy/ToolLambda-*",
+        "arn:aws:iam::*:policy/AgentExpressDeploy-*"
+      ]
+    },
+    {
+      "Sid": "TagS3Buckets",
+      "Effect": "Allow",
+      "Action": [
         "s3:PutBucketTagging",
-        "s3:GetBucketTagging",
+        "s3:GetBucketTagging"
+      ],
+      "Resource": [
+        "arn:aws:s3:::agentcore-*"
+      ]
+    },
+    {
+      "Sid": "TagApiGateway",
+      "Effect": "Allow",
+      "Action": [
         "apigateway:TagResource",
         "apigateway:UntagResource"
       ],
-      "Resource": "*"
+      "Resource": [
+        "arn:aws:apigateway:*::/tags/*",
+        "arn:aws:apigateway:*::/apis/*"
+      ]
     },
     {
       "Sid": "TriggerRulesAndSchedules",

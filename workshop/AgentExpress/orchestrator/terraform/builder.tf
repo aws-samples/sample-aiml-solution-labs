@@ -183,6 +183,11 @@ resource "aws_dynamodb_table" "builds" {
     }
     projection_type = "ALL"
   }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data.arn
+  }
 }
 
 # A generated name: agentcore-<agent_name>-builds-<account>-<region> would not fit in 63
@@ -408,6 +413,10 @@ resource "aws_iam_role_policy_attachment" "deploy" {
   policy_arn = aws_iam_policy.deploy[count.index].arn
 }
 
+# SAMPLE: ReadOnlyAccess is intentionally broad so `terraform plan`/refresh can read every
+# resource type a build might declare. For production, replace it with a scoped read policy
+# covering only the services your workflows deploy (Bedrock, AgentCore, Lambda, DynamoDB,
+# S3, IAM, CloudFront, Cognito, API Gateway, Secrets Manager, CloudWatch Logs).
 resource "aws_iam_role_policy_attachment" "deploy_read_only" {
   count      = local.builder_enabled ? 1 : 0
   role       = aws_iam_role.deploy[0].name
@@ -471,6 +480,8 @@ resource "aws_codebuild_project" "deploy" {
   }
 
   depends_on = [aws_iam_role_policy.deploy, aws_iam_role_policy_attachment.deploy]
+
+  encryption_key = aws_kms_key.data.arn
 }
 
 # What the console's BFF needs to serve /api/builds and to run deployed builds.
@@ -500,9 +511,10 @@ resource "aws_iam_role_policy" "bff_builder" {
         Resource = [aws_dynamodb_table.builds[0].arn, "${aws_dynamodb_table.builds[0].arn}/index/*"]
       },
       {
-        Sid      = "BuildsObjects"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+        Sid    = "BuildsObjects"
+        Effect = "Allow"
+        # Scoped to this deployment's builds bucket objects only.
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:DeleteObjectVersion"] # nosemgrep
         Resource = "${aws_s3_bucket.builds[0].arn}/*"
       },
       {
@@ -543,16 +555,18 @@ resource "aws_iam_role_policy" "bff_builder" {
         Resource = "arn:aws:agent-registry:${var.region}:${local.account_id}:registry/*"
       },
       {
-        Sid      = "BuildSecrets"
-        Effect   = "Allow"
-        Action   = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:DeleteSecret"]
+        Sid    = "BuildSecrets"
+        Effect = "Allow"
+        # Scoped to this deployment's own secret-name prefix.
+        Action   = ["secretsmanager:CreateSecret", "secretsmanager:PutSecretValue", "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:DeleteSecret"] # nosemgrep
         Resource = "arn:aws:secretsmanager:${var.region}:${local.account_id}:secret:${local.secrets_prefix}*"
       },
       {
         # Verifying a connection: assume the connected account's deploy role once.
-        Sid      = "VerifyConnectedAccounts"
-        Effect   = "Allow"
-        Action   = ["sts:AssumeRole"]
+        Sid    = "VerifyConnectedAccounts"
+        Effect = "Allow"
+        # Only roles with the connect-role prefix this stack hands out, in connected accounts by design.
+        Action   = ["sts:AssumeRole"] # nosemgrep
         Resource = "arn:aws:iam::*:role/${local.connect_role_prefix}*"
       },
       {
@@ -610,9 +624,10 @@ resource "aws_iam_role_policy" "bff_builder" {
       },
       {
         # ...and the images their image agents render (bff/handler.py _image_link).
-        Sid      = "BuildImages"
-        Effect   = "Allow"
-        Action   = ["s3:GetObject"]
+        Sid    = "BuildImages"
+        Effect = "Allow"
+        # Read-only, this account's build asset buckets, runs/ prefix only.
+        Action   = ["s3:GetObject"] # nosemgrep
         Resource = "arn:aws:s3:::agentcore-${replace(local.build_agent_prefix, "_", "-")}*-assets-${local.account_id}/runs/*"
       }
     ]

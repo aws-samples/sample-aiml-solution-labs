@@ -23,6 +23,50 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ui" {
   }
 }
 
+# --- CloudFront access logs ----------------------------------------------
+# Standard logging writes each request to this bucket. CloudFront delivers with an object
+# ACL, so the bucket allows ACLs (BucketOwnerPreferred: the bucket owner still owns every
+# object) and grants the log delivery account write when the distribution is configured.
+# Public access stays fully blocked. Logs expire with var.log_retention_days.
+resource "aws_s3_bucket" "ui_logs" {
+  bucket        = "agentcore-${replace(var.agent_name, "_", "-")}-ui-logs-${local.account_id}"
+  force_destroy = true
+}
+resource "aws_s3_bucket_ownership_controls" "ui_logs" {
+  bucket = aws_s3_bucket.ui_logs.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
+  }
+}
+resource "aws_s3_bucket_public_access_block" "ui_logs" {
+  bucket                  = aws_s3_bucket.ui_logs.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+resource "aws_s3_bucket_server_side_encryption_configuration" "ui_logs" {
+  bucket = aws_s3_bucket.ui_logs.id
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+resource "aws_s3_bucket_lifecycle_configuration" "ui_logs" {
+  bucket = aws_s3_bucket.ui_logs.id
+  rule {
+    id     = "expire-access-logs"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = var.log_retention_days
+    }
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 1
+    }
+  }
+}
 # --- build the UI ----------------------------------------------------------
 # web/ is a Vite + React + Cloudscape app, so there is a build step now. It runs here
 # rather than being a thing you have to remember: `terraform apply` produces the same
@@ -228,6 +272,12 @@ resource "aws_cloudfront_distribution" "ui" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+  logging_config {
+    bucket          = aws_s3_bucket.ui_logs.bucket_domain_name
+    prefix          = "cloudfront/"
+    include_cookies = false
+  }
+  depends_on = [aws_s3_bucket_ownership_controls.ui_logs, aws_s3_bucket_public_access_block.ui_logs]
 }
 
 resource "aws_s3_bucket_policy" "ui" {

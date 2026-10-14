@@ -66,7 +66,7 @@ Two deliberate implementation differences from Terraform:
 
 ## Prerequisites
 
-- Node.js ≥ 20 and the AWS CDK CLI (`npm i -g aws-cdk`, or use the local dev dependency).
+- Node.js ≥ 20 and the AWS CDK CLI (`npm i -g aws-cdk@2.1144.0`, or use the local dev dependency).
   Node is needed twice: for the CDK app, and to build the UI. `cdk synth` runs
   `npm ci && npm run build` in `../web` — locally when `npm` is on the PATH, and in a
   `node:22-alpine` container otherwise, so a synth works with either. A TypeScript error

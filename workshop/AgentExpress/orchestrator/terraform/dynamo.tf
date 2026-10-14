@@ -18,6 +18,11 @@ resource "aws_dynamodb_table" "status" {
     attribute_name = "ttl"
     enabled        = true
   }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data.arn
+  }
 }
 
 resource "aws_dynamodb_table" "events" {
@@ -42,5 +47,10 @@ resource "aws_dynamodb_table" "events" {
   ttl {
     attribute_name = "ttl"
     enabled        = true
+  }
+
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data.arn
   }
 }

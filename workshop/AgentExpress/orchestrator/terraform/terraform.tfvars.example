@@ -133,7 +133,7 @@ region = "us-east-1"
 # designer_effort          = ""   # low | medium (default) | high | model
 # container_engine         = "finch"                     # or "docker" / "podman"
 # memory_event_expiry_days = 30
-# log_retention_days       = 30
+# log_retention_days       = 365
 # enable_gateway           = true    # false = no tool plane; an agent with a `tool` then fails loudly
 # X-Ray/Transaction Search trace indexing rate. 100 indexes every trace — turn it
 # down to cut cost on a long-running deployment.

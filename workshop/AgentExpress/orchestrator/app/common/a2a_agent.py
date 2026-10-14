@@ -454,7 +454,7 @@ class A2AAgent(Agent):
                     f"keyed by the agent id — never in workflow.json.")
         elif self.auth == "sigv4":
             # Nothing to fetch: each request is signed with the runtime's own role.
-            token = ""
+            token = ""  # nosec B105 - "no credential" (auth mode none/sigv4), not a password
         elif self.auth == "oauth2":
             # Reuses the per-agent outbound identity already declared in
             # `agentcore.identity.outbound`, so an OAuth-protected remote agent needs
@@ -462,7 +462,7 @@ class A2AAgent(Agent):
             # then fails below as a 401 from their side rather than silently here.
             token = await ctx.get_identity_token()
         else:
-            token = ""
+            token = ""  # nosec B105 - "no credential" (auth mode none/sigv4), not a password
 
         url = await asyncio.to_thread(self._endpoint, token)
         # The recollection count is ON THE TIMELINE, not just in the telemetry, because
