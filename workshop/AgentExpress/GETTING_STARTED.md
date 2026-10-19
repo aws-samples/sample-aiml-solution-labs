@@ -394,6 +394,13 @@ events with each reviewer's note), **Outputs** and **Files**; see
 [DEPLOYMENT.md](DEPLOYMENT.md#the-flow-tab-on-a-run). On **Observability**, the Run Assistant's
 *this run* is the run shown in Run detail.
 
+### Change a prompt without redeploying, and check a change
+- **Live config** (build app, admins): set `"orchestrator": { "liveConfig": true }` and deploy once; then
+  edit an agent's prompt or model settings, save a version and **Activate** it, or roll back to version 0.
+  See [DEPLOYMENT.md](DEPLOYMENT.md#changing-a-prompt-or-model-without-redeploying-live-config).
+- **Tests tab** (Builder): write cases (a request plus fixed checks), run them on the deployed build, and
+  read the pass rate and what broke. See [DEPLOYMENT.md](DEPLOYMENT.md#test-suites).
+
 ### Activity and admins
 
 **Activity** lists sign-ins and sign-outs, builds created and deleted, designer prompts, secrets

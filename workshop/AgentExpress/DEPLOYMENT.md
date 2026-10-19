@@ -416,6 +416,12 @@ for G in approvers operators; do
 done
 ```
 
+**Groups vs teams.** Groups (in Cognito or your sign-in provider) decide which **actions** a person
+may take, through `authorization.actions`. [Teams](#teams-and-team-workspaces-builder-console) are a
+Builder console feature that decides who **shares which builds** (owner, editor, viewer); a team member
+can be a person or a whole group. **To make someone an admin**, add them to `admins` with
+`admin-add-user-to-group` as above, and have them sign in again.
+
 Self sign-up: `cognito = { self_signup = true }` / `-c selfSignUp=true`. New users verify their
 email and join `members` (`self_signup_group` / `-c selfSignUpGroup=`). That group must be named in
 `authorization.actions` or the deploy fails. Cognito's built-in email sender allows only a few
@@ -688,6 +694,8 @@ Good to know:
 - When two agents of one parallel stage both wait, the run page shows one at a time.
 
 ### Teams and team workspaces (Builder console)
+Teams decide who shares builds; what each person may do is still set by their groups
+([Users, groups and RBAC](#users-groups-and-rbac)).
 
 A team is a group of people who share a workspace of builds. There is nothing to turn on: no new
 setting, resource or IAM permission. Teams live in the builds table under their own keys, and nothing
