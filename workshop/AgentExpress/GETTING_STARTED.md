@@ -398,6 +398,9 @@ events with each reviewer's note), **Outputs** and **Files**; see
 - **Live config** (build app, admins): set `"orchestrator": { "liveConfig": true }` and deploy once; then
   edit an agent's prompt or model settings, save a version and **Activate** it, or roll back to version 0.
   See [DEPLOYMENT.md](DEPLOYMENT.md#changing-a-prompt-or-model-without-redeploying-live-config).
+- **Send runs to Langfuse, Datadog and others** (Builder → **Settings** → **Export**): pick the tool, enter its
+  key, **Test connection**, save and deploy. Each run page then links to its trace. See
+  [DEPLOYMENT.md](DEPLOYMENT.md#send-runs-to-langfuse-datadog-and-others).
 - **Tests tab** (Builder): write cases (a request plus fixed checks), run them on the deployed build, and
   read the pass rate and what broke. See [DEPLOYMENT.md](DEPLOYMENT.md#test-suites).
 

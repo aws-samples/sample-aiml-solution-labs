@@ -240,6 +240,9 @@ Defined once, used by name:
   change prompts and model settings without a redeploy), `models.overrides` (models an `override`
   holder may pick per run), `files` (`retentionDays`; lets agents `ctx.save_file`) and
   `attachments.s3`: all off unless set.
+- `orchestrator.export`: send each run to Langfuse, Datadog, Grafana Cloud, Honeycomb or any OTLP backend
+  (`destination`, `region`, `endpoint`, `secret` = the name of an `exportHeaders` build secret or an ARN, never
+  the key; `send.content` off by default). Set it on the Builder's Settings → Export.
 - An entry that is `{"library": "<id>"}` is a shared item from the console's library: keep it
   as it is.
 

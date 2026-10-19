@@ -68,7 +68,7 @@ Every tool is a Gateway target with a Cedar permit generated from `workflow.json
 | Interceptors | A Lambda before each tool request and after each answer: audit, block, guard, inject, redact (email, phone, SSN, card), hide, cap | [GETTING_STARTED](GETTING_STARTED.md#7-gateway-interceptors) |
 | Evaluations | Built-in and custom LLM judges, automatic or on demand | [GETTING_STARTED](GETTING_STARTED.md#10-tune-features) |
 | Observability | OTEL spans, tokens, latency and cost per call; Prompts & I/O inspector | [ARCHITECTURE](ARCHITECTURE.md#6-agentcore-features) |
-| OTLP export | Also send spans to Langfuse or an OpenTelemetry Collector | [DEPLOYMENT](DEPLOYMENT.md#sending-traces-to-another-otlp-backend) |
+| Observability export | Send every run to Langfuse, Datadog, Grafana Cloud, Honeycomb or any OTLP backend: pick it, paste the key, **Test connection** (Builder → Settings → Export); run links, re-send and pause in the app | [DEPLOYMENT](DEPLOYMENT.md#send-runs-to-langfuse-datadog-and-others) |
 | Skills | SKILL.md know-how an agent opens when needed; never code | [GETTING_STARTED](GETTING_STARTED.md#build-manually) |
 
 ### Runs and people

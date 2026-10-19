@@ -388,7 +388,7 @@ telemetry still work.
 | `builder` | `true` | Builder control plane |
 | `consoleMode` | `app` | `builder` for a [Builder console](#deploy-a-builder-console) |
 | `tags` | | JSON object of extra tags |
-| Others | off | [Organisation guardrails](#organisation-guardrails), [A2A](#serving-the-workflow-over-a2a), [OTLP](#sending-traces-to-another-otlp-backend), [LiteLLM](#using-non-bedrock-models-through-litellm), [teardown](#tear-down); every flag is in [cdk/README.md](orchestrator/cdk/README.md#configuration-context-keys) |
+| Others | off | [Organisation guardrails](#organisation-guardrails), [A2A](#serving-the-workflow-over-a2a), [Export to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others), [OTLP](#sending-traces-to-another-otlp-backend), [LiteLLM](#using-non-bedrock-models-through-litellm), [teardown](#tear-down); every flag is in [cdk/README.md](orchestrator/cdk/README.md#configuration-context-keys) |
 
 Outputs: `uiUrl`, `apiEndpoint`, `idp`, `authEnabled`, `consoleMode`; `cognitoUserPoolId` and
 `cognitoClientId` with `createCognito=true`; `agentRuntimeArn`, `memoryId`, `dedicatedAgents`
