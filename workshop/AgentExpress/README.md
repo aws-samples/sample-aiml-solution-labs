@@ -13,6 +13,8 @@ replace the prompts, contracts and documents with your own.
 |---|---|
 | [![The Builder: agents and tools on the left, the workflow on the canvas, the selected agent's settings on the right](orchestrator/docs/images/builder.png)](orchestrator/docs/images/builder.png) | [![A run's graph: numbered steps, each listing the tools, guardrail and memory it used in this run](orchestrator/docs/images/run-graph.png)](orchestrator/docs/images/run-graph.png) |
 | Drag agents, tools and AgentCore features onto the canvas, or describe the workflow to the Assistant. | Each step lists what it used in this run. **Flow → Story** tells it line by line ([screenshot](orchestrator/docs/images/run-story.png)). |
+| [![The AgentExpress Assistant: a plain-English request on the left, the workflow it drafted and the defaults it chose on the right](orchestrator/docs/images/assistant.png)](orchestrator/docs/images/assistant.png) | [![Observability: a run's cost, tokens, calls and latency, cost by agent, and a per-agent breakdown](orchestrator/docs/images/observability.png)](orchestrator/docs/images/observability.png) |
+| Describe the process; the Assistant drafts the agents, prompts, tools and gates, and lists the defaults it used. | Cost, tokens and latency per run and per agent, with each call's prompts and I/O. |
 
 ## Feature map
 
