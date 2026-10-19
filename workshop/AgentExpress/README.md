@@ -7,6 +7,13 @@ Terraform or CDK turns it into a running system with a web console, and the cons
 designs and deploys new workflows. It is a **reference pattern**, not a finished product:
 replace the prompts, contracts and documents with your own.
 
+## See it
+
+| Build, in the console | Run, in the build's own app |
+|---|---|
+| [![The Builder: agents and tools on the left, the workflow on the canvas, the selected agent's settings on the right](orchestrator/docs/images/builder.png)](orchestrator/docs/images/builder.png) | [![A run's graph: numbered steps, each listing the tools, guardrail and memory it used in this run](orchestrator/docs/images/run-graph.png)](orchestrator/docs/images/run-graph.png) |
+| Drag agents, tools and AgentCore features onto the canvas, or describe the workflow to the Assistant. | Each step lists what it used in this run. **Flow → Story** tells it line by line ([screenshot](orchestrator/docs/images/run-story.png)). |
+
 ## Feature map
 
 One line per feature; the link goes to the detail.
