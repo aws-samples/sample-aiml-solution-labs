@@ -69,6 +69,11 @@ const LABELS: Record<string, [string, StatusIndicatorProps.Type]> = {
   "build.shared": ["Build shared", "info"],
   "lambda.code.updated": ["Tool code changed", "info"],
   "tool.tested": ["Tool tested", "info"],
+  // Where runs are sent (bff/traceexport.py).
+  "export.tested": ["Export tested", "info"],
+  "export.resent": ["Run sent again", "info"],
+  "export.paused": ["Export paused", "stopped"],
+  "export.resumed": ["Export resumed", "success"],
   "library.created": ["Library item added", "success"],
   "library.updated": ["Library item edited", "info"],
   "library.deleted": ["Library item deleted", "stopped"],

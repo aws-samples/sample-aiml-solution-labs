@@ -281,6 +281,12 @@ resource "aws_apigatewayv2_route" "routes" {
     "POST /api/liveconfig/versions",
     "GET /api/liveconfig/versions/{version}",
     "PUT /api/liveconfig/active",
+    # Where runs are sent (orchestrator.export, bff/traceexport.py): a test, a re-send, pause.
+    # Admins (a re-send: also the run's owner), checked in the BFF; 404 while it is off.
+    "GET /api/export",
+    "POST /api/export/test",
+    "PUT /api/export/pause",
+    "POST /api/sessions/{id}/export",
     "POST /api/sessions",
     # One file a run will bring, for agents with `attachments` (bff/runfiles.py).
     "POST /api/sessions/attachments",
@@ -343,6 +349,8 @@ resource "aws_apigatewayv2_route" "routes" {
     # A tool written in the build: checked (bff/codecheck.py), and tested once deployed.
     "POST /api/code/check",
     "POST /api/builds/{id}/test-tool",
+    # One test trace to a build's export destination, from the console (bff/traceexport.py).
+    "POST /api/builds/{id}/export/test",
     # A build's test suites, and runs of them (bff/suiteruns.py).
     "GET /api/builds/{id}/suites",
     "PUT /api/builds/{id}/suites",

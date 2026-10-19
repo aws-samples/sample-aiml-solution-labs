@@ -43,6 +43,7 @@ import { FilesPage } from "./views/FilesPage";
 import { HitlGate, type Decision, type GroupDecision } from "./views/HitlGate";
 import { Observability } from "./views/Observability";
 import { RunDetail } from "./views/RunDetail";
+import { RunExport } from "./views/RunExport";
 import { ShareRun } from "./views/ShareRun";
 import { SharedRun } from "./views/SharedRun";
 import { TriggersPage } from "./views/TriggersPage";
@@ -731,7 +732,11 @@ export default function App() {
             snap={snap} workflow={runWorkflow} selected={selectedStep}
             onSelect={setSelectedStep} can={canOnRun} onCancel={cancel}
             activeTab={tab} onTabChange={setTab} onRerun={rerun}
-            actions={!othersRun && authEnabled() ? <ShareRun sessionId={snap.session_id} /> : undefined}
+            actions={[
+              // Where the run was sent (orchestrator.export): a build's run from a console is its app's.
+              snap.build ? null : <RunExport key="export" snap={snap} canResend={Boolean(me.admin) || !othersRun} />,
+              !othersRun && authEnabled() ? <ShareRun key="share" sessionId={snap.session_id} /> : null,
+            ]}
           />
         </>
       )

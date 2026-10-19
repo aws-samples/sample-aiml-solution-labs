@@ -718,8 +718,10 @@ def delete(build_id: str, owner: str) -> None:
 # no route ever returns one. The deploy runner reads them (TOOL_API_KEYS / A2A_TOKENS).
 
 #: What a build's secret holds: tool API keys (and OAuth client secrets) by tool, bearer
-#: tokens by remote agent, and each identity's secret by identity name.
-SECRET_KINDS = ("toolApiKeys", "a2aTokens", "identitySecrets")
+#: tokens by remote agent, each identity's secret by identity name, and the HTTP headers
+#: (a JSON object, the API key in them) an observability tool takes, by the name
+#: orchestrator.export.secret gives (bff/export_check.py, app/features/observability/runexport.py).
+SECRET_KINDS = ("toolApiKeys", "a2aTokens", "identitySecrets", "exportHeaders")
 
 
 def _secret_id(build_id: str) -> str:
@@ -754,6 +756,8 @@ def set_secrets(build_id: str, owner: str, body: dict) -> dict:
                 data[kind].pop(name, None)
             elif not isinstance(value, str) or len(value) > 4096:
                 raise BuildError(400, f"{kind}.{name} must be a string of at most 4096 characters")
+            elif kind == "exportHeaders" and (problem := _export_headers_problem(value)):
+                raise BuildError(400, f"exportHeaders.{name} {problem}")
             else:
                 data[kind][name] = value
     blob = json.dumps(data)
@@ -764,6 +768,11 @@ def set_secrets(build_id: str, owner: str, body: dict) -> dict:
                                Description=f"AgentExpress build {build_id}: tool API keys "
                                            f"and A2A tokens")
     return {k: sorted(v) for k, v in data.items()}
+
+
+def _export_headers_problem(value: str) -> str:
+    import export_check
+    return export_check.headers_problem(value)
 
 
 def delete_secrets(build_id: str) -> None:

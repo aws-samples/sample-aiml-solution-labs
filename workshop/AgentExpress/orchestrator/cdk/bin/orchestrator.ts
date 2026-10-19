@@ -115,6 +115,8 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   toolApiKeys: parseSecretMap("TOOL_API_KEYS", "tool name", process.env.TOOL_API_KEYS),
   // Each workflow.json identity's secret (an OAuth client secret or an API key).
   identitySecrets: parseSecretMap("IDENTITY_SECRETS", "identity name", process.env.IDENTITY_SECRETS),
+  // orchestrator.export's headers by secret name (the Builder's exportHeaders); lib/export.ts.
+  exportHeaders: parseSecretMap("EXPORT_HEADERS", "orchestrator.export.secret name", process.env.EXPORT_HEADERS),
   // Bearer tokens for `runtime: "a2a"` agents, keyed by agent id. Credentials for
   // somebody ELSE's agent, so they come from the environment and never from config.
   a2aTokens: parseSecretMap("A2A_TOKENS", "agent id", process.env.A2A_TOKENS),

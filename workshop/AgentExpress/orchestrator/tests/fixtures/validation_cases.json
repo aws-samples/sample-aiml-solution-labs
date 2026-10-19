@@ -15220,6 +15220,355 @@
     ]
    ],
    "expect": []
+  },
+  {
+   "name": "orchestrator.export to Langfuse with a named build secret",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "langfuse",
+      "region": "us",
+      "secret": "langfuse",
+      "project": "cm1abc"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "orchestrator.export to self-hosted Langfuse needs its address",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "langfuse",
+      "region": "self-hosted",
+      "secret": "langfuse"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.endpoint",
+     "message": "is required for langfuse: the https:// address to send to"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export to Datadog: an unknown site, an address it does not take, a partial ARN",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "datadog",
+      "region": "datadoghq.cn",
+      "endpoint": "https://otlp.example.com",
+      "secret": "arn:aws:secretsmanager:us-east-1:123456789012:secret:dd"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.region",
+     "message": "must be one of: datadoghq.com, us3.datadoghq.com, us5.datadoghq.com, datadoghq.eu, ap1.datadoghq.com, ap2.datadoghq.com, uk1.datadoghq.com"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.endpoint",
+     "message": "is set from destination and region; remove it, or use destination otlp to send anywhere"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.secret",
+     "message": "must be the full ARN of a Secrets Manager secret, including the six-character suffix"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export to an unknown destination",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "splunk",
+      "secret": "splunk"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.destination",
+     "message": "must be one of: langfuse, datadog, grafana, honeycomb, otlp"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export with no destination and an unknown key",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "apiKey": "pk-lf-1"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.apiKey",
+     "message": "unknown key; allowed: destination, region, endpoint, secret, project, send"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.destination",
+     "message": "is required: one of langfuse, datadog, grafana, honeycomb, otlp"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export to an OTLP collector: a plain-http address, a region, a bad name, send flags",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "otlp",
+      "region": "us",
+      "endpoint": "http://collector.example.com:4318",
+      "secret": "my key!",
+      "send": {
+       "content": true,
+       "metrics": "yes",
+       "logs": true
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.region",
+     "message": "applies only to langfuse, datadog and honeycomb; remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.endpoint",
+     "message": "must be an https:// URL with no user info, query or fragment"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.secret",
+     "message": "must be a secret name: letters, digits, . _ - (up to 64)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.send.metrics",
+     "message": "must be true or false"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.send.logs",
+     "message": "unknown key; send takes: content, evals, metrics"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.send.content",
+     "message": "sends prompts, answers and tool input and output to otlp, outside your AWS account; check that your data may go there"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export to Grafana Cloud with metrics asked for",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "grafana",
+      "endpoint": "https://otlp-gateway-prod-us-east-0.grafana.net/otlp",
+      "secret": "grafana",
+      "send": {
+       "metrics": true,
+       "evals": false
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.send.metrics",
+     "message": "has no effect for grafana: metrics go only to datadog, honeycomb, otlp"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export to Honeycomb by secret ARN, with content",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": "honeycomb",
+      "region": "eu",
+      "secret": "arn:aws:secretsmanager:eu-west-1:123456789012:secret:honeycomb-AbC123",
+      "send": {
+       "content": true
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.send.content",
+     "message": "sends prompts, answers and tool input and output to honeycomb, outside your AWS account; check that your data may go there"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export that is not an object",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     "langfuse"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export",
+     "message": "must be an object"
+    }
+   ]
+  },
+  {
+   "name": "orchestrator.export with a destination that is not text",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "export"
+     ],
+     {
+      "destination": 7,
+      "secret": "x"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.export.destination",
+     "message": "must be a string"
+    }
+   ]
   }
  ]
 }

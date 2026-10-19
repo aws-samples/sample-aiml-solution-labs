@@ -18,7 +18,9 @@ Invoke contract:
   {"action": "evaluate",    "session_id": "...", "agent_id": "...", "prompt": "..."(optional)}
   {"action": "run_insights","lookback_hours": 168}
   {"action": "get_insights"}   -> synchronous read of the latest findings
-All except get_insights return immediately; clients poll the status store.
+  {"action": "export_test"}    -> sends one test trace (orchestrator.export); synchronous
+  {"action": "export_run",  "session_id": "..."} -> sends that run again; synchronous
+All except get_insights and the export actions return immediately; clients poll the status store.
 """
 
 import asyncio
@@ -272,6 +274,12 @@ async def _run(session_id: str, initial=None, resume=None, rerun=None, user: str
                 active_seconds=_t.perf_counter() - _burst_start,
             )
         otel.detach(_sess_token)
+        # A run that has ended goes to the build's observability tool (orchestrator.export),
+        # before the task completes so the container is still awake to send it. Returns at
+        # once when export is off; bounded and never raises when on.
+        with contextlib.suppress(Exception):
+            from app.features.observability import runexport
+            await runexport.after_burst(session_id)
         # Push buffered spans to the exporter BEFORE marking the task complete —
         # once complete, AgentCore may freeze/reclaim the idle container and the
         # BatchSpanProcessor's buffered spans would never be exported.
@@ -287,6 +295,8 @@ async def _run_eval(session_id: str, agent_id: str, user: str = "", prompt: str 
     through the (blocking) scoring, which runs in a worker thread. Results land as
     kind="eval" telemetry rows (tagged with prompt + version) the UI reads."""
     task_id = app.add_async_task("evaluate")
+    from app.common import clock
+    since = clock.now_str()
     try:
         from app.features.evaluations import service as eval_service
         await emit(session_id, {
@@ -309,6 +319,11 @@ async def _run_eval(session_id: str, agent_id: str, user: str = "", prompt: str 
                     "type": "log",
                     "log": f"Eval {agent_id} {s['evaluator']}: ERROR {str(s.get('error'))[:180]}"})
         await emit(session_id, {"type": "log", "log": f"Evaluation complete for {agent_id}"})
+        # The new scores to the build's observability tool (orchestrator.export send.evals).
+        with contextlib.suppress(Exception):
+            from app.features.observability import runexport
+            if runexport.settings() is not None:
+                await asyncio.to_thread(runexport.after_eval, session_id, agent_id, since)
     except Exception as e:  # noqa: BLE001
         await emit(session_id, {"type": "log",
                                 "log": f"Evaluation failed for {agent_id}: {type(e).__name__}: {e}"})
@@ -351,6 +366,12 @@ async def invoke(payload, context=None):
         # starting one that can only fail. _run_insights stays for the redesigned API.
         from app.features.optimization import insights as _ins
         return {"status": "error", "error": _ins.CREATION_ENDED}
+
+    # Sending runs to the build's observability tool (orchestrator.export): a test trace now,
+    # or one run sent again. Synchronous, bounded by the export's own request timeouts.
+    if action in ("export_test", "export_run"):
+        from app.features.observability import runexport
+        return await asyncio.to_thread(runexport.action, payload)
 
     if action == "start":
         session_id = payload.get("session_id") or uuid.uuid4().hex[:12]
@@ -435,7 +456,7 @@ async def invoke(payload, context=None):
         return {"session_id": session_id, "status": "evaluating"}
 
     return {"error": f"unknown action '{action}'; use 'start', 'resume', 'rerun_from', "
-                     f"'evaluate', 'run_insights' or 'get_insights'"}
+                     f"'evaluate', 'run_insights', 'get_insights', 'export_test' or 'export_run'"}
 
 
 if __name__ == "__main__":

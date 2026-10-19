@@ -310,6 +310,10 @@ INVENTORY = {
     ("app/common/litellm_proxy.py", "_post"):
         "netguard.urlopen: the LiteLLM proxy's /v1/chat/completions (deployment config "
         "LITELLM_BASE_URL, https-checked at plan/synth and at call); carries the virtual key.",
+    ("app/features/observability/runexport.py", "_post"):
+        "netguard.urlopen: the observability tool a build sends its runs to (workflow.json "
+        "orchestrator.export: a preset host, or the https endpoint given for otlp, grafana and "
+        "self-hosted Langfuse); carries the tool's API key from Secrets Manager.",
     ("bff/litellm_models.py", "_fetch"):
         "netguard.urlopen: the LiteLLM proxy's /v1/models (deployment config LITELLM_BASE_URL); "
         "carries the virtual key.",

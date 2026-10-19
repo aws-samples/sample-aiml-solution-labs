@@ -1822,6 +1822,37 @@
      "type": "object",
      "doc": "What starts a run without anyone typing it: name -> {type, prompt, ...}. type webhook (a signed POST to the app's /api/hooks/<name>; `signature` agentexpress, github, slack, stripe or token), schedule (`expression` cron(...) or rate(...), `timezone`), eventbridge (an event `pattern`, on `bus`, default the default bus: AWS services, your applications, SaaS partners), s3 (`bucket`, `prefix`: an object created there, attached when orchestrator.attachments.s3 allows it) or sqs (`queueArn`, or none for a queue the framework makes, with a dead-letter queue). `prompt` is the run's request, with {{placeholders}} filled from the delivery ({{body.x}}, {{headers.x}}, {{detail.x}}, {{event.x}}, {{time}}). Also: `enabled` (default true), `runAs` owner (default) or service, `approvers` (groups that read and decide a service trigger's runs), `gates` inherit (default) or auto, `maxRunsPerHour` (default 60), `attachPayload` (the delivery as payload.json), `idempotencyKey` (a template; a delivery seen in the last day starts no second run).",
      "reads": "bff/triggers.py; triggers.tf / orchestrator-stack.ts triggersOf"
+    },
+    "export": {
+     "type": "object",
+     "properties": {
+      "destination": {
+       "type": "string",
+       "doc": "Where runs go: langfuse, datadog, grafana (Grafana Cloud), honeycomb, or otlp (any OTLP/HTTP backend or OpenTelemetry Collector). Required."
+      },
+      "region": {
+       "type": "string",
+       "doc": "langfuse: us, eu (default) or self-hosted. datadog: your site, datadoghq.com (default), us3.datadoghq.com, us5.datadoghq.com, datadoghq.eu, ap1.datadoghq.com, ap2.datadoghq.com or uk1.datadoghq.com. honeycomb: us (default) or eu. Not used by grafana or otlp."
+      },
+      "endpoint": {
+       "type": "string",
+       "doc": "The https:// address, for otlp, grafana and self-hosted Langfuse only (the others are set from region): the OTLP base URL (/v1/traces is added), or your Langfuse host."
+      },
+      "secret": {
+       "type": "string",
+       "doc": "The NAME of the build secret (kind exportHeaders) holding the HTTP headers that carry the API key, or the full ARN of a Secrets Manager secret holding them as a JSON object. Never the key itself."
+      },
+      "project": {
+       "type": "string",
+       "doc": "Optional: the Langfuse project id, or the Datadog service name (also the service.name sent). Used for the console's View in ... links."
+      },
+      "send": {
+       "type": "object",
+       "doc": "What is sent: content (default false: prompts, answers, tool input and output, the run's request and result), evals (default true: evaluation scores), metrics (default true: runs, failures, duration, cost, tokens; datadog, honeycomb and otlp only)."
+      }
+     },
+     "doc": "Send every run to Langfuse, Datadog, Grafana Cloud, Honeycomb or any OTLP backend, once it ends: one trace per run (agents, model calls with tokens and cost, tool calls, guardrail, Cedar, memory and person events, evaluation scores) and, where accepted, metrics. Prompts and answers only with send.content. Not set: nothing is sent and nothing is created. The deploy settings otlp_endpoint / -c otlpEndpoint still work; when both are set, this wins.",
+     "reads": "app/features/observability/runexport.py; export.tf / cdk/lib/export.ts (the headers secret, its grant, OTLP_EXPORT_* on the orchestrator runtime); bff/export_check.py"
     }
    }
   },

@@ -37,6 +37,7 @@ import { addChoices, findComponent, moveComponent, removeComponent } from "./com
 import type { ComponentKind } from "./components";
 import { PaletteGroup, PRIMITIVE_TAB, PrimitivePalette } from "./Primitives";
 import { DesignChat } from "./DesignChat";
+import { ExportSettings, exportSummary } from "./ExportSettings";
 import { BuildPolicies, policyBlock } from "./Policies";
 import { BuildInterceptors, interceptorsOf } from "./Interceptors";
 import { BuildSuites } from "./Suites";
@@ -542,7 +543,7 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
       deployed={Boolean(build?.deployed?.version)}
       testsBlock={runBlockReason({ runsHere: Boolean(onRun), canStart: can("start"), account: build?.deployed?.account })}
       deployment={store.server ? (
-        <DeployPanel build={build} errors={errorCount} can={can}
+        <DeployPanel build={build} errors={errorCount} can={can} exportLabel={exportSummary(project)}
           signInWith={providerOf(project) === "cognito" ? undefined : PROVIDER_NAME[providerOf(project)]}
           onDeploy={onDeploy} onDestroy={onDestroy} onRun={onRun ? () => onRun(project.id) : undefined}
           onPublish={can("admin") ? () => setPublishing({ what: "build" }) : undefined} />
@@ -1011,12 +1012,13 @@ function Editor({
                 {singleBlocks.map((name) => (
                   <Container key={name} header={<Header variant="h2" description={block(name).$comment?.split(". ")[0]}>{name}</Header>}>
                     <EntryForm name={name} entry={(wf[name] ?? {}) as Entry} issues={issues} pathPrefix={name}
-                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true } }
+                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true }, export: { hidden: true } }
                         : name === "authorization" ? SIGN_IN_HIDDEN : undefined}
                       onChange={(e) => setProject(name === "ui" ? setUi(project, e as Record<string, Json>)
                         : { ...project, workflow: { ...wf, [name]: e } })} />
                   </Container>
                 ))}
+                <ExportSettings project={project} setProject={setProject} buildId={server ? build?.id : undefined} notify={notify} />
               </SpaceBetween>
             ),
           },

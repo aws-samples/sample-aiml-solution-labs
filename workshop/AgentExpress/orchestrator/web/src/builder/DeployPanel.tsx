@@ -344,8 +344,10 @@ function AppLoginView({ build, signInWith }: { build: BuildSummary; signInWith?:
   );
 }
 
-export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, signInWith, onPublish }: {
+export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, signInWith, onPublish, exportLabel }: {
   build: BuildSummary | null;
+  /** "Export: Langfuse (EU)" when the build sends its runs elsewhere (ExportSettings.tsx). */
+  exportLabel?: string;
   /** Publish the deployed build to an Agent Registry (admins; RegistryPublish.tsx). */
   onPublish?: () => void;
   /** Its app signs people in with this provider (Identity > Sign-in), not a login of its own. */
@@ -410,6 +412,7 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, si
     >
       <SpaceBetween size="s">
         {failed?.error ? <pre className="axb-code axb-log">{failed.error}</pre> : null}
+        {exportLabel ? <Box variant="small" color="text-body-secondary">{exportLabel}</Box> : null}
         {build?.deployed?.uiUrl && !active ? (
           <Box variant="small" color="text-body-secondary">
             Its app: <Link href={build.deployed.uiUrl} external>{build.deployed.uiUrl}</Link>

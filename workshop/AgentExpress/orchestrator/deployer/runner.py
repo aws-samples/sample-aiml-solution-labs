@@ -280,6 +280,8 @@ def read_secrets(env: dict, bid: str) -> dict:
         return {}
     keys, tokens = data.get("toolApiKeys") or {}, data.get("a2aTokens") or {}
     idents = data.get("identitySecrets") or {}
+    # orchestrator.export's headers, by name (terraform/export.tf, cdk/lib/export.ts).
+    exports = data.get("exportHeaders") or {}
     out = {}
     if keys:
         out["TOOL_API_KEYS"] = out["TF_VAR_tool_api_keys"] = json.dumps(keys)
@@ -287,8 +289,10 @@ def read_secrets(env: dict, bid: str) -> dict:
         out["A2A_TOKENS"] = out["TF_VAR_a2a_tokens"] = json.dumps(tokens)
     if idents:
         out["IDENTITY_SECRETS"] = out["TF_VAR_identity_secrets"] = json.dumps(idents)
-    print(f"runner: using {len(keys)} tool API key(s), {len(tokens)} A2A token(s) and "
-          f"{len(idents)} identity secret(s)")
+    if exports:
+        out["EXPORT_HEADERS"] = out["TF_VAR_export_headers"] = json.dumps(exports)
+    print(f"runner: using {len(keys)} tool API key(s), {len(tokens)} A2A token(s), "
+          f"{len(idents)} identity secret(s) and {len(exports)} export header set(s)")
     return out
 
 

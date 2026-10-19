@@ -38,6 +38,7 @@ import * as vocab from "./vocabulary";
 import { keyDefault, keyDefaultFor } from "./defaults";
 import { filesRetentionDays, listRunFilesStatement, saveRunFilesStatement } from "./run-files";
 import { otlpExport } from "./otlp-export";
+import { addRunExport, exportPlan } from "./export";
 import { litellmProxy } from "./litellm";
 import { validateSmithy } from "./smithy-tool";
 import { validateKbIngestion } from "./kb-ingestion";
@@ -1355,6 +1356,9 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   toolApiKeys: Record<string, string>;
   /** Each workflow.json identity's secret, from $IDENTITY_SECRETS. Never a context key. */
   identitySecrets?: Record<string, string>;
+  /** orchestrator.export's headers (a JSON object), by secret name, from $EXPORT_HEADERS.
+   *  Never a context key. See lib/export.ts. */
+  exportHeaders?: Record<string, string>;
   /**
    * Bearer tokens for `runtime: "a2a"` agents, keyed by the workflow.json agent id.
    * From $A2A_TOKENS, never a context key (cdk.json is committed). These are
@@ -2169,8 +2173,15 @@ export class OrchestratorStack extends cdk.Stack {
       // always_on defeats the sampled=0 context the UI path propagates; the
       // bundled LangChain instrumentation is disabled because it emits a second,
       // token-less LLM span. (Same reasoning as terraform/main.tf.)
+      // Sending runs to an observability tool (workflow.json orchestrator.export,
+      // lib/export.ts): null when off. When set it wins over the otlp* settings.
+      const runExport = exportPlan(workflow, props.exportHeaders);
+      if (runExport && props.otlpEndpoint) {
+        cdk.Annotations.of(this).addWarning("app/workflow.json orchestrator.export is set, so runs go where it says " +
+          "and the deploy settings otlpEndpoint / otlpHeadersSecretArn are not used. Remove one of the two.");
+      }
       // The optional second trace destination (lib/otlp-export.ts): nothing when off.
-      const otlp = otlpExport(props);
+      const otlp = otlpExport(runExport ? {} : props);
       // Non-Bedrock models through a LiteLLM proxy (lib/litellm.ts): nothing when off.
       const litellm = litellmProxy(props);
       const observabilityEnv = {
@@ -2791,6 +2802,8 @@ export class OrchestratorStack extends cdk.Stack {
         })
       );
 
+      // orchestrator.export (lib/export.ts): its headers secret and grant; {} when off.
+      const runExportEnv = addRunExport(this, runExport, dataKey, runtimeRole);
       const orchestrator = new cdk.CfnResource(this, "Orchestrator", {
         type: "AWS::BedrockAgentCore::Runtime",
         properties: {
@@ -2823,6 +2836,7 @@ export class OrchestratorStack extends cdk.Stack {
             ...(Object.keys(harnessPlane.arns).length ? { HARNESS_ARNS: this.toJsonString(harnessPlane.arns) } : {}),
             ...featureEnv,
             ...gatewayEnv,
+            ...runExportEnv,
           },
         },
       });
@@ -3248,6 +3262,12 @@ export class OrchestratorStack extends cdk.Stack {
       { path: "/api/liveconfig/versions", methods: [HttpMethod.GET, HttpMethod.POST] },
       { path: "/api/liveconfig/versions/{version}", methods: [HttpMethod.GET] },
       { path: "/api/liveconfig/active", methods: [HttpMethod.PUT] },
+      // Where runs are sent (orchestrator.export, bff/traceexport.py): a test, a re-send, pause.
+      // Admins (a re-send: also the run's owner), checked in the BFF; 404 while it is off.
+      { path: "/api/export", methods: [HttpMethod.GET] },
+      { path: "/api/export/test", methods: [HttpMethod.POST] },
+      { path: "/api/export/pause", methods: [HttpMethod.PUT] },
+      { path: "/api/sessions/{id}/export", methods: [HttpMethod.POST] },
       // The Bedrock text models this account can invoke, for the Build view's picker.
       { path: "/api/models", methods: [HttpMethod.GET] },
       // The models the LiteLLM proxy serves (bff/litellm_models.py); 404 while it is off.
@@ -3308,6 +3328,8 @@ export class OrchestratorStack extends cdk.Stack {
       // A tool written in the build: checked (bff/codecheck.py), and tested once deployed.
       { path: "/api/code/check", methods: [HttpMethod.POST] },
       { path: "/api/builds/{id}/test-tool", methods: [HttpMethod.POST] },
+      // One test trace to a build's export destination, from the console (bff/traceexport.py).
+      { path: "/api/builds/{id}/export/test", methods: [HttpMethod.POST] },
       // A build's test suites, and runs of them (bff/suiteruns.py).
       { path: "/api/builds/{id}/suites", methods: [HttpMethod.GET, HttpMethod.PUT] },
       { path: "/api/builds/{id}/suite-runs", methods: [HttpMethod.POST] },

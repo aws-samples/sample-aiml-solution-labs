@@ -32,6 +32,7 @@ import { checkBrowserTool } from "./browserTool";
 import { checkTasks } from "./taskCheck";
 import { checkHarness } from "./harnessCheck";
 import { checkModelRouting } from "./modelRoutingCheck";
+import { checkExport } from "./exportCheck";
 import { stepAgents, stepName, type Entry, type StepSpec, type Workflow } from "./model";
 
 export type Where =
@@ -1311,6 +1312,7 @@ export function validate(wf: Workflow): Issue[] {
   checkTasks(agents as Record<string, unknown>, tools as Record<string, unknown>, steps as StepSpec[], wf.orchestrator, add, vocab, upstreamIds);
   checkHarness(agents as Record<string, unknown>, add, wf as unknown as Record<string, unknown>);
   checkModelRouting(wf.orchestrator, agents as Record<string, unknown>, wf.authorization, add);
+  checkExport(wf.orchestrator, add);
   checkSignIn(wf.authorization, add);
   checkNamed(wf, add, out);
 

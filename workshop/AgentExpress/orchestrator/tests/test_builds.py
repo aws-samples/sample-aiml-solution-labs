@@ -635,7 +635,8 @@ def test_a_builds_secrets_are_write_only_and_go_with_the_build(env):
     save(env)
     status, names = call(env, "PUT /api/builds/{id}/secrets", params={"id": "pclaims01"},
                          body={"toolApiKeys": {"billing": "sk-live-123"}, "a2aTokens": {"partner": "tok"}})
-    assert status == 200 and names == {"toolApiKeys": ["billing"], "a2aTokens": ["partner"], "identitySecrets": []}
+    assert status == 200 and names == {"toolApiKeys": ["billing"], "a2aTokens": ["partner"], "identitySecrets": [],
+                                  "exportHeaders": []}
     status, got = call(env, "GET /api/builds/{id}/secrets", params={"id": "pclaims01"})
     assert got == names and "sk-live-123" not in json.dumps(got)   # names out, never values
     assert call(env, "GET /api/builds/{id}/secrets", params={"id": "pclaims01"}, sub="u2")[0] == 404
@@ -656,6 +657,24 @@ def test_the_runner_hands_secrets_to_both_tools(env, runner):
     assert json.loads(out["TOOL_API_KEYS"]) == {"billing": "k"}
     assert out["TF_VAR_tool_api_keys"] == out["TOOL_API_KEYS"]
     assert "A2A_TOKENS" not in out
+    assert "EXPORT_HEADERS" not in out
+
+
+def test_export_headers_are_checked_when_saved_and_reach_both_tools(env, runner):
+    """orchestrator.export's headers: a JSON object of headers, refused otherwise without
+    quoting it, then handed to Terraform and CDK by name."""
+    save(env)
+    bad = "Basic " + "c2VjcmV0"
+    status, body = call(env, "PUT /api/builds/{id}/secrets", params={"id": "pclaims01"},
+                        body={"exportHeaders": {"langfuse": bad}})
+    assert status == 400 and bad not in json.dumps(body)
+    headers = json.dumps({"Authorization": bad})
+    status, names = call(env, "PUT /api/builds/{id}/secrets", params={"id": "pclaims01"},
+                         body={"exportHeaders": {"langfuse": headers}})
+    assert status == 200 and names["exportHeaders"] == ["langfuse"]
+    out = runner.read_secrets({"SECRETS_PREFIX": "agentexpress/console/builds/"}, "pclaims01")
+    assert json.loads(out["EXPORT_HEADERS"]) == {"langfuse": headers}
+    assert out["TF_VAR_export_headers"] == out["EXPORT_HEADERS"]
 
 
 # --- knowledge-base documents ---------------------------------------------------------

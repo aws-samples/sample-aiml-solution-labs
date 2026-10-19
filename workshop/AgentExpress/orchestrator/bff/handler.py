@@ -48,6 +48,10 @@ Endpoints:
   GET    /api/telemetry/aggregate                -> by date / model / user rollup
   GET    /api/analytics                          -> per tool / agent rates, latency, health (admin)
   POST   /api/chat                   {message, history} -> {reply, actions}
+  GET    /api/export                             -> where runs are sent (orchestrator.export; bff/traceexport.py)
+  POST   /api/export/test                        -> the runtime sends a test trace (admin)
+  POST   /api/sessions/{id}/export               -> send that run again (admin, or its owner)
+  PUT    /api/export/pause           {paused}    -> pause or resume sending (admin)
 
 Builder builds (bff/builds.py; only when the builder plane is deployed):
   GET    /api/builds                             -> your builds
@@ -110,6 +114,7 @@ import sharing
 import suiteruns
 import suites
 import teams
+import traceexport
 import triggers
 import workflow
 from boto3.dynamodb.conditions import Attr, Key
@@ -982,6 +987,20 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
         result = builds.test_tool(build_id, owner, key, str(body.get("tool") or ""), body.get("event"))
         audit("tool.tested", **builds.label(build_id, owner), tool=key, ok=result["ok"])
         return _resp(200, result)
+    # Export (bff/traceexport.py): one test span from this console to Langfuse, Datadog...,
+    # through the SSRF guard. It reaches outside AWS with the build's keys, so like a tool
+    # test it takes `deploy`, and the caller must be able to change the build.
+    if route_key == traceexport.CONSOLE_ROUTE:
+        denied = _forbidden("deploy", event)
+        if denied:
+            return denied
+        try:
+            result = traceexport.console_test(build_id, owner, body)
+        except traceexport.Refused as e:
+            return _resp(e.status, {"error": str(e)})
+        audit("export.tested", **builds.label(build_id, owner), destination=str(body.get("destination") or ""),
+              ok=result["ok"])
+        return _resp(200, result)
     # The policy library (bff/policies.py): the caller's own Cedar policies, private like
     # connected accounts. Like a draft, it changes nothing in AWS until a build that has
     # one attached is deployed, so it takes no permission.
@@ -1685,6 +1704,24 @@ def _route(event: dict, context) -> dict:
             model_problems=model_problems)
         return _resp(status, answer)
 
+    # Export (bff/traceexport.py): where this deployment's runs are sent, a test trace, a run
+    # sent again, pause. Only a build's own app runs anything to send; 404 while it is off.
+    if route_key in traceexport.ROUTES:
+        if _console_mode() == "builder" or status_tbl is None:
+            return _resp(404, {"error": NOT_HERE})
+
+        def run_owner(sid: str) -> str | None:
+            item = status_tbl.get_item(Key={"session_id": sid}, ProjectionExpression="#o",
+                                       ExpressionAttributeNames={"#o": "owner"}).get("Item")
+            return None if item is None else str(item.get("owner") or "")
+
+        status, answer = traceexport.route(
+            route_key, params, body, raw=workflow.RAW, table=status_tbl, admin=_is_admin(event),
+            caller=str(_owner(event)), who=_user(event), run_owner=run_owner,
+            invoke=lambda payload: traceexport.invoke_runtime(agentcore, RUNTIME_ARN, payload),
+            audit=lambda action, sid, **detail: _audit_run(event, action, sid, **detail))
+        return _resp(status, answer)
+
     # A build's test suites (bff/suiteruns.py), before the builds routes that share their prefix.
     if route_key in suiteruns.ROUTES:
         return _suites_route(route_key, params, body, event, context)
@@ -1821,6 +1858,8 @@ def _route(event: dict, context) -> dict:
             if not last:
                 break
             scan_kwargs["ExclusiveStartKey"] = last
+        # A reserved row is not a run (traceexport.PAUSE_KEY): only the unfiltered admin list sees one.
+        items = [i for i in items if not str(i.get("session_id") or "").startswith("_")]
         # `created` is an ET string ("YYYY-MM-DD HH:MM:SS") for new sessions and a
         # legacy epoch-ms int for old ones. Coerce to str so the sort never mixes
         # types; both forms still order newest-first (ET strings sort above ints).

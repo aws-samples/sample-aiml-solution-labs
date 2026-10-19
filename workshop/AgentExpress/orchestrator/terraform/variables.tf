@@ -414,3 +414,13 @@ variable "litellm_key_secret_arn" {
     error_message = "litellm_key_secret_arn must be the full ARN of a Secrets Manager secret, including the six-character suffix (arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf)."
   }
 }
+# The HTTP headers (a JSON object; the API key is in them) for workflow.json
+# orchestrator.export, keyed by the name orchestrator.export.secret gives: the Builder's
+# exportHeaders build secrets. Never in workflow.json:
+#   export TF_VAR_export_headers='{"langfuse":"{\"Authorization\":\"Basic ...\"}"}'
+variable "export_headers" {
+  description = "Map of secret name -> a JSON object of HTTP headers, for workflow.json orchestrator.export.secret when it names one (export.tf). Mirrors CDK EXPORT_HEADERS."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}

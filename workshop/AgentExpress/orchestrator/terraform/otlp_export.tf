@@ -8,7 +8,8 @@
 # Off, nothing here exists and the runtimes' environment is exactly what it was: the
 # variables are merged in only when on, so an upgrade without this setting plans no change.
 locals {
-  otlp_export_enabled = var.otlp_endpoint != ""
+  # Off when workflow.json orchestrator.export is set: that wins (export.tf).
+  otlp_export_enabled = var.otlp_endpoint != "" && !local.export_on
   otlp_export_env = local.otlp_export_enabled ? {
     OTLP_EXPORT_ENDPOINT           = var.otlp_endpoint
     OTLP_EXPORT_HEADERS_SECRET_ARN = var.otlp_headers_secret_arn

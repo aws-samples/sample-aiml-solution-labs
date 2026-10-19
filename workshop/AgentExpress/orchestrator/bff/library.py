@@ -33,8 +33,9 @@ KINDS = {"tool": ("tools", "tool"), "guardrail": ("guardrails", "guardrail"),
          "skill": ("skills", "skill")}
 MAP_KIND = {m: k for k, (m, _) in KINDS.items()}
 #: Kinds a build takes a COPY of, never a live {"library": id} link: a Gateway
-#: interceptor (orchestrator.interceptors.<point>, with its files) is one per build.
-COPY_KINDS = ("interceptor",)
+#: interceptor (orchestrator.interceptors.<point>, with its files) is one per build, and so is
+#: an export setup (orchestrator.export, without its keys: bff/traceexport.py).
+COPY_KINDS = ("interceptor", "export")
 ALL_KINDS = (*KINDS, *COPY_KINDS)
 ID_RE = re.compile(r"^[0-9a-f]{8}$")
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,31}$")
@@ -130,6 +131,11 @@ def _check(kind: str, name, definition, files) -> tuple[str, dict]:
         raise BuildError(400, "definition is the entry itself: an object")
     if kind == "interceptor":
         return name, _check_interceptor(definition, files, BuildError)
+    if kind == "export":
+        import traceexport
+        if files is not None:
+            raise BuildError(400, "an export setup has no files")
+        return name, traceexport.check_definition(definition, BuildError)
     block = KINDS[kind][1]
     problems: list = []
     validate_build._check_entry(block, definition, KINDS[kind][0], {"kind": "library"}, problems)

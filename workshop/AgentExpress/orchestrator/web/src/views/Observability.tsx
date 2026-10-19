@@ -30,6 +30,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { getToken } from "../api";
 import type { Workflow } from "../types";
+import { ExportCard } from "./RunExport";
 
 declare global {
   interface Window {
@@ -101,6 +102,9 @@ export function Observability({ workflow, session, build = "" }: {
 
   return (
     <>
+      {/* Admins: where this app's runs are sent (RunExport.tsx). Not for a build's runs seen
+          from a console: those are sent by the build's own app. */}
+      {build ? null : <ExportCard />}
       {ready ? null : <Box padding="l"><Spinner /> Loading observability…</Box>}
       <div ref={host} />
     </>

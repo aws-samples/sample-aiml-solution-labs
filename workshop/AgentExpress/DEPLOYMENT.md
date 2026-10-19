@@ -11,7 +11,7 @@ types, agents, the Builder): [GETTING_STARTED.md](GETTING_STARTED.md). Internals
 | Agents | [Task steps](#steps-with-no-model-task-steps) · [Harness](#agents-run-by-agentcore-harness) · [LiteLLM](#using-non-bedrock-models-through-litellm) · [Model routing](#choosing-which-model-answers-per-run-override-routing-and-fallbacks) |
 | Using it | [Smoke test](#smoke-test-a-deployment-before-a-release) · [Timeline chart](#the-timeline-chart-on-a-run) · [Flow tab](#the-flow-tab-on-a-run) · [Builder canvas](#the-builder-canvas) · [Analytics](#operational-analytics) · [Memory records](#memory-records-what-agents-remembered) · [Share links](#sharing-a-run-with-a-link) · [Files](#a-runs-files-and-the-files-page) · [Asks and approvals](#an-agent-asks-a-person-and-tool-calls-that-wait-for-approval) · [Teams](#teams-and-team-workspaces-builder-console) |
 | Builder console | [Console mode](#deploy-a-builder-console) · [Connectors](#connectors) · [How a build deploys](#how-a-build-deploys) · [Registry](#aws-agent-registry) · [Connected accounts](#connected-accounts) · [Moving a build](#moving-a-build-out-of-a-console) · [Test suites](#test-suites) |
-| Operate | [Tuning](#tuning) · [Limits](#limits-on-spend-and-runs) · [Billing tag](#seeing-the-bill-in-aws) · [A2A endpoint](#serving-the-workflow-over-a2a) · [Live config](#changing-a-prompt-or-model-without-redeploying-live-config) · [OTLP export](#sending-traces-to-another-otlp-backend) · [Tear down](#tear-down) · [Troubleshooting](#troubleshooting) |
+| Operate | [Tuning](#tuning) · [Limits](#limits-on-spend-and-runs) · [Billing tag](#seeing-the-bill-in-aws) · [A2A endpoint](#serving-the-workflow-over-a2a) · [Live config](#changing-a-prompt-or-model-without-redeploying-live-config) · [Send runs to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others) · [OTLP export](#sending-traces-to-another-otlp-backend) · [Tear down](#tear-down) · [Troubleshooting](#troubleshooting) |
 
 Two IaC paths deploy the same resources. Use one per account and region (names overlap); different
 accounts or regions are fine.
@@ -1240,13 +1240,88 @@ setting off an admin gets 404. Versions are reserved rows (`_liveconfig#...`) in
 table. With the setting on, the BFF gets one extra IAM statement that reaches only those rows; the
 runtimes get nothing new, because a run's version travels in its start request and its saved state.
 
-## Sending traces to another OTLP backend
+## Send runs to Langfuse, Datadog and others
 
-If your team already reads traces in Langfuse, an OpenTelemetry Collector or another backend that
-accepts OTLP over HTTP, the runtimes can send each run's spans there as well. AgentCore
-Observability in CloudWatch keeps receiving everything as before. Off by default; a
-deployment without these settings gets no new environment variables, no new permissions and no new
-calls.
+Each run can go to the observability tool your team already uses: Langfuse, Datadog, Grafana
+Cloud, Honeycomb, or any backend that accepts OTLP over HTTP (an OpenTelemetry Collector, for
+example). Off by default: without `orchestrator.export` nothing is sent, read or created.
+**Not run live yet**: everything below is checked by unit tests only, pending the owner's live test.
+
+Turn it on in `workflow.json`, save the tool's key as a build secret, and deploy:
+
+```json
+"orchestrator": { "export": { "destination": "langfuse", "region": "us", "secret": "langfuse" } }
+```
+
+`secret` names a build secret of kind `exportHeaders`: a JSON object of the HTTP headers that carry
+the key, for example `{"Authorization": "Basic <base64 of pk-lf-...:sk-lf-...>"}`. The Builder
+saves it write-only, like the other build secrets; the deploy stores it in Secrets Manager and only
+the orchestrator runtime may read it. Deploying yourself, pass the same map in the environment:
+`export TF_VAR_export_headers='{"langfuse":"{\"Authorization\":\"Basic ...\"}"}'` (Terraform) or
+`export EXPORT_HEADERS='...'` (CDK). `secret` can also be the full ARN of a Secrets Manager secret
+you already have.
+
+| `destination` | `region` | `endpoint` | Headers in the secret |
+|---|---|---|---|
+| `langfuse` | `us`, `eu` (default) or `self-hosted` | self-hosted only: your Langfuse host | `Authorization: Basic base64(public key:secret key)` |
+| `datadog` | your site: `datadoghq.com` (default), `us3.datadoghq.com`, `us5.datadoghq.com`, `ap1.datadoghq.com`, `ap2.datadoghq.com`, `uk1.datadoghq.com` or `datadoghq.eu` | not used | `dd-api-key` |
+| `grafana` | not used | your stack's OTLP endpoint, e.g. `https://otlp-gateway-prod-us-east-0.grafana.net/otlp` | `Authorization: Basic base64(instance id:token)` |
+| `honeycomb` | `us` (default) or `eu` | not used | `x-honeycomb-team` |
+| `otlp` | not used | your collector's https base URL (`/v1/traces` is added) | whatever it checks |
+
+The addresses come from each vendor's documentation: [Langfuse](https://langfuse.com/integrations/native/opentelemetry),
+[Datadog traces](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/traces/) and
+[metrics](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest/metrics/), [Honeycomb](https://docs.honeycomb.io/send-data/metrics/application/),
+[Grafana Cloud](https://grafana.com/docs/grafana-cloud/send-data/otlp/otlp-format-considerations/).
+The runtime adds `x-langfuse-ingestion-version: 4` for Langfuse (without it new traces can take up
+to ten minutes to appear) and `dd-otlp-source: llmobs` for Datadog (it routes the spans to LLM
+Observability), unless your headers already set them. Langfuse's Japan and HIPAA regions: use
+`self-hosted` with `https://jp.cloud.langfuse.com` or `https://hipaa.cloud.langfuse.com`.
+
+**What is sent, once a run ends** (done, failed, denied or cancelled; a run waiting at a gate is
+sent when it ends). One trace per run, rebuilt from the run's telemetry rows, so agents on their
+own runtimes are in it too:
+
+- the run: session id, user id, workflow name and version, total tokens and cost;
+- each agent run (a re-run is a second span with its version);
+- each model call: model, provider, input and output tokens, cost in USD from this app's meter, why
+  that model was chosen (OpenTelemetry GenAI attributes; Langfuse's own generation, usage and cost
+  attributes for Langfuse);
+- each tool call: tool, target, latency, status;
+- guardrail checks, Cedar decisions, memory reads and writes and questions to a person, with their
+  outcome (span events; for Langfuse, small guardrail and event observations);
+- evaluation scores (`send.evals`, default on): Langfuse's scores API on the trace, elsewhere a
+  `gen_ai.evaluation.result` event on the agent span. An evaluation run later sends its scores then;
+- metrics (`send.metrics`, default on) to Datadog, Honeycomb and `otlp`: runs, failures, duration,
+  cost and tokens per agent and model, as per-run delta sums. Not to Langfuse (it computes its own)
+  or Grafana Cloud (its metrics store expects cumulative counters).
+
+**Privacy.** These go to a third party, under its retention and access rules. By default no
+prompt, answer, document, tool input or output, run request or result, or judge explanation is
+sent. The user id (the sign-in name) and everything in the list above are. With
+`"send": {"content": true}` prompts, answers, tool input and output and the run's request and result
+leave your account and may hold personal data. Under the AWS shared responsibility model you decide
+whether that is allowed (GDPR, HIPAA and similar rules) and agree terms with the vendor; leave it off
+when in doubt. The key is read from Secrets Manager and appears in no log, error, span or
+environment variable.
+
+**Failures never touch a run.** The export runs after the run's final status is written, each
+request waits at most 5 seconds and the whole export at most 20. The run records how it went
+(`export.status` `sent`, `failed` with a short reason, or `paused`), and it can be sent again from
+the run: the same trace and span ids are used, so Langfuse updates the trace rather than adding one
+(metrics are not sent twice). An admin can pause sending for the whole app; while paused nothing
+leaves. Every request goes through the same SSRF guard as the app's other outbound calls: https
+only, and never to a private address.
+
+Not covered: no retry queue (send a run again instead); Datadog's US1-FED and US2-FED sites; the
+live OpenTelemetry spans themselves (CloudWatch keeps receiving those, unchanged; for a copy of them
+use the deploy settings below).
+
+### Sending traces to another OTLP backend
+
+For a stack you deploy yourself, three deploy settings copy every live span the runtimes emit to
+one OTLP/HTTP traces URL, with headers from a Secrets Manager secret. When `orchestrator.export` is
+set it wins: plan and synth say so and these are not used.
 
 | Setting | Terraform | CDK |
 |---|---|---|
@@ -1255,75 +1330,76 @@ calls.
 | Also send prompt and answer content (default `false`) | `otlp_include_content` | `-c otlpIncludeContent=true` |
 
 The endpoint and the secret go together; plan or synth fails with one and not the other, with an
-`http://` URL, or with a secret ARN missing its six-character suffix. The secret's value is a JSON
-object of header name to value with at least one header. The runtimes read it once when a container
-starts; the headers never appear in an environment variable, a log line or a span. Each runtime role
-may read that one secret (`secretsmanager:GetSecretValue` on its ARN) and, for a secret encrypted with
-a customer managed key, decrypt it only through Secrets Manager (`kms:Decrypt` with `kms:ViaService`
-and the secret's ARN as the encryption context). If the secret uses a customer managed key, its key
-policy must also allow those roles; a secret in another account also needs a resource policy that
-does.
+`http://` URL, or with a secret ARN missing its six-character suffix. The secret is a JSON object of
+header name to value, read once when a container starts. Each runtime role may read that one secret
+and, for a customer managed key, decrypt it only through Secrets Manager. For Langfuse (EU):
+`otlp_endpoint = "https://cloud.langfuse.com/api/public/otel/v1/traces"` and a secret of
+`{"Authorization":"Basic <base64 of pk:sk>","x-langfuse-ingestion-version":"4"}`.
 
-**Langfuse.** Langfuse documents an OTLP/HTTP traces endpoint at `/api/public/otel/v1/traces` with
-Basic auth built from the project's public and secret keys, and an `x-langfuse-ingestion-version: 4`
-header for real-time ingestion ([Langfuse: OpenTelemetry](https://langfuse.com/integrations/native/opentelemetry)).
-For the EU cloud region:
+By default each copied span loses its content (task input and output, tool arguments and results,
+prompts, completions and messages, span events except `exception` with only its type, and the
+status description); `otlp_include_content = true` sends the spans as CloudWatch receives them. A
+bad setting turns this off for that container with one `[otlp-export] off: ...` log line; a failing
+endpoint drops spans with at most one warning a minute and holds a flush for at most 3 seconds.
+Builds deployed from a Builder console use `orchestrator.export` instead.
 
-```bash
-AUTH=$(echo -n "pk-lf-...:sk-lf-..." | base64 | tr -d '\n')
-aws secretsmanager create-secret --name agentexpress/otlp-headers \
-  --secret-string "{\"Authorization\":\"Basic $AUTH\",\"x-langfuse-ingestion-version\":\"4\"}"
-# Terraform (terraform.tfvars)
-otlp_endpoint           = "https://cloud.langfuse.com/api/public/otel/v1/traces"
-otlp_headers_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:agentexpress/otlp-headers-AbCdEf"
-# CDK
-npx cdk deploy -c otlpEndpoint=https://cloud.langfuse.com/api/public/otel/v1/traces \
-  -c otlpHeadersSecretArn=arn:aws:secretsmanager:us-east-1:111122223333:secret:agentexpress/otlp-headers-AbCdEf ...
-```
+### Set it up in the Builder
 
-Other Langfuse regions use `us.cloud.langfuse.com`, `jp.cloud.langfuse.com` or
-`hipaa.cloud.langfuse.com`; a self-hosted Langfuse uses its own host.
+A build sets this on its **Settings** tab, in the **Export** section (`orchestrator.export` in
+workflow.json):
 
-**Your own collector.** Any OpenTelemetry Collector with the `otlp` receiver's HTTP protocol enabled,
-behind TLS on a public address, with whatever auth header it checks (for example a bearer token):
-`otlp_endpoint = "https://otel.example.com/v1/traces"` and a secret of
-`{"Authorization": "Bearer ..."}`. The runtimes run with public network access, so the collector must
-be reachable from the internet; an endpoint on a private or link-local address is refused at startup.
+1. Turn on **Send runs to another tool** and pick **Langfuse**, **Datadog**, **Grafana Cloud**,
+   **Honeycomb** or **Any OTLP backend**.
+2. Fill in only what that tool needs. Each field says where to find its value in the tool:
+   - Langfuse: the region (EU, US, or the address of a self-hosted Langfuse or another Langfuse
+     region), the public and secret keys, and an optional project ID for **View in Langfuse** links.
+   - Datadog: the site (US1 is `datadoghq.com`, EU is `datadoghq.eu`, and so on) and an API key.
+   - Grafana Cloud: the OTLP endpoint, instance ID and token from your stack's OpenTelemetry tile.
+   - Honeycomb: an ingest API key, and US or EU.
+   - Any OTLP backend: its OTLP endpoint, with or without `/v1/traces` at the end, and its headers.
 
-Other vendors that accept OTLP over HTTP should work the same way, but only Langfuse's documented
-endpoint and auth are given here; check your vendor's documentation for its traces URL and header.
+   Or turn on **Use an existing secret (ARN)** and give a Secrets Manager secret that holds the
+   headers as a JSON object.
+3. **Test connection** sends one small test trace from the console now and says what the tool
+   answered, for example "Langfuse accepted a test trace" or "Langfuse refused the key (HTTP 401)".
+4. Choose what to send. Traces are always sent. Evaluation scores and metrics are on by default.
+   **Prompts and answers** are off by default; turning them on shows the shared-responsibility note
+   above.
 
-**What leaves the account.** These spans go to a third party, under that party's retention and
-access rules. In both modes each exported span carries its name (`agent.<id>`, `tool.<name>`, the
-model call), timing, trace and span ids, the session id, agent ids and names, tool names, model ids,
-token counts and its status code, plus the runtime's OpenTelemetry resource attributes (set by
-AgentCore; they can include the runtime's ARN and so your account id).
-**Your responsibility.** With `otlp_include_content = true`, prompts, answers and tool inputs
-leave your account and may hold personal data. Under the AWS shared responsibility model you
-decide whether that is allowed (GDPR, HIPAA and similar rules) and agree terms with the backend's
-vendor; leave content export off when in doubt.
+**Save** writes the setup into the build. The keys become the request headers each tool documents:
 
-- **Default (`otlp_include_content = false`):** a copy of each span is sent with content removed:
-  the agent's task input and output, tool call arguments and results, model prompts, completions
-  and messages (every attribute ADOT itself treats as content, plus this app's own), every span event
-  except `exception`, which keeps only the exception type, and the status description (the exception
-  text).
-- **`otlp_include_content = true`:** the spans as CloudWatch receives them before ADOT moves content
-  into its log events, so prompts, documents the agents read, answers and tool inputs go to the
-  third party.
+| Tool | Headers |
+|---|---|
+| Langfuse | `Authorization: Basic base64(public key:secret key)` and `x-langfuse-ingestion-version: 4` |
+| Datadog | `dd-api-key` and `compute_stats: true` |
+| Grafana Cloud | `Authorization: Basic base64(instance ID:token)` |
+| Honeycomb | `x-honeycomb-team` |
 
-**What happens when it fails.** An unusable setting or secret turns the export off for that container
-with one `[otlp-export] off: ...` line in the runtime log, and the run carries on. A failing or slow
-endpoint drops spans with at most one `[otlp-export] ... not delivered` line a minute; the span
-flush at the end of each burst and each dedicated agent's reply waits at most 3 seconds for it. A
-run never fails because of this export.
+They are saved as one of the build's write-only secrets, named after the address they are for
+(`export-` followed by 16 hex digits of the address's SHA-256). The page never shows them again. A
+test with no keys typed uses the saved ones only for that same address. The **Deployment** panel
+shows where runs go, for example "Export: Langfuse (EU)". **Save to library** keeps the setup for
+other builds without its keys; a build that uses it asks for its own keys, or keeps an existing
+secret's ARN.
 
-Good to know:
+In the build's own app:
 
-- It exports traces. Metrics and the GenAI log events stay in CloudWatch.
-- Set it on a stack you deploy yourself; builds deployed from a Builder console do not take it.
-- A rotated header value is picked up when a new runtime container starts.
-- Spans the endpoint rejects, or that take over 10 seconds to send, are dropped.
+- Each run's page shows whether the run reached the tool: Sent, Failed, Off, Paused, or Not sent.
+  It also has a **View in Langfuse** or **View in Datadog** link to the run's trace. The Langfuse
+  link needs the project ID. The Datadog link opens the Trace Explorer filtered on the run's
+  `trace_id`, because Datadog documents no direct link to one trace.
+- An admin, or the person who started the run, can use **Re-send to <tool>**.
+- Admins have an **Export** card on the Observability tab. It shows the destination, whether
+  sending is on or paused, and the runs sent and failed in the last 24 hours with the last error.
+  It has **Send test trace** and **Pause** or **Resume** buttons. Pausing writes the status-table
+  row `_export#paused`. Every one of these actions is recorded in the activity log.
+
+Not covered:
+
+- The console's test needs outbound HTTPS from the console's API Lambda. It refuses a private,
+  loopback or link-local address, and it allows at most 10 tests a minute per person.
+- An existing secret's ARN can only be tested from the deployed app with **Send test trace**.
+- There are no trace links for Grafana Cloud, Honeycomb or a generic OTLP backend.
 
 ## Using non-Bedrock models through LiteLLM
 

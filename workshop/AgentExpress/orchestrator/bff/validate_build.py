@@ -20,6 +20,7 @@ from pathlib import Path
 
 import browser_tool
 import cedar
+import export_check
 import harness_check
 import kb_data_source
 import kb_ingestion
@@ -1428,6 +1429,7 @@ def validate(wf: dict) -> list[dict]:
     task_check.check(agents, tools, steps, wf.get("orchestrator"), add, vocab, upstream_ids)
     harness_check.check(agents, add, wf)
     model_routing_check.check(wf.get("orchestrator"), agents, wf.get("authorization"), add)
+    export_check.check(wf.get("orchestrator"), add)
     _check_sign_in(wf.get("authorization"), add)
     _check_named(wf, add, out)
 
