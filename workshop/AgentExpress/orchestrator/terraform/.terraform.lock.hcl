@@ -50,7 +50,7 @@ provider "registry.terraform.io/hashicorp/aws" {
 
 provider "registry.terraform.io/hashicorp/awscc" {
   version     = "1.101.0"
-  constraints = ">= 1.0.0"
+  constraints = ">= 1.101.0"
   hashes = [
     "h1:kn/of4BYe+aUaZ2SjN+Naqlk/R3qU+3fxLSPaaU8p54=",
     "zh:21c51bca2b53283501ef30c7db7220b12036bc42d0bb7d1b76ddcc47de93d22a",

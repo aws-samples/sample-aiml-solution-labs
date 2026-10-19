@@ -19,6 +19,7 @@ import { useState } from "react";
 
 import { AssetView } from "../assets/AssetView";
 import type { SessionSnapshot, Step, Workflow } from "../types";
+import { AskPerson } from "./AskPerson";
 
 export type Decision = "approve" | "revise" | "deny";
 export interface GroupDecision { decision: Decision; comment: string }
@@ -28,16 +29,28 @@ function gateStep(workflow: Workflow, node: string): Step | undefined {
     (s) => (s.parallel || s.sequence) && s.gateId === node);
 }
 
-export function HitlGate({
-  snap, workflow, canDecide, denyReason, onDecide, onGroupDecide,
-}: {
+interface GateProps {
   snap: SessionSnapshot;
   workflow: Workflow;
   canDecide: boolean;
   denyReason: string | null;
   onDecide: (d: Decision, comment: string) => Promise<void>;
   onGroupDecide: (per: Record<string, GroupDecision>, comment: string) => Promise<void>;
-}) {
+}
+
+/** What the run waits for: a review gate, or an agent asking a person mid-step
+ *  (`hitl.kind`, AskPerson.tsx). Separate components, so each keeps its own state. */
+export function HitlGate(props: GateProps) {
+  const kind = props.snap.hitl?.kind;
+  return kind === "question" || kind === "toolApproval"
+    ? <AskPerson key={props.snap.hitl?.askId} snap={props.snap} workflow={props.workflow}
+                 canDecide={props.canDecide} denyReason={props.denyReason} onDecide={props.onDecide} />
+    : <ReviewGate {...props} />;
+}
+
+function ReviewGate({
+  snap, workflow, canDecide, denyReason, onDecide, onGroupDecide,
+}: GateProps) {
   const node = snap.hitl?.node ?? "";
   const step = gateStep(workflow, node);
   const isGroup = Boolean(step?.parallel);

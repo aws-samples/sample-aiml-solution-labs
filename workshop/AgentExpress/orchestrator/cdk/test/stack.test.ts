@@ -142,6 +142,24 @@ describe("HTTP API", () => {
       expect(keys).toContain(k);
     }
   });
+  it("puts read-only run links behind the JWT authorizer, opening one too (bff/runshares.py)", () => {
+    const byKey = Object.fromEntries(Object.values<any>(template.findResources("AWS::ApiGatewayV2::Route"))
+      .map((r) => [r.Properties.RouteKey, r.Properties]));
+    for (const k of ["POST /api/sessions/{id}/shares", "GET /api/sessions/{id}/shares",
+      "DELETE /api/sessions/{id}/shares/{shareId}", "GET /api/shared/{shareId}"]) {
+      expect(byKey[k]?.AuthorizationType).toBe("JWT");
+      expect(byKey[k]?.AuthorizerId).toBeDefined();
+    }
+  });
+  it("puts teams and moving a build behind the JWT authorizer (bff/teams.py)", () => {
+    const byKey = Object.fromEntries(Object.values<any>(template.findResources("AWS::ApiGatewayV2::Route"))
+      .map((r) => [r.Properties.RouteKey, r.Properties]));
+    for (const k of ["GET /api/teams", "POST /api/teams", "GET /api/teams/{id}", "PUT /api/teams/{id}",
+      "DELETE /api/teams/{id}", "PUT /api/builds/{id}/team"]) {
+      expect(byKey[k]?.AuthorizationType).toBe("JWT");
+      expect(byKey[k]?.AuthorizerId).toBeDefined();
+    }
+  });
 });
 
 describe("the BFF deployment package", () => {
@@ -172,6 +190,7 @@ describe("the BFF deployment package", () => {
     expect(env).not.toHaveProperty("WORKFLOW_JSON");
     // The vars that remain are ARNs, table names and the model id.
     // The BUILDS_* and DEPLOY_PROJECT names are the builder plane's (lib/builder-plane.ts).
+    // MEMORIES and SEMANTIC_MEMORY_ID are the long-term memory ids (bff/memories.py).
     expect(Object.keys(env).sort()).toEqual([
       "BFF_ROLE_ARN",
       "BUILDS_BUCKET",
@@ -179,9 +198,11 @@ describe("the BFF deployment package", () => {
       "DEPLOY_PROJECT",
       "DEPLOY_ROLE_ARN",
       "EVENTS_TABLE",
+      "MEMORIES",
       "MODEL_ID",
       "RUNTIME_ARN",
       "SECRETS_PREFIX",
+      "SEMANTIC_MEMORY_ID",
       "STATUS_TABLE",
       "TELEMETRY_TABLE",
     ]);
@@ -729,6 +750,117 @@ describe("the Builder control plane", () => {
     t.resourceCountIs("AWS::CodeBuild::Project", 0);
     expect(JSON.stringify(t.findResources("AWS::DynamoDB::Table"))).not.toContain("_builds");
   });
+
+  describe("the counters behind orchestrator.limits", () => {
+    /** Every IAM statement named LimitCounters, across the stack's policies. */
+    const counters = (t: Template): any[] =>
+      Object.values(t.findResources("AWS::IAM::Policy"))
+        .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => s.Sid === "LimitCounters");
+
+    it("lets the BFF and each runtime reach the reserved _limit# rows, and nothing else of the table", () => {
+      const all = counters(template);
+      expect(all.length).toBeGreaterThanOrEqual(2);          // the BFF and the main runtime
+      for (const s of all) {
+        expect(s.Effect).toBe("Allow");
+        // Never the whole table's items: only keys that start _limit#.
+        expect(s.Condition).toEqual({ "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["_limit#*"] } });
+        // No wildcard resource, and no index: these rows are read and written by key.
+        expect(JSON.stringify(s.Resource)).not.toContain("*");
+        expect(JSON.stringify(s.Resource)).not.toContain("/index/");
+      }
+    });
+
+    it("gives the runtime UpdateItem on those rows only, so it still cannot edit a telemetry row", () => {
+      const runtimeWrites = Object.values(template.findResources("AWS::IAM::Policy"))
+        .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => JSON.stringify(s.Resource ?? "").includes("TelemetryTable")
+          && [].concat(s.Action).some((a: string) => a === "dynamodb:UpdateItem" || a === "dynamodb:DeleteItem"));
+      // Every statement that can update or delete in the telemetry table is the conditioned one.
+      expect(runtimeWrites.length).toBeGreaterThan(0);
+      for (const s of runtimeWrites) expect(s.Sid).toBe("LimitCounters");
+    });
+
+    it("lets the BFF read and count, but not write or delete a telemetry row", () => {
+      const bffOn = counters(template).filter((s: any) =>
+        ([] as string[]).concat(s.Action).includes("dynamodb:GetItem"));
+      expect(bffOn).toHaveLength(1);
+      expect(bffOn[0].Action).toEqual(["dynamodb:GetItem", "dynamodb:UpdateItem"]);
+    });
+
+    it("keeps the counters in a build stack, which has no Builder", () => {
+      // Counters belong to the workflow plane, which every build stack keeps.
+      expect(counters(synth({ builder: false })).length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe("destroying the console", () => {
+    /** The delete-only custom resource that clears the builds table's protection. */
+    const unprotect = (t: Template): any => {
+      const found = Object.entries(t.findResources("Custom::AWS"))
+        .filter(([id]) => id.startsWith("BuilderBuildsTableUnprotect"));
+      expect(found).toHaveLength(1);
+      return found[0][1];
+    };
+    const buildsTableId = (t: Template): string =>
+      Object.entries(t.findResources("AWS::DynamoDB::Table"))
+        .find(([, r]: [string, any]) => r.Properties.TableName === "multiagent_orchestrator_builds")![0];
+
+    it("keeps the builds table deletion-protected while the console runs", () => {
+      template.hasResourceProperties("AWS::DynamoDB::Table", {
+        TableName: "multiagent_orchestrator_builds", DeletionProtectionEnabled: true,
+      });
+    });
+
+    it("clears that protection when CloudFormation deletes the stack, and does nothing before", () => {
+      const r = unprotect(template);
+      // Delete-only: no call on create or update, so deploying and updating never touch the table.
+      expect(r.Properties.Create).toBeUndefined();
+      expect(r.Properties.Update).toBeUndefined();
+      const del = JSON.stringify(r.Properties.Delete);
+      expect(del).toContain("updateTable");
+      expect(del).toContain('\\"DeletionProtectionEnabled\\":false');
+      // The table is named by a reference to it, so the call can never aim at another one.
+      expect(del).toContain(`{"Ref":"${buildsTableId(template)}"}`);
+    });
+
+    it("is deleted before the table, so the protection is already off when the table goes", () => {
+      expect(unprotect(template).DependsOn).toContain(buildsTableId(template));
+    });
+
+    it("may update that one table and nothing else", () => {
+      const statements = Object.values(template.findResources("AWS::IAM::Policy"))
+        .flatMap((p: any) => p.Properties.PolicyDocument.Statement)
+        .filter((s: any) => ([] as string[]).concat(s.Action).includes("dynamodb:UpdateTable"));
+      expect(statements).toHaveLength(1);
+      expect(JSON.stringify(statements[0].Resource)).toContain(buildsTableId(template));
+    });
+
+    it("with keepBuildsTableProtected, a destroy stops at the table, as before", () => {
+      const t = synth({ keepBuildsTableProtected: true });
+      const del = JSON.stringify(unprotect(t).Properties.Delete);
+      // Protection stays ON: the call re-asserts what is already true.
+      expect(del).toContain('\\"DeletionProtectionEnabled\\":true');
+      expect(del).not.toContain('\\"DeletionProtectionEnabled\\":false');
+      t.hasResourceProperties("AWS::DynamoDB::Table", {
+        TableName: "multiagent_orchestrator_builds", DeletionProtectionEnabled: true,
+      });
+    });
+
+    it("keeps that resource in the template whichever way the flag is set", () => {
+      // Dropping it when the flag is ON would delete it on the next deploy, and deleting it
+      // is what runs the call. Same resource id both ways means a flag flip is an update.
+      const idsOn = Object.keys(synth({ keepBuildsTableProtected: true }).findResources("Custom::AWS"));
+      const idsOff = Object.keys(template.findResources("Custom::AWS"));
+      expect(idsOn.filter((i) => i.startsWith("BuilderBuildsTableUnprotect")))
+        .toEqual(idsOff.filter((i) => i.startsWith("BuilderBuildsTableUnprotect")));
+    });
+
+    it("is left out with builder=false, with the table it belongs to", () => {
+      const ids = Object.keys(synth({ builder: false }).findResources("Custom::AWS"));
+      expect(ids.filter((i) => i.startsWith("BuilderBuildsTableUnprotect"))).toHaveLength(0);
+    });
+  });
 });
 
 /** The trigger logs sign-ins into the builds table and can do nothing else. */
@@ -922,8 +1054,8 @@ describe("long-term memory strategies and custom evaluators, from workflow.json"
     expect(all.strategies.map((s) => Object.keys(s)[0])).toEqual([
       "SemanticMemoryStrategy", "SummaryMemoryStrategy", "UserPreferenceMemoryStrategy",
       "EpisodicMemoryStrategy", "CustomMemoryStrategy"]);
-    expect(all.strategies[3].EpisodicMemoryStrategy.ReflectionConfiguration.Namespaces).toEqual(["episodes/{actorId}"]);
-    expect(all.strategies[4].CustomMemoryStrategy).toEqual({ Name: "custom_b", Namespaces: ["custom-b/{actorId}"],
+    expect(all.strategies[3].EpisodicMemoryStrategy.ReflectionConfiguration.NamespaceTemplates).toEqual(["/episodes/{actorId}/"]);
+    expect(all.strategies[4].CustomMemoryStrategy).toEqual({ Name: "custom_b", NamespaceTemplates: ["/custom-b/{actorId}/"],
       Configuration: { SemanticOverride: {
         Extraction: { AppendToPrompt: "Keep configs.", ModelId: "dflt" },
         Consolidation: { AppendToPrompt: "Keep configs.", ModelId: "dflt" } } } });

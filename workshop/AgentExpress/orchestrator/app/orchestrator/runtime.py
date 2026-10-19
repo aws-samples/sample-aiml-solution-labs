@@ -26,8 +26,10 @@ import contextlib
 import uuid
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from langgraph.types import Command
 
+from app.common import liveconfig
+from app.common import model_routing
+from app.common import asks
 from app.common.config import AGENT_ORDER, DEFAULT_TOPIC, LAST_AGENT_ID, MEMORY_ID, REGION
 from app.common.sink import WorkflowCancelled, emit, ensure_session, is_cancelled
 from app.features.gateway import person
@@ -84,10 +86,13 @@ def _result(outputs: dict) -> str:
         (outputs[a] for a in reversed(AGENT_ORDER) if outputs.get(a)), "")
 
 
-async def _finalize(session_id: str) -> None:
+async def _finalize(session_id: str, invoked=None) -> None:
     state = await graph.aget_state(_config(session_id))
-    if state.next:
-        return  # paused at a HITL gate; resume will continue
+    if asks.is_waiting(state, invoked):
+        # Paused at a HITL gate, or at an agent asking a person; resume will continue.
+        # Not `state.next` alone: a step that waits again after a resume leaves it empty.
+        await asks.show_next(session_id, state)
+        return
     values = state.values or {}
     decisions = values.get("decisions") or {}
     if "deny" in decisions.values():
@@ -233,9 +238,10 @@ async def _run(session_id: str, initial=None, resume=None, rerun=None, user: str
             await _rewind(session_id, rerun)
             payload = None
         else:
-            payload = Command(resume=resume) if resume is not None else initial
-        await graph.ainvoke(payload, _config(session_id))
-        await _finalize(session_id)
+            payload = (await asks.resume_command(graph, _config(session_id), session_id, resume)
+                       if resume is not None else initial)
+        invoked = await graph.ainvoke(payload, _config(session_id))
+        await _finalize(session_id, invoked)
     except WorkflowCancelled:
         await emit(session_id, {"type": "session_status", "status": "cancelled",
                                 "result": "Stopped by user.", "log": "Workflow cancelled by user"})
@@ -341,12 +347,10 @@ async def invoke(payload, context=None):
 
     # Insights: start a cross-run batch analysis in the background.
     if action == "run_insights":
-        try:
-            lookback = max(0, int(payload.get("lookback_hours") or _DEFAULT_INSIGHTS_LOOKBACK))
-        except (TypeError, ValueError):
-            lookback = _DEFAULT_INSIGHTS_LOOKBACK
-        _spawn(_run_insights(lookback, payload.get("user", "")), session_id="insights")
-        return {"status": "insights_started"}
+        # AgentCore no longer creates Insights jobs (16 Oct 2026): say so instead of
+        # starting one that can only fail. _run_insights stays for the redesigned API.
+        from app.features.optimization import insights as _ins
+        return {"status": "error", "error": _ins.CREATION_ENDED}
 
     if action == "start":
         session_id = payload.get("session_id") or uuid.uuid4().hex[:12]
@@ -361,6 +365,11 @@ async def invoke(payload, context=None):
                    "attachments": list(payload.get("attachments") or []),
                    # A trigger with `gates: "auto"` (bff/triggers.py): no gate waits.
                    **({"gates": "auto"} if payload.get("gates") == "auto" else {}),
+                   # The live config version the BFF read when it started the run. Taken
+                   # here, at the start, and only here: resumes and re-runs keep this one.
+                   **({liveconfig.STATE_KEY: live} if (live := liveconfig.from_payload(payload)) else {}),
+                   # The run's model override (app/common/model_routing.py), likewise only here.
+                   **({model_routing.STATE_KEY: ov} if (ov := model_routing.from_payload(payload)) else {}),
                    "status": {}, "outputs": {}, "decisions": {}}
         _spawn(_run(session_id, initial=initial, user=user), session_id=session_id)
         return {"session_id": session_id, "status": "started"}

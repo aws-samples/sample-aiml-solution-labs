@@ -1,0 +1,43 @@
+/* A step's number badge (StepBadge.tsx). Filled, so it reads at a glance; every fill has at
+   least 4.5:1 contrast with its text. The colours are Cloudscape's status tokens, as in
+   graph.css. */
+.axs-badge {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  color: #fff;
+  box-shadow: inset 0 -1px 0 rgba(0, 7, 22, 0.15);
+}
+.axs-done    { background: var(--awsui-color-text-status-success, #00802f); }
+.axs-running { background: var(--awsui-color-text-status-info, #0972d3); animation: axs-pulse 1.6s ease-in-out infinite; }
+.axs-failed  { background: var(--awsui-color-text-status-error, #db0000); }
+.axs-waiting { background: var(--awsui-color-text-status-warning, #8d6605); }
+.axs-stopped { background: var(--awsui-color-text-status-inactive, #656871); }
+/* Not started: an outline, so a step that has not run does not look like one that did. */
+.axs-pending {
+  background: var(--awsui-color-background-container-content, #fff);
+  color: var(--awsui-color-text-body-secondary, #424650);
+  border: 2px solid var(--awsui-color-border-input-default, #8c8c94);
+  box-shadow: none;
+}
+
+/* A soft ring that grows and fades: the step is working. */
+@keyframes axs-pulse {
+  0%   { box-shadow: 0 0 0 0 rgba(9, 114, 211, 0.45); }
+  70%  { box-shadow: 0 0 0 7px rgba(9, 114, 211, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(9, 114, 211, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .axs-running { animation: none; }
+}

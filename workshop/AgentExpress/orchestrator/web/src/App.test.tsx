@@ -88,11 +88,13 @@ describe("the Build view", () => {
     me.value = { ...BASE, builder: true, consoleMode: "builder" };
     render(<App />);
     await waitFor(() => expect(screen.getAllByText("AWS accounts").length).toBeGreaterThan(0));
-    const links = [...document.querySelectorAll(".axn-links li")].map((li) => li.textContent ?? "");
+    // The words only: each link's emoji (lib/emoji.ts) is decoration.
+    const words = (li: Element) => { const c = li.cloneNode(true) as Element; c.querySelectorAll(".axn-emoji").forEach((x) => x.remove()); return c.textContent ?? ""; };
+    const links = [...document.querySelectorAll(".axn-links li")].map(words);
     const from = links.indexOf("Agent library");
     expect(links.slice(from, from + 11)).toEqual(["Agent library", "Tools", "Skills", "Memory", "Guardrails",
       "Gateway and access library", "Identity", "Policies", "Interceptors", "Quality library", "Evals"]);
-    const indented = [...document.querySelectorAll(".axn-links li.axn-indent")].map((li) => li.textContent);
+    const indented = [...document.querySelectorAll(".axn-links li.axn-indent")].map(words);
     expect(indented).toEqual(["Tools", "Skills", "Memory", "Guardrails", "Identity", "Policies", "Interceptors", "Evals"]);
   });
 });

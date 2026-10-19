@@ -127,6 +127,10 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   // "builder": a control-plane console (design, build, deploy; runs live in each build's
   // app). "app" (the default): this workflow's own app.
   consoleMode: String(ctx("consoleMode", "app")),
+  // A destroy of this stack clears the builds table's deletion protection just before
+  // deleting it. -c keepBuildsTableProtected=true makes a destroy stop at the table
+  // instead. Mirrors var.keep_builds_table_protected in terraform/builder.tf.
+  keepBuildsTableProtected: String(app.node.tryGetContext("keepBuildsTableProtected")) === "true",
   // Buckets (or bucket/prefix) the AgentExpress Assistant may read when a message names
   // s3://... (bff/designer.py). Comma-separated; none by default.
   designerS3Buckets: String(ctx("designerS3Buckets", "")).split(",").map((s) => s.trim()).filter(Boolean),
@@ -137,7 +141,49 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   designerSummaryModel: ctx("designerSummaryModel", ""),
   // How hard the Assistant's model reasons: medium (default) | low | high | model.
   designerEffort: ctx("designerEffort", ""),
+  // Serve this workflow to other teams' agents over A2A (lib/a2a-server.ts). Off unless
+  // -c exposeA2a=true. Without a created Cognito pool, -c a2aIdentity='{"audience":...,
+  // "scope":...,"clientIds":[...]}' says whose machine tokens to accept. -c a2aApprovers=a,b
+  // names the groups who decide A2A runs' gates. Mirrors Terraform's expose_a2a etc.
+  exposeA2a: String(app.node.tryGetContext("exposeA2a")) === "true",
+  a2aIdentity: parseA2aIdentity(ctx("a2aIdentity", "")),
+  a2aApprovers: String(ctx("a2aApprovers", "")).split(",").map((s) => s.trim()).filter(Boolean),
+
+  // Also send the runtimes' spans to an OTLP/HTTP backend (DEPLOYMENT.md). Off by default:
+  //   -c otlpEndpoint=https://.../v1/traces -c otlpHeadersSecretArn=arn:aws:secretsmanager:...
+  //   [-c otlpIncludeContent=true]   (prompt and answer content; stripped otherwise)
+  // The headers stay in Secrets Manager; only the secret's ARN is a context value.
+  otlpEndpoint: ctx("otlpEndpoint", ""),
+  otlpHeadersSecretArn: ctx("otlpHeadersSecretArn", ""),
+  otlpIncludeContent: String(app.node.tryGetContext("otlpIncludeContent")) === "true",
+  // Non-Bedrock models (an agent's model litellm/<model>) through your LiteLLM proxy
+  // (DEPLOYMENT.md). Off by default:
+  //   -c litellmBaseUrl=https://litellm.example.com -c litellmKeySecretArn=arn:aws:secretsmanager:...
+  // The virtual key stays in Secrets Manager; only the secret's ARN is a context value.
+  litellmBaseUrl: ctx("litellmBaseUrl", ""),
+  litellmKeySecretArn: ctx("litellmKeySecretArn", ""),
+
+  // Organisation guardrails, all off unless set (lib/hardening.ts; terraform/hardening.tf):
+  //   -c permissionsBoundaryArn=arn:aws:iam::<acct>:policy/<name>  on every role, builds' too
+  //   -c iamRolePath=/agentexpress/   every role's path; changing it REPLACES the roles
+  //   -c customDomain=agents.example.com -c acmCertificateArn=<us-east-1 ACM ARN>
+  //   -c enableWaf=true [-c wafRateLimit=2000]   us-east-1 only
+  permissionsBoundaryArn: ctx("permissionsBoundaryArn", ""),
+  iamRolePath: ctx("iamRolePath", "/"),
+  customDomain: ctx("customDomain", ""),
+  acmCertificateArn: ctx("acmCertificateArn", ""),
+  enableWaf: String(ctx("enableWaf", "false")) === "true",
+  wafRateLimit: Number(ctx("wafRateLimit", "2000")),
 });
+
+function parseA2aIdentity(raw: string) {
+  if (!raw) return undefined;
+  const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`-c a2aIdentity must be a JSON object: {"audience":...,"scope":...,"clientIds":[...]}.`);
+  }
+  return parsed as { audience?: string; scope?: string; clientIds?: string[]; issuer?: string; tokenUrl?: string };
+}
 
 // `-c nag=true`: run cdk-nag's AwsSolutions pack; an unacknowledged finding fails the
 // synth. What is accepted, and why, is lib/nag.ts.

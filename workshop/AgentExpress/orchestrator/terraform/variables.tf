@@ -56,6 +56,75 @@ variable "transaction_search_indexing_percentage" {
   default     = 100
 }
 
+# --- Organisation guardrails (hardening.tf). All off by default: unset, nothing changes. ---
+variable "iam_permissions_boundary_arn" {
+  description = "Managed policy put as the permissions boundary on every IAM role this stack creates, and on every role of the builds its Builder deploys. Empty: none (code tools keep their own). Mirrors CDK -c permissionsBoundaryArn."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.iam_permissions_boundary_arn == "" || can(regex("^arn:aws[a-z-]*:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=,.@_/-]{1,512}$", var.iam_permissions_boundary_arn))
+    error_message = "iam_permissions_boundary_arn must be a managed policy ARN, e.g. arn:aws:iam::123456789012:policy/OrgBoundary."
+  }
+}
+
+variable "iam_role_path" {
+  description = "IAM path of every role this stack creates (and its builds' roles). Default \"/\". Changing it on a deployed stack REPLACES every role: see DEPLOYMENT.md. Mirrors CDK -c iamRolePath."
+  type        = string
+  default     = "/"
+  # Letters, digits and + = , . @ _ - between slashes: it is spliced into role ARN patterns
+  # in the deploy policy, so a * or a quote must not get in.
+  validation {
+    condition     = length(var.iam_role_path) <= 512 && can(regex("^/([A-Za-z0-9+=,.@_-]+/)*$", var.iam_role_path))
+    error_message = "iam_role_path must start and end with \"/\" (e.g. \"/agentexpress/\"), using letters, digits and + = , . @ _ - only."
+  }
+}
+
+variable "custom_domain" {
+  description = "Your own host name for the console (e.g. agents.example.com) as a CloudFront alias, with acm_certificate_arn. You create the DNS record. Empty: the CloudFront URL only. Mirrors CDK -c customDomain."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.custom_domain == "" || (length(var.custom_domain) <= 253 && can(regex("^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$", var.custom_domain)))
+    error_message = "custom_domain must be a lower-case host name such as agents.example.com: no scheme, path, port or wildcard."
+  }
+}
+
+variable "acm_certificate_arn" {
+  description = "ACM certificate for custom_domain. CloudFront only uses certificates in us-east-1, whatever the stack's region. Mirrors CDK -c acmCertificateArn."
+  type        = string
+  default     = ""
+  validation {
+    condition     = (var.custom_domain == "") == (var.acm_certificate_arn == "")
+    error_message = "custom_domain and acm_certificate_arn go together: set both, or neither."
+  }
+  validation {
+    condition     = var.acm_certificate_arn == "" || can(regex("^arn:aws[a-z-]*:acm:us-east-1:[0-9]{12}:certificate/[0-9a-f-]{36}$", var.acm_certificate_arn))
+    error_message = "acm_certificate_arn must be an ACM certificate ARN in us-east-1 (arn:aws:acm:us-east-1:<account>:certificate/<id>): CloudFront uses no other region."
+  }
+}
+
+variable "enable_waf" {
+  description = "Put an AWS WAF web ACL (managed rule groups and a per-IP rate limit) on the CloudFront distribution. us-east-1 stacks only. Mirrors CDK -c enableWaf=true."
+  type        = bool
+  default     = false
+  # A CLOUDFRONT web ACL exists only in us-east-1. The CDK path cannot create one from a
+  # stack in another region without a second stack, so neither path offers it.
+  validation {
+    condition     = !var.enable_waf || var.region == "us-east-1"
+    error_message = "enable_waf needs region = \"us-east-1\": a web ACL for CloudFront can only be created there, and this stack creates everything in var.region."
+  }
+}
+
+variable "waf_rate_limit" {
+  description = "With enable_waf: requests one IP may make in 5 minutes before WAF blocks it (100 to 2,000,000). People behind one NAT share an IP. Mirrors CDK -c wafRateLimit."
+  type        = number
+  default     = 2000
+  validation {
+    condition     = var.waf_rate_limit >= 100 && var.waf_rate_limit <= 2000000 && floor(var.waf_rate_limit) == var.waf_rate_limit
+    error_message = "waf_rate_limit must be a whole number from 100 to 2000000."
+  }
+}
+
 # ===========================================================================
 # IDENTITY PROVIDER (IdP) — one switch selects the whole auth stack
 # ===========================================================================
@@ -271,4 +340,77 @@ variable "hosted_ui_providers" {
   description = "Sign-in options the Hosted UI offers on the SPA client: \"COGNITO\" (the pool's own users) and/or the name of a federated identity provider you added to the pool (e.g. an OIDC IdP). Set here rather than by hand: a manual change is reverted when the client updates. Mirrors CDK -c hostedUiProviders."
   type        = list(string)
   default     = ["COGNITO"]
+}
+variable "expose_a2a" {
+  description = "Serve this workflow to other teams' agents over A2A (GET /api/a2a/.well-known/agent-card.json, POST /api/a2a; bff/a2a_server.py). Off by default: no routes, no client. With a Cognito pool this deployment creates, it also creates an OAuth2 client-credentials app client with scope a2a/invoke, the only client whose tokens those two routes accept. With any other identity provider, set a2a_identity. A caller can start runs, which cost money; orchestrator.limits apply. Mirrors CDK -c exposeA2a=true."
+  type        = bool
+  default     = false
+}
+variable "a2a_identity" {
+  description = "The A2A callers' identity when this deployment does not create the Cognito pool (Auth0, Okta, Entra, or your own pool): the token audience the A2A routes' authorizer accepts (must differ from the sign-in client's), the scope they require, the client ids allowed to call, and optionally the token issuer (default: the sign-in issuer) and the token URL shown in the Agent Card. Until audience, scope and client_ids are set, expose_a2a fails the plan. Mirrors CDK -c a2aIdentity (JSON, clientIds/tokenUrl in camelCase)."
+  type = object({
+    audience   = optional(string, "")
+    scope      = optional(string, "")
+    client_ids = optional(list(string), [])
+    issuer     = optional(string, "")
+    token_url  = optional(string, "")
+  })
+  default = {}
+}
+variable "a2a_approvers" {
+  description = "Groups (the sign-in groups claim) whose members see A2A-started runs on the Runs page and decide their review gates. An A2A run waits at a gate for one of them. Empty: nobody can decide them, and they wait until the gate's own timeout, if any. Mirrors CDK -c a2aApprovers=a,b."
+  type        = list(string)
+  default     = []
+}
+
+variable "otlp_endpoint" {
+  description = "Also send the runtimes' trace spans to this OTLP/HTTP traces URL (the full path, e.g. https://cloud.langfuse.com/api/public/otel/v1/traces), beside AgentCore Observability in CloudWatch, which is unchanged. Empty (the default) = off. https only. Needs otlp_headers_secret_arn. Spans go to a third party: see DEPLOYMENT.md. Mirrors CDK -c otlpEndpoint."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.otlp_endpoint == "" || can(regex("^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^\\s?#]*)?$", var.otlp_endpoint))
+    error_message = "otlp_endpoint must be an https:// URL with no user info, query or fragment, e.g. https://cloud.langfuse.com/api/public/otel/v1/traces."
+  }
+}
+variable "otlp_headers_secret_arn" {
+  description = "The full ARN of a Secrets Manager secret whose value is a JSON object of header name -> value, sent with every export to otlp_endpoint (e.g. {\"Authorization\": \"Basic ...\"}). Read by the runtimes at start; the runtime roles may read this secret only. Required with otlp_endpoint. Mirrors CDK -c otlpHeadersSecretArn."
+  type        = string
+  default     = ""
+  validation {
+    condition     = (var.otlp_headers_secret_arn == "") == (var.otlp_endpoint == "")
+    error_message = "Set otlp_endpoint and otlp_headers_secret_arn together, or neither."
+  }
+  validation {
+    condition     = var.otlp_headers_secret_arn == "" || can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@!-]+-[A-Za-z0-9]{6}$", var.otlp_headers_secret_arn))
+    error_message = "otlp_headers_secret_arn must be the full ARN of a Secrets Manager secret, including the six-character suffix (arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf)."
+  }
+}
+variable "otlp_include_content" {
+  description = "Send prompt and answer content (agent task input/output, tool arguments, model messages, exception text) with the spans exported to otlp_endpoint. Default false: those are removed from the exported copy. CloudWatch gets them either way. Mirrors CDK -c otlpIncludeContent=true."
+  type        = bool
+  default     = false
+}
+
+variable "litellm_base_url" {
+  description = "Your LiteLLM proxy (https, a public address), for agents whose model is litellm/<model> (non-Bedrock models: OpenAI, Gemini, ...). Empty (the default) = off. Needs litellm_key_secret_arn. Prompts go to the proxy and its providers: see DEPLOYMENT.md. Mirrors CDK -c litellmBaseUrl."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.litellm_base_url == "" || can(regex("^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[^\\s?#]*)?$", var.litellm_base_url))
+    error_message = "litellm_base_url must be an https:// URL with no user info, query or fragment, e.g. https://litellm.example.com."
+  }
+}
+
+variable "litellm_key_secret_arn" {
+  description = "The full ARN of a Secrets Manager secret holding the proxy's virtual key (the key itself, or {\"apiKey\": \"sk-...\"}). The runtime roles and the BFF may read this secret only. Required with litellm_base_url. Mirrors CDK -c litellmKeySecretArn."
+  type        = string
+  default     = ""
+  validation {
+    condition     = (var.litellm_key_secret_arn == "") == (var.litellm_base_url == "")
+    error_message = "Set litellm_base_url and litellm_key_secret_arn together, or neither."
+  }
+  validation {
+    condition     = var.litellm_key_secret_arn == "" || can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:[A-Za-z0-9/_+=.@!-]+-[A-Za-z0-9]{6}$", var.litellm_key_secret_arn))
+    error_message = "litellm_key_secret_arn must be the full ARN of a Secrets Manager secret, including the six-character suffix (arn:aws:secretsmanager:<region>:<account>:secret:<name>-AbCdEf)."
+  }
 }

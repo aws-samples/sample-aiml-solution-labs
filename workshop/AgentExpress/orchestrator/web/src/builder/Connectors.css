@@ -1,0 +1,11 @@
+/* The Connectors gallery: a grid of cards that reflows to one column on a narrow screen. */
+.axb-connectors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.axb-connectors > li { display: flex; }
+.axb-connectors > li > * { flex: 1; }

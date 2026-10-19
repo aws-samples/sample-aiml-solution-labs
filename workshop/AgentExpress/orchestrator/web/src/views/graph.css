@@ -84,23 +84,6 @@
   gap: 8px;
   padding: 0 52px;
 }
-.sfn-stage-num {
-  position: absolute;
-  left: 4px;
-  top: 6px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--awsui-color-background-container-content, #fff);
-  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
-  color: var(--awsui-color-text-body-secondary, #424650);
-  font-size: 12px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* Annotations sit in normal flow above the stage, right-aligned. Absolute
    positioning put them outside the container and the split panel clipped them. */
 .sfn-annotations {
@@ -314,3 +297,34 @@
   background: var(--awsui-color-text-status-info, #0972d3);
   transition: width 0.4s ease;
 }
+
+/* --- An agent's tools and AgentCore features, one clickable row each, inside its box --- */
+.sfn-state:has(.sfn-rows) { flex-wrap: wrap; align-items: flex-start; }
+.sfn-rows { flex: 1 0 100%; list-style: none; margin: 6px 0 0; padding: 6px 0 0; display: flex; flex-direction: column; gap: 2px;
+  border-top: 1px solid var(--awsui-color-border-divider-default, #e9ebed); cursor: default; }
+.sfn-row { border-radius: 6px; font-size: 12px; }
+.sfn-row:hover { background: var(--awsui-color-background-dropdown-item-hover, #f0fbff); }
+.sfn-row-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 1px 2px;
+  font: inherit; cursor: pointer; text-align: left; min-width: 0; }
+.sfn-row-head:focus-visible { outline: 2px solid var(--awsui-color-border-item-focused, #0972d3); outline-offset: 1px; }
+.sfn-row-name { flex: 0 0 auto; max-width: 55%; font-weight: 600; color: #0972d3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sfn-row-outcome { flex: 1 1 0; min-width: 0; color: var(--awsui-color-text-body-secondary, #5f6b7a); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.sfn-tone-stop .sfn-row-outcome { color: #b0440e; font-weight: 600; } .sfn-tone-bad .sfn-row-outcome { color: #d91515; font-weight: 600; }
+.sfn-tag { flex: 0 0 auto; min-width: 56px; padding: 0 5px; border-radius: 4px; text-align: center; font-size: 10px;
+  font-weight: 700; line-height: 16px; color: #fff; background: #5f6b7a; }
+.sfn-tag-tool { background: #0972d3; } .sfn-tag-guardrail { background: #037f0c; } .sfn-tag-memory { background: #006ce0; }
+.sfn-tag-policy { background: #7d2ad6; } .sfn-tag-skill { background: #8d6605; } .sfn-tag-evaluation { background: #b0306f; }
+.sfn-tag-identity { background: #00757f; } .sfn-tag-human { background: #c33d00; }
+.sfn-row-more { padding: 2px 4px 6px 66px; }
+.sfn-row-detail { color: var(--awsui-color-text-body-secondary, #5f6b7a); }
+.sfn-row-events { margin: 4px 0 0; padding-left: 14px; }
+.sfn-row-events li { margin: 2px 0; }
+.sfn-ev-stop { color: #b0440e; } .sfn-ev-bad { color: #d91515; }
+.sfn-row-note { font-size: 11px; color: var(--awsui-color-text-body-secondary, #5f6b7a); padding: 0 2px; }
+/* A component's deployed resource: label, then the name, which can be copied. */
+.sfn-row-res { margin: 4px 0 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 8px; }
+.sfn-row-res > div { display: contents; }
+.sfn-row-res dt { color: var(--awsui-color-text-body-secondary, #5f6b7a); }
+.sfn-row-res dd { margin: 0; font-family: Monaco, Menlo, Consolas, monospace; font-size: 11px; overflow-wrap: anywhere;
+  color: var(--awsui-color-text-body-default, #0f141a); user-select: text; }

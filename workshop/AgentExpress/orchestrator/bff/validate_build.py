@@ -18,7 +18,15 @@ import math
 import re
 from pathlib import Path
 
+import browser_tool
 import cedar
+import harness_check
+import kb_data_source
+import kb_ingestion
+import kb_vector_store
+import model_routing_check
+import smithy_tool
+import task_check
 
 _HERE = Path(__file__).resolve().parent
 
@@ -590,6 +598,58 @@ def _check_hitl(step: dict, i: int, add) -> None:
         add("warning", where, f"{p}.mode", "this gate approves itself: no one reviews this stage")
 
 
+def _check_after(t, where: dict, p: str, add) -> None:
+    """`after` as a gate's timeout reads it: <n>m, <n>h or <n>d, at most 30 days."""
+    m = AFTER_RE.match(t) if isinstance(t, str) else None
+    if not m:
+        add("error", where, p, "must be <n>m, <n>h or <n>d, e.g. 30m, 24h, 2d")
+    elif int(m.group(1)) * {"m": 60, "h": 3600, "d": 86400}[m.group(2)] > 30 * 86400:
+        add("error", where, p, "is at most 30d")
+
+
+def _check_asks(agents: dict, tools: dict, add) -> None:
+    """agents.<id>.askPerson and tools.<name>.approval / approvalTimeout: an agent asking a
+    person mid-step (app/common/asks.py). Mirrors validate.ts checkAsks."""
+    for aid, a in agents.items():
+        if not _is_obj(a) or variant_of("agent", a) == "a2a":
+            continue
+        where, path = {"kind": "agent", "id": aid}, f"agents.{aid}"
+        ask = a.get("askPerson")
+        if variant_of("agent", a) == "main" and (ask is True or _is_obj(ask)):
+            if a.get("toolMode") != "model":
+                add("error", where, f"{path}.askPerson",
+                    'needs toolMode "model": only a model turn can decide to ask a person')
+            if _is_obj(ask):
+                n = ask.get("maxQuestions")
+                if _num(n) and float(n).is_integer() and not 1 <= n <= 10:
+                    add("error", where, f"{path}.askPerson.maxQuestions", "must be from 1 to 10")
+                if "timeout" in ask:
+                    _check_after(ask["timeout"], where, f"{path}.askPerson.timeout", add)
+        if variant_of("agent", a) == "dedicated":
+            for key in tools_of(a.get("tool")):
+                t = tools.get(key)
+                if _is_obj(t) and t.get("approval") in ("person", "event"):
+                    add("error", where, f"{path}.tool",
+                        f'"{key}" waits for a person to approve each call, and a dedicated agent runs in '
+                        f'its own runtime, which cannot wait — run this agent in "main", or remove the '
+                        f"tool's approval")
+    for key, t in tools.items():
+        if not _is_obj(t) or "approvalTimeout" not in t:
+            continue
+        where, p = {"kind": "tool", "id": key}, f"tools.{key}.approvalTimeout"
+        if "approval" not in t:
+            add("error", where, p, "only a tool with `approval` reads it")
+        to = t["approvalTimeout"]
+        if not _is_obj(to):
+            continue
+        for k in to:
+            if k not in ("after", "action"):
+                add("error", where, f"{p}.{k}", "unknown key; a timeout takes after, action")
+        _check_after(to.get("after"), where, f"{p}.after", add)
+        if to.get("action") not in vocab("gateTimeoutActions"):
+            add("error", where, f"{p}.action", f"must be one of: {', '.join(vocab('gateTimeoutActions'))}")
+
+
 def _check_attachments(orch, agents: dict, add) -> None:
     """orchestrator.attachments.s3: where a run's request may point, and that some agent
     reads what it brings. Mirrors validate.ts checkAttachments."""
@@ -606,6 +666,82 @@ def _check_attachments(orch, agents: dict, add) -> None:
     if isinstance(s3, list) and s3 and not readers:
         add("warning", where, "orchestrator.attachments.s3",
             "no agent reads a run's files: set `attachments` on the agents that should")
+
+
+LIMITS_KEYS = ("userDailyUsd", "userRunsPerHour", "monthlyUsd")
+#: Ceilings that only catch a misplaced decimal point, not a policy. Mirrors LIMITS_MAX_* in validate.ts.
+LIMITS_MAX_USD = 1_000_000
+LIMITS_MAX_RUNS = 10_000
+LIMITS_MAX_MONTHLY_USD = 10_000_000
+
+
+def _check_limits(orch, add) -> None:
+    """orchestrator.limits: per-user caps on daily spend and runs per hour (bff/limits.py).
+    Mirrors validate.ts checkLimits. A bad value is an error here because the runtime
+    treats an unusable one as unset: without this, a typo would quietly mean no limit."""
+    lim = orch.get("limits") if _is_obj(orch) and _is_obj(orch.get("limits")) else None
+    if lim is None:
+        return
+    where = {"kind": "block", "name": "orchestrator"}
+    for k in lim:
+        if k not in LIMITS_KEYS:
+            add("error", where, f"orchestrator.limits.{k}", f"unknown key; limits takes: {', '.join(LIMITS_KEYS)}")
+    if "userDailyUsd" in lim:
+        v = lim["userDailyUsd"]
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v == v
+                and 0 <= v <= LIMITS_MAX_USD):
+            add("error", where, "orchestrator.limits.userDailyUsd",
+                f"must be a number of US dollars, 0 to {LIMITS_MAX_USD} (0 means no limit)")
+    if "monthlyUsd" in lim:
+        v = lim["monthlyUsd"]
+        if not (isinstance(v, (int, float)) and not isinstance(v, bool) and v == v
+                and 0 <= v <= LIMITS_MAX_MONTHLY_USD):
+            add("error", where, "orchestrator.limits.monthlyUsd",
+                f"must be a number of US dollars, 0 to {LIMITS_MAX_MONTHLY_USD} (0 means no limit)")
+    if "userRunsPerHour" in lim and not _int_in(lim["userRunsPerHour"], 0, LIMITS_MAX_RUNS):
+        add("error", where, "orchestrator.limits.userRunsPerHour",
+            f"must be a whole number, 0 to {LIMITS_MAX_RUNS} (0 means no limit)")
+
+
+#: S3 lifecycle expiration takes a positive whole number of days; ten years is a ceiling
+#: that only catches a typo. Mirrors FILES_MAX_DAYS in validate.ts and the CDK.
+FILES_MAX_DAYS = 3650
+
+
+def _check_files(orch, add) -> None:
+    """orchestrator.files.retentionDays: in range (its type and the block's keys are checked
+    from keys.json like every key). Mirrors validate.ts checkFiles."""
+    files = orch.get("files") if _is_obj(orch) and _is_obj(orch.get("files")) else {}
+    v = files.get("retentionDays")
+    if isinstance(v, int) and not isinstance(v, bool) and not 1 <= v <= FILES_MAX_DAYS:
+        add("error", {"kind": "block", "name": "orchestrator"}, "orchestrator.files.retentionDays",
+            f"must be a whole number of days, 1 to {FILES_MAX_DAYS}")
+
+
+AGENT_POLICY_NO_EFFECT = ("has no effect: AgentCore Policy evaluates Cedar only at the Gateway, on each tool call, for every agent (orchestrator.policy). There is no API for a check from agent code. Remove it.")
+
+
+def _check_agent_policy(agents: dict, add) -> None:
+    """agents.<id>.agentcore.policy.enabled does nothing: AgentCore Policy evaluates Cedar only
+    at the Gateway (orchestrator.policy), and has no API for a check from agent code. Kept
+    loadable, with this warning. Mirrors validate.ts checkAgentPolicy."""
+    for aid, a in agents.items():
+        core = a.get("agentcore") if _is_obj(a) else None
+        if _is_obj(core) and _is_obj(core.get("policy")) and "enabled" in core["policy"]:
+            add("warning", {"kind": "agent", "id": aid}, f"agents.{aid}.agentcore.policy.enabled", AGENT_POLICY_NO_EFFECT)
+
+
+def _check_live_config(orch, auth, add) -> None:
+    """orchestrator.liveConfig (bff/liveconfig.py) is admin-only, and `admin` is closed unless
+    a group is granted it, so on without a grant it would be on for nobody. Mirrors validate.ts
+    checkLiveConfig."""
+    if not (_is_obj(orch) and orch.get("liveConfig") is True):
+        return
+    actions = auth.get("actions") if _is_obj(auth) and _is_obj(auth.get("actions")) else {}
+    if not (isinstance(actions.get("admin"), list) and actions["admin"]):
+        add("warning", {"kind": "block", "name": "orchestrator"}, "orchestrator.liveConfig",
+            "only an admin can change the live config, and no group is granted `admin` in "
+            "authorization.actions, so nobody can")
 
 
 INTERCEPTOR_KEYS = ("code", "lambdaArn", "passRequestHeaders", "templates")
@@ -906,6 +1042,35 @@ def _fixed_name_problems(statement, tools: dict) -> list[str]:
             out.append(f'names {a}, but a {t} tool\'s one tool is "{fixed}": write '
                        f'AgentCore::Action::"{key}{cedar.SEP}{fixed}"')
     return out
+
+
+def _check_litellm(wf: dict, add) -> None:
+    """`litellm/<name>` models (app/common/litellm_proxy.py): an agent's own model only. The
+    default model is also the evaluators' judge and the Assistant's, which Bedrock answers.
+    Mirrors validate.ts checkLitellm. Whether the deployment has a proxy is not known here:
+    bff/litellm_models.py problems says that."""
+    orch = wf.get("orchestrator") if _is_obj(wf.get("orchestrator")) else {}
+    if str(orch.get("defaultModel") or "").startswith("litellm/"):
+        add("error", {"kind": "block", "name": "orchestrator"}, "orchestrator.defaultModel",
+            "must be a Bedrock model: it is also the evaluators' judge and the Assistant's model. "
+            "Set a litellm/ model on each agent instead")
+    for name, e in (wf.get("evaluators") if _is_obj(wf.get("evaluators")) else {}).items():
+        if _is_obj(e) and str(e.get("model") or "").startswith("litellm/"):
+            add("error", {"kind": "block", "name": "evaluators"}, f"evaluators.{name}.model",
+                "a judge model runs on AgentCore Evaluations, which calls Bedrock: pick a Bedrock model")
+    for aid, a in (wf.get("agents") if _is_obj(wf.get("agents")) else {}).items():
+        if not _is_obj(a):
+            continue
+        where, path = {"kind": "agent", "id": aid}, f"agents.{aid}"
+        if isinstance(a.get("model"), str) and a["model"].startswith("litellm/") and not a["model"][8:].strip():
+            add("error", where, f"{path}.model", "names no model: write litellm/ and the proxy's model name, "
+                                                 "e.g. litellm/gpt-4o")
+        core = a.get("agentcore") if _is_obj(a.get("agentcore")) else {}
+        ev = core.get("evaluations") if _is_obj(core.get("evaluations")) else {}
+        for i, c in enumerate(ev.get("custom") if isinstance(ev.get("custom"), list) else []):
+            if _is_obj(c) and str(c.get("model") or "").startswith("litellm/"):
+                add("error", where, f"{path}.agentcore.evaluations.custom[{i}].model",
+                    "a judge model runs on AgentCore Evaluations, which calls Bedrock: pick a Bedrock model")
 
 
 def _check_policy(orch, tools: dict, add) -> None:
@@ -1251,9 +1416,18 @@ def validate(wf: dict) -> list[dict]:
     tools = wf.get("tools") if _is_obj(wf.get("tools")) else {}
     steps = wf.get("steps") if isinstance(wf.get("steps"), list) else []
     _check_policy(wf.get("orchestrator"), tools, add)
+    _check_litellm(wf, add)
     _check_attachments(wf.get("orchestrator"), agents, add)
+    _check_limits(wf.get("orchestrator"), add)
+    _check_files(wf.get("orchestrator"), add)
+    _check_live_config(wf.get("orchestrator"), wf.get("authorization"), add)
+    _check_agent_policy(agents, add)
     _check_interceptors(wf.get("orchestrator"), tools, agents, add)
     _check_triggers(wf.get("orchestrator"), agents, add)
+    _check_asks(agents, tools, add)
+    task_check.check(agents, tools, steps, wf.get("orchestrator"), add, vocab, upstream_ids)
+    harness_check.check(agents, add, wf)
+    model_routing_check.check(wf.get("orchestrator"), agents, wf.get("authorization"), add)
     _check_sign_in(wf.get("authorization"), add)
     _check_named(wf, add, out)
 
@@ -1303,8 +1477,11 @@ def validate(wf: dict) -> list[dict]:
             if isinstance(kms, str) and not KMS_KEY_ARN_RE.match(kms):
                 add("error", where, f"{path}.kmsKeyArn",
                     "must be a KMS key ARN, arn:aws:kms:<region>:<account>:key/<id>")
+            kb_ingestion.check(tool, path, where, add, vocab_extra, vocab)
+            kb_vector_store.check(tool, path, where, add, vocab_extra, vocab)
+            kb_data_source.check(tool, path, where, add, vocab_extra, vocab)
             if kb_id:
-                for k in ("s3Uri", "kmsKeyArn", "embeddingModel", "dimensions"):
+                for k in ("s3Uri", "kmsKeyArn", "embeddingModel", "dimensions", "dataSource", "vectorStore", "chunking", "parsing"):
                     if tool.get(k) is not None:
                         add("error", where, f"{path}.{k}",
                             "does not apply with knowledgeBaseId: that Knowledge Base already has its "
@@ -1359,6 +1536,8 @@ def validate(wf: dict) -> list[dict]:
                 if _is_obj(doc.get("components")) and doc["components"].get("securitySchemes"):
                     add("error", where, f"{path}.schema.components.securitySchemes",
                         "is not supported by the Gateway: set `auth` on the tool instead")
+        if t == "smithy":
+            smithy_tool.check(tool, path, where, add, vocab("smithyDeniedServices"))
         mode = tool.get("auth")
         if mode in OAUTH_MODES:
             if t not in vocab("oauthToolTypes"):
@@ -1443,6 +1622,7 @@ def validate(wf: dict) -> list[dict]:
                 add("error", where, f"{path}.arg",
                     f'"{arg}" is not a property of {called} ({", ".join(props_of[called])}). '
                     "Set `arg` to the property the agent's query goes into.")
+            browser_tool.check(tool, path, where, add)
     for t in ("kb", "websearch"):
         if len(kinds.get(t, [])) > 1:
             for key in kinds[t]:
@@ -1481,7 +1661,7 @@ def validate(wf: dict) -> list[dict]:
             mtc = a.get("maxToolCalls")
             if isinstance(mtc, (int, float)) and not isinstance(mtc, bool) and not 1 <= mtc <= 20:
                 add("error", where, f"{path}.maxToolCalls", "must be from 1 to 20")
-            if a.get("toolMode") == "model" and not bound:
+            if a.get("toolMode") == "model" and not bound and not _jst(a.get("askPerson")):
                 add("warning", where, f"{path}.toolMode",
                     '"model" lets the model choose among the agent\'s tools, and it has none — bind one with `tool`')
             _check_vision(a, aid, agents, steps, where, path, add)

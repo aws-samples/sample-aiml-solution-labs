@@ -51,6 +51,7 @@ import re
 from pathlib import Path
 
 import attachments as _att
+import resource_names as _rn
 
 # workflow.json as shipped INSIDE this Lambda's deployment package. Both IaC paths
 # put it here (terraform/bff.tf's archive_file, and the staged asset directory the
@@ -166,6 +167,8 @@ def _tool_label(tool: str, kind: str | None, agent: dict) -> str:
         return f"REST API \u00b7 {tool}"
     if kind == "lambda":
         return f"Function \u00b7 {tool}"
+    if kind == "smithy":
+        return f"AWS API \u00b7 {tool}"
     return f"MCP \u00b7 {tool}"
 
 
@@ -178,6 +181,12 @@ def data_source(agent: dict, tool_types: dict[str, str]) -> str:
     # A remote agent is matched FIRST because it has no `tool` by construction — it
     # reaches its own data sources — and it is the one agent on the diagram whose
     # provenance a reviewer most needs to see. Without this it rendered as an em dash.
+    if str(agent.get("runtime") or "") == "task":
+        # A step with no model says what it does: "Task · Code".
+        return f"Task \u00b7 {str((agent.get('task') or {}).get('kind') or 'step').capitalize()}"
+    if str(agent.get("runtime") or "") == "harness":
+        # Run by a managed AgentCore Harness, with the shell when it may use one.
+        return "AgentCore Harness" + (" \u00b7 shell" if (agent.get("harness") or {}).get("shell") is True else "")
     if str(agent.get("runtime") or _DEFAULTS["agent"]["runtime"]) == "a2a":
         # A framework-deployed stand-in is labelled by its `source`, because its URL
         # is a deploy-time value and there is no host to show. Labelling it "remote"
@@ -211,13 +220,96 @@ def _ui(workflow: dict) -> dict | None:
             if not k.endswith("Note") and v is not None and v != ""}
 
 
-def project(workflow: dict) -> dict:
+_TOOL_TYPE_LABEL = {"kb": "Knowledge Base", "mcp": "MCP server", "openapi": "REST API (OpenAPI)",
+                    "lambda": "Lambda function", "websearch": "Web search", "apigateway": "REST API (API Gateway)",
+                    "smithy": "AWS API (Smithy)"}
+
+
+def _strs(v) -> list[str]:
+    return [str(x) for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
+
+
+def components(workflow: dict, agent_id: str) -> list[dict]:
+    """What is attached to one agent, as the run graph shows it: {kind, name, detail, tool?}
+    per tool, guardrail, memory, Cedar policy (on one of its tools), skill, evaluator,
+    outbound identity and asking HITL. Kinds and NAMES only: no endpoint, ARN, policy
+    statement, prompt or secret leaves here. Mirrors web/src/builder/components.ts
+    componentsOf, in the same order."""
+    agent = (workflow.get("agents") or {}).get(agent_id) or {}
+    tools_cfg = workflow.get("tools") or {}
+    core = agent.get("agentcore") if isinstance(agent.get("agentcore"), dict) else {}
+    raw = agent.get("tool")
+    tool_keys = [raw] if isinstance(raw, str) and raw else _strs(raw)
+    out: list[dict] = []
+    for key in tool_keys:
+        t = tools_cfg.get(key) if isinstance(tools_cfg.get(key), dict) else {}
+        kind = str(t.get("type") or "")
+        detail = _TOOL_TYPE_LABEL.get(kind, kind or "not defined")
+        if t.get("approval") in ("person", "event"):
+            detail += " \u00b7 HITL approves each call"
+        out.append({"kind": "tool", "name": key, "tool": key, "detail": detail})
+    g = core.get("guardrails") if isinstance(core.get("guardrails"), dict) else {}
+    if g.get("input") is True or g.get("output") is True:
+        sides = ("input and output" if g.get("input") is True and g.get("output") is True
+                 else "input" if g.get("input") is True else "output")
+        named = g.get("use") if isinstance(g.get("use"), str) and g.get("use") else (
+            "existing guardrail" if g.get("guardrailId") else
+            "deployment guardrail" if isinstance(workflow.get("guardrail"), dict) and workflow["guardrail"] else "default guardrail")
+        out.append({"kind": "guardrail", "name": named, "detail": f"checks {sides}"})
+    m = core.get("memory") if isinstance(core.get("memory"), dict) else {}
+    long_term = ["semantic"] if m.get("longTerm") is True else _strs(m.get("longTerm"))
+    use = m.get("use") if isinstance(m.get("use"), str) and m.get("use") else ""
+    if long_term or _strs(m.get("custom")) or use:
+        kinds = long_term + _strs(m.get("custom"))
+        if use:
+            kinds = _strs(((workflow.get("memories") or {}).get(use) or {}).get("strategies")) or kinds
+        scope = f"per {m['scope']}" if isinstance(m.get("scope"), str) and m.get("scope") else ""
+        out.append({"kind": "memory", "name": use or "agent memory",
+                    "detail": " \u00b7 ".join(x for x in (", ".join(kinds), scope) if x)})
+    for key in tool_keys:
+        for p in _strs((tools_cfg.get(key) or {}).get("policies") if isinstance(tools_cfg.get(key), dict) else None):
+            out.append({"kind": "policy", "name": p, "tool": key, "detail": f"on {key}"})
+    for sk in _strs(agent.get("skills")):
+        out.append({"kind": "skill", "name": sk, "detail": ""})
+    ev = core.get("evaluations") if isinstance(core.get("evaluations"), dict) else {}
+    if ev.get("enabled") is True:
+        names = _strs(ev.get("evaluators"))
+        for e in names:
+            prefix, _, rest = e.partition(".")
+            out.append({"kind": "evaluation", "name": rest if prefix in ("Builtin", "Custom") and rest else e,
+                        "evaluator": e, "detail": "built-in" if prefix == "Builtin" else "custom" if prefix == "Custom" else ""})
+        if not names:
+            out.append({"kind": "evaluation", "name": "Evaluations", "detail": "no evaluator picked"})
+    for ident in _strs((core.get("identity") or {}).get("outbound") if isinstance(core.get("identity"), dict) else None):
+        out.append({"kind": "identity", "name": ident, "detail": "outbound credential"})
+    ask = agent.get("askPerson")
+    if ask is True or isinstance(ask, dict):
+        n = ask.get("maxQuestions") if isinstance(ask, dict) and isinstance(ask.get("maxQuestions"), int) else 3
+        out.append({"kind": "human", "name": "Asks questions", "detail": f"up to {n} question{'' if n == 1 else 's'} a step"})
+    return out
+
+
+def _override_models(workflow: dict) -> list[str]:
+    """orchestrator.models.overrides (the same reading as bff/model_override.choices)."""
+    block = (workflow.get("orchestrator") or {}).get("models")
+    got = block.get("overrides") if isinstance(block, dict) else None
+    return [m for m in got if isinstance(m, str) and m.strip()] if isinstance(got, list) else []
+
+
+def project(workflow: dict, agent_name: str | None = None) -> dict:
     """Trim `workflow` to what the BFF and the UI actually read.
 
     An allow-list, key by key. Adding a key to workflow.json does NOT make it
     visible to the browser until it is named here, which is what makes the trust
     boundary in the module docstring hold by construction.
+
+    `agent_name` is the stack the workflow is deployed as, for the resource names on its
+    components (resource_names.py): None for this deployment's own, a build's agentName
+    for a build deployed as its own stack (whose memory ids this BFF does not have).
     """
+    own = agent_name is None
+    stack = _rn.own_agent_name() if own else agent_name
+    memory_ids = _rn.own_memory_ids() if own else {}
     tool_types = {name: str((spec or {}).get("type") or "mcp").lower()
                   for name, spec in (workflow.get("tools") or {}).items()}
 
@@ -231,6 +323,12 @@ def project(workflow: dict) -> dict:
             "corpus": agent.get("corpus"),
             "model": agent.get("model"),
             "source": data_source(agent, tool_types),
+            # A task step's kind (runtime "task"): the run graph labels the box with it.
+            **({"task": str((agent.get("task") or {}).get("kind") or "")}
+               if agent.get("runtime") == "task" else {}),
+            # What is attached to it, by kind and name, for the run graph (components()).
+            "components": [{**c, "resources": _rn.resources(workflow, agent_id, c, stack, memory_ids, _DEFAULTS)}
+                           for c in components(workflow, agent_id)],
         }
 
     chatbot_cfg = ((workflow.get("orchestrator") or {}).get("chatbot")) or {}
@@ -276,6 +374,13 @@ def project(workflow: dict) -> dict:
         "triggers": [{"name": n, "type": t.get("type"), "runAs": t.get("runAs") or "owner"}
                      for n, t in (((workflow.get("orchestrator") or {}).get("triggers") or {}).items())
                      if isinstance(t, dict)] or None,
+        # Whether admins get the Live config page (bff/liveconfig.py); the versions stay on
+        # the server, behind the admin check.
+        "liveConfig": ((workflow.get("orchestrator") or {}).get("liveConfig") is True) or None,
+        # The models Start run may offer (orchestrator.models.overrides; bff/model_override.py).
+        # Model ids only; the page offers them to callers granted `override`, and the server
+        # checks the grant and the list again at run start.
+        "modelOverrides": _override_models(workflow) or None,
     }
 
 

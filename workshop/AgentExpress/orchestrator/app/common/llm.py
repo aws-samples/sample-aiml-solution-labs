@@ -113,6 +113,12 @@ async def run_llm(name: str, system: str, user: str,
     a reviewer approved it at the gate with no way to know the tail was missing.
     """
     model = model_for(model)
+    if model.startswith("litellm/"):
+        # Not Bedrock: the deployment's LiteLLM proxy (app/common/litellm_proxy.py).
+        from app.common import litellm_proxy
+        return await litellm_proxy.run_llm(name, system, user, model=model, temperature=temperature,
+                                           max_tokens=max_tokens, top_p=top_p,
+                                           stop_sequences=stop_sequences, images=images, files=files)
     # `images` ({key, format, bytes}, from images.load_for) go to the model as Converse
     # image content after the text. The logs and telemetry name them, never carry them.
     images = list(images or [])
@@ -208,6 +214,10 @@ async def run_llm_tools(name: str, system: str, messages: list, tools: list[dict
     same model refusals as run_llm are adapted to, and the turn is metered like any
     other model call."""
     model = model_for(model)
+    if model.startswith("litellm/"):
+        from app.common import litellm_proxy
+        return await litellm_proxy.run_llm_tools(name, system, messages, tools, model=model,
+                                                 temperature=temperature, max_tokens=max_tokens)
     sampling: dict = {"temperature": temperature}
     specs = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                "parameters": t["input_schema"]}} for t in tools]

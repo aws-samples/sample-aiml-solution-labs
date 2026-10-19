@@ -78,8 +78,8 @@ proposing anything, so the design is constrained by the schema rather than by me
 - You MUST read `orchestrator/docs/WORKFLOW_REFERENCE.md` for what reads each key
 - You MUST read the shipped `orchestrator/app/workflow.json` as the worked example of every construct
 - You MUST NOT read `orchestrator/app/workflow.schema.json` into context because it is a 106 KB generated projection of `keys.json` and will consume the context you need for authoring
-- You MUST record the five legal tool `type` values and their required keys before continuing
-- Validation: You MUST confirm you can state, without guessing, which keys are required for each of the five tool types
+- You MUST record the seven legal tool `type` values and their required keys before continuing
+- Validation: You MUST confirm you can state, without guessing, which keys are required for each of the seven tool types
 - On failure: hard stop. You MUST NOT invent configuration keys, because an unknown key fails at `terraform plan` or `cdk synth` and the customer will read that as the framework being broken
 
 ### 2. Design the topology and confirm it with the user
@@ -155,7 +155,7 @@ Fill in each agent's `prompts.py` and `agent.py` so it produces the customer's a
 
 **Constraints:**
 - You MUST implement `async def run(self, ctx: AgentContext) -> str` returning the asset as a JSON string
-- You MUST reach every external capability through `ctx` and no other way, because `ctx` is where cost metering, token counting, guardrails, OTEL spans and policy checks are applied — a direct `boto3` call bypasses all of it and the run will show no cost, no prompt and no evaluation. The available calls are: `ctx.llm(system, user, model, max_tokens, name)`, `ctx.call_tool(tool_key, query)`, `ctx.call_tool_rows(tool_key, query)`, `ctx.retrieve(query, doc_type)`, `ctx.input(agent_id)`, `ctx.memory_recall(query)`, `ctx.memory_store(content)`, `ctx.guardrail(text, source)`, `ctx.policy_check(action)`, `ctx.get_identity_token(provider)`, `ctx.log(msg)`, `ctx.heartbeat(pct)`
+- You MUST reach every external capability through `ctx` and no other way, because `ctx` is where cost metering, token counting, guardrails, OTEL spans and policy checks are applied — a direct `boto3` call bypasses all of it and the run will show no cost, no prompt and no evaluation. The available calls are: `ctx.llm(system, user, model, max_tokens, name)`, `ctx.call_tool(tool_key, query)`, `ctx.call_tool_rows(tool_key, query)`, `ctx.retrieve(query, doc_type)`, `ctx.input(agent_id)`, `ctx.memory_recall(query)`, `ctx.memory_store(content)`, `ctx.guardrail(text, source)`, `ctx.get_identity_token(provider)`, `ctx.log(msg)`, `ctx.heartbeat(pct)`
 - You MUST keep arithmetic in Python and judgment in the prompt, because a model asked to total figures will produce a plausible wrong number and a reviewer cannot tell
 - You MUST NOT let an agent state a figure that no upstream asset or tool result carries, because `app/common/grounding.py` flags ungrounded figures on the run timeline and the run will be sent back
 - You MUST NOT fabricate a fallback value when a tool or model call fails, because the framework deliberately raises `ToolUnavailable` and `ModelUnavailable` so the run fails with a reason attached to the failing agent

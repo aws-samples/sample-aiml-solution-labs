@@ -40,6 +40,12 @@
       "maxAttempts": 1,
       "readTimeoutSeconds": 600
     },
+    "limits": {
+      "userDailyUsd": 0,
+      "userRunsPerHour": 0,
+      "monthlyUsd": 0
+    },
+    "liveConfig": false,
     "a2aInvoke": {
       "timeoutSeconds": 30,
       "pollIntervalSeconds": 2,
@@ -55,7 +61,10 @@
       "enabled": true,
       "mode": "ENFORCE"
     },
-    "gatewayIdentity": "shared"
+    "gatewayIdentity": "shared",
+    "files": {
+      "retentionDays": 90
+    }
   },
   "guardrail": {
     "blockedInputMessage": "This request was blocked by the content guardrail.",

@@ -10,7 +10,8 @@ is: the request we send is the shape the protocol specifies, the answer we read 
 found wherever the protocol allows it to be, and anything else surfaces as
 `RemoteAgentUnavailable` with their reason attached rather than as an empty asset.
 
-The wire is stubbed at `urllib.request.urlopen` — the one seam the client uses — so
+The wire is stubbed at `_open` — the one seam the client uses, in front of the SSRF guard
+(tests/test_netguard.py covers the guard itself) — so
 these run with no network, no credentials and no partner agent. The request bodies are
 asserted against the published shapes (JSON-RPC 2.0 `message/send`, Agent Card at
 `/.well-known/agent-card.json`), because an integration that silently sends the wrong
@@ -105,7 +106,7 @@ class Ctx:
 
 
 class Wire:
-    """Stub for urllib.request.urlopen. Records every request; replies from a script.
+    """Stub for the client's `_open`. Records every request; replies from a script.
 
     Keyed by (method-or-"card") so a test declares only the exchanges it cares about:
     the card fetch, the `message/send`, and each `tasks/get` in turn.
@@ -171,7 +172,7 @@ def run(defn, wire, ctx=None, agent_id="partner"):
     """Build the agent from `defn` with the wire stubbed, and run it."""
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = wire
+        mod._open = wire
         agent = imp("app.orchestrator.registry").load_agents()[agent_id]
         return asyncio.run(agent.run(ctx or Ctx())), wire
 
@@ -295,7 +296,7 @@ def test_a_source_agent_takes_its_endpoint_from_the_injected_map(fake_aws_creden
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
         mod._ENDPOINTS = {"partner": "https://fn.lambda-url.us-east-1.on.aws"}
-        mod.urllib.request.urlopen = wire = Wire(card={"name": "P"}, send=ARTIFACT_OK)
+        mod._open = wire = Wire(card={"name": "P"}, send=ARTIFACT_OK)
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         asyncio.run(agent.run(Ctx()))
     assert wire.of("card")[0]["url"] == (
@@ -310,7 +311,7 @@ def test_a_source_agent_with_no_injected_endpoint_says_so(fake_aws_credentials):
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
         mod._ENDPOINTS = {}
-        mod.urllib.request.urlopen = Wire(send=ARTIFACT_OK)
+        mod._open = Wire(send=ARTIFACT_OK)
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         with pytest.raises(Exception, match="has no endpoint"):
             asyncio.run(agent.run(Ctx()))
@@ -367,7 +368,8 @@ def test_a_context_id_ties_this_run_s_calls_together():
     """So a stateful remote agent can correlate a revise cycle instead of seeing
     unrelated requests."""
     _, wire = run(REMOTE_WF, Wire(send=ARTIFACT_OK))
-    assert wire.of("message/send")[0]["body"]["params"]["contextId"] == "sess-1-partner"
+    assert wire.of("message/send")[0]["body"]["params"]["message"]["contextId"] == "sess-1-partner"
+    assert "contextId" not in wire.of("message/send")[0]["body"]["params"]   # MessageSendParams has none (A2A v0.3.0)
 
 
 def test_the_protocol_version_is_declared():
@@ -391,7 +393,7 @@ def test_bearer_auth_uses_the_injected_token_and_never_config():
     with workflow(remote_wf(auth="bearer")) as imp:
         mod = imp("app.common.a2a_agent")
         mod._TOKENS = {"partner": "t0k3n"}
-        mod.urllib.request.urlopen = wire = Wire(send=ARTIFACT_OK)
+        mod._open = wire = Wire(send=ARTIFACT_OK)
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         asyncio.run(agent.run(Ctx()))
     assert wire.of("message/send")[0]["headers"]["authorization"] == "Bearer t0k3n"
@@ -403,7 +405,7 @@ def test_bearer_auth_with_no_token_fails_before_any_request():
     with workflow(remote_wf(auth="bearer")) as imp:
         mod = imp("app.common.a2a_agent")
         mod._TOKENS = {}
-        mod.urllib.request.urlopen = wire = Wire(send=ARTIFACT_OK)
+        mod._open = wire = Wire(send=ARTIFACT_OK)
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         with pytest.raises(Exception, match="no token was injected"):
             asyncio.run(agent.run(Ctx()))
@@ -433,7 +435,7 @@ def test_sigv4_auth_signs_the_request_with_the_runtimes_own_role(fake_aws_creden
     signature headers, because "it didn't crash" would pass unsigned."""
     with workflow(remote_wf(auth="sigv4", agentCard=LAMBDA_URL)) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = wire = Wire(card={"url": LAMBDA_URL}, send=ARTIFACT_OK)
+        mod._open = wire = Wire(card={"url": LAMBDA_URL}, send=ARTIFACT_OK)
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         asyncio.run(agent.run(Ctx()))
     for req in (wire.of("card")[0], wire.of("message/send")[0]):
@@ -450,7 +452,7 @@ def test_sigv4_uses_no_bearer_token_at_all(fake_aws_credentials):
     with workflow(remote_wf(auth="sigv4", agentCard=LAMBDA_URL)) as imp:
         mod = imp("app.common.a2a_agent")
         mod._TOKENS = {"partner": "should-be-ignored"}
-        mod.urllib.request.urlopen = wire = Wire(card={"url": LAMBDA_URL}, send=ARTIFACT_OK)
+        mod._open = wire = Wire(card={"url": LAMBDA_URL}, send=ARTIFACT_OK)
         asyncio.run(imp("app.orchestrator.registry").load_agents()["partner"].run(Ctx()))
     assert "should-be-ignored" not in wire.of("message/send")[0]["headers"]["authorization"]
 
@@ -733,7 +735,7 @@ def test_the_failure_type_is_its_own_class():
     with workflow(REMOTE_WF) as imp:
         errors = imp("app.common.errors")
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = Wire(card={"name": "x"},
+        mod._open = Wire(card={"name": "x"},
                                           send={"result": {"status": {"state": "failed"}}})
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         with pytest.raises(errors.RemoteAgentUnavailable):
@@ -866,7 +868,7 @@ def round_trip(answer, *, skill="compliance", outputs=None):
     defn = remote_wf(agentCard=f"{CARD_HOST}/{skill}")
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = urlopen
+        mod._open = urlopen
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         return asyncio.run(agent.run(Ctx(outputs=outputs))), seen
 
@@ -961,7 +963,7 @@ def test_a_remote_agents_asset_validates_against_the_contract_it_produces(
     ctx = Ctx(outputs={"intake": json.dumps({"title": "X", "assetId": "asset-brief-x-v1"})})
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = urlopen
+        mod._open = urlopen
         out = asyncio.run(imp("app.orchestrator.registry").load_agents()["partner"].run(ctx))
 
     # `extra="forbid"` on the envelope, so this fails if the shape asks for a field the
@@ -1107,7 +1109,7 @@ def test_sigv4_is_never_sent_to_a_non_aws_host(fake_aws_credentials):
     receive it."""
     with workflow(remote_wf(auth="sigv4")) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = wire = Wire(send=ARTIFACT_OK)
+        mod._open = wire = Wire(send=ARTIFACT_OK)
         agent = imp("app.orchestrator.registry").load_agents()["partner"]
         with pytest.raises(mod.RemoteAgentUnavailable, match="only sent to an AWS endpoint"):
             asyncio.run(agent.run(Ctx()))
@@ -1125,3 +1127,13 @@ def test_a_private_endpoint_can_be_allowed_deliberately(monkeypatch):
     from app.common import a2a_agent as mod
     monkeypatch.setattr(mod, "_ALLOW_PRIVATE", True)
     assert mod._require_https("https://10.0.0.5/a2a", "x") == "https://10.0.0.5/a2a"
+
+
+def test_an_agentcore_hosted_agent_gets_a_stable_runtime_session_and_the_right_signing_service():
+    """AgentCore Runtime routes a session's requests to one microVM by the session header
+    (at least 33 characters); a task's polls must reach the microVM that holds it."""
+    from app.common import a2a_agent as m
+    assert m._on_agentcore("https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/x/invocations")
+    assert not m._on_agentcore("https://abc.lambda-url.us-east-1.on.aws/")
+    sid = m._runtime_session("sess-1", "partner")
+    assert 33 <= len(sid) <= 256 and sid == m._runtime_session("sess-1", "partner") != m._runtime_session("sess-2", "partner")

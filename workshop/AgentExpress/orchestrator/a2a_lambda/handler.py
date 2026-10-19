@@ -63,7 +63,7 @@ AGENT_NAME = os.getenv("A2A_AGENT_NAME", "Partner Agent")
 MAX_TOKENS = int(os.getenv("A2A_MAX_TOKENS", "2000"))
 
 CARD_PATH = "/.well-known/agent-card.json"
-PROTOCOL_VERSION = "0.3"
+PROTOCOL_VERSION = "0.3.0"
 
 # JSON-RPC error codes. The two standard ones plus the A2A code for an unknown task,
 # so a client that switches on them sees what it expects.
@@ -473,7 +473,8 @@ def handle_rpc(body: dict, skill_name: str) -> dict:
 
     if method == "message/send":
         task_text = _task_text(params)
-        context_id = str(params.get("contextId") or "")
+        # A2A v0.3.0 carries it on the Message; params.contextId is the older form.
+        context_id = str((params.get("message") or {}).get("contextId") or params.get("contextId") or "")
         task_id = str((params.get("message") or {}).get("messageId") or "task")
         try:
             text = review(task_text, skill_name)

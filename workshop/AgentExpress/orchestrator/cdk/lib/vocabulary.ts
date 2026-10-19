@@ -58,7 +58,7 @@ export const AUTHORIZATION_ACTIONS = values("authorizationActions");
 export const WEB_SEARCH_REGIONS = values("webSearchRegions");
 export const GUARDRAIL_FILTER_STRENGTHS = values("guardrailFilterStrengths");
 export const GUARDRAIL_PII_ACTIONS = values("guardrailPiiActions");
-export const BUILTIN_LAMBDA_SOURCE = values("builtinLambdaSource")[0];
+export const BUILTIN_LAMBDA_SOURCES = values("builtinLambdaSource");
 export const EMBEDDING_MODELS = values("embeddingModels");
 
 /**

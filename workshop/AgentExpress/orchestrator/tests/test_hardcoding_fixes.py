@@ -225,7 +225,7 @@ def test_insights_use_the_configured_lookback_when_none_is_given(monkeypatch):
                 raise RuntimeError("stop here")
         monkeypatch.setattr(insights, "_agentcore", lambda: Client())
         monkeypatch.setattr(insights, "_store", lambda item: None)
-        assert insights.run_batch(0)["status"] == "error"
+        assert insights._start_batch(0)["status"] == "error"
         window = seen["dataSourceConfig"]["cloudWatchLogs"]["filterConfig"]["timeRange"]
         assert (window["endTime"] - window["startTime"]).total_seconds() == 24 * 3600
         assert seen["description"].endswith("24h")

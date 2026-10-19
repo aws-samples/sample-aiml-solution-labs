@@ -392,6 +392,19 @@ class RunTable:
         i = self.items.get(Key["session_id"])
         return {"Item": dict(i)} if i else {}
 
+    def update_item(self, Key, UpdateExpression="", ConditionExpression="", ExpressionAttributeValues=None, **kw):
+        """Only what handler._claim_decision writes; its condition is checked, as DynamoDB does."""
+        it = self.items.get(Key["session_id"]) or {}
+        v = ExpressionAttributeValues or {}
+        hitl = it.get("hitl") if isinstance(it.get("hitl"), dict) else {}
+        ok = (it.get("overall") == v.get(":w") and "decidedAt" not in hitl
+              and (":a" not in v or hitl.get("askId") == v[":a"]))
+        if ConditionExpression and not ok:
+            from botocore.exceptions import ClientError
+            raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "UpdateItem")
+        it["hitl"] = {**hitl, "decidedAt": v.get(":t")}
+        return {}
+
     def scan(self, **kw):
         return {"Items": list(self.items.values())}
 

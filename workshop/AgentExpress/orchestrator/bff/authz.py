@@ -68,7 +68,9 @@ ACTIONS = tuple(_VOCAB["authorizationActions"]["values"])
 # and runs, so a workflow.json written before they existed (or with no authorization
 # block at all) must not open them to all. Grant them to a group filled only from the
 # backend (the sample's `admins`): the IaC refuses to make it the self-sign-up group.
-CLOSED_UNLESS_GRANTED = frozenset({"audit", "admin"})
+# `override` (picking a run's models, bff/model_override.py) changes what a run costs, so
+# it too is for the people a workflow names.
+CLOSED_UNLESS_GRANTED = frozenset({"audit", "admin", "override"})
 # Closed unless granted whenever workflow.json restricts anything, i.e. whenever the
 # console has users to keep apart: Insights analyse EVERY user's runs. A deployment with
 # no authorization block is single-tenant, and there it stays open as before.

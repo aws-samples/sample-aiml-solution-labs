@@ -1,5 +1,5 @@
 /** Pickers for an agent's AgentCore features that a generated form cannot express well:
- *  the evaluators (13 built-ins, some not scorable here, plus this agent's own) and the
+ *  the evaluators (18 built-ins, some not scorable here, plus this agent's own) and the
  *  custom evaluators themselves. Both write plain workflow.json values. */
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";

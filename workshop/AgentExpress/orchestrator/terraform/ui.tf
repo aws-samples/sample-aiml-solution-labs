@@ -227,6 +227,9 @@ resource "aws_cloudfront_distribution" "ui" {
   enabled             = true
   default_root_object = "index.html"
   comment             = "Multi-agent orchestrator UI"
+  # Organisation guardrails (hardening.tf): your own host name, and AWS WAF. Unset: neither.
+  aliases    = var.custom_domain == "" ? null : [var.custom_domain]
+  web_acl_id = var.enable_waf ? aws_wafv2_web_acl.ui[0].arn : null
 
   origin {
     origin_id                = "s3-ui"
@@ -269,8 +272,13 @@ resource "aws_cloudfront_distribution" "ui" {
     geo_restriction { restriction_type = "none" }
   }
 
+  # CloudFront's own certificate, unless custom_domain brings one: then TLS 1.2 at the least
+  # (the 2021 policy) and SNI, which costs nothing (a dedicated IP would).
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = var.custom_domain == ""
+    acm_certificate_arn            = var.custom_domain == "" ? null : var.acm_certificate_arn
+    ssl_support_method             = var.custom_domain == "" ? null : "sni-only"
+    minimum_protocol_version       = var.custom_domain == "" ? null : local.min_viewer_tls
   }
   logging_config {
     bucket          = aws_s3_bucket.ui_logs.bucket_domain_name

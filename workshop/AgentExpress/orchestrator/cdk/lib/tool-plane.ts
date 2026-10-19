@@ -17,6 +17,11 @@ import {
   aws_bedrockagentcore as agentcore,
   custom_resources as cr,
 } from "aws-cdk-lib";
+import { smithyConfig, smithyStatements, type SmithyAllow } from "./smithy-tool";
+import { kbIngestion, type KbChunking, type KbParsing } from "./kb-ingestion";
+import { kbVectorStore, kbVectorStoreName, validateKbVectorStore, type KbVectorStore } from "./kb-vector-store";
+import { kbConnector, validateKbConnector, type KbConnector } from "./kb-data-source";
+import { BROWSER_SOURCE, browserToolFunction } from "./browser-tool";
 
 /** The tool types the framework knows how to provision. */
 
@@ -167,7 +172,7 @@ export function codeToolEnvironment(code: CodeSpec): Record<string, string> {
   };
 }
 
-export type ToolType = "kb" | "websearch" | "mcp" | "openapi" | "lambda" | "apigateway";
+export type ToolType = "kb" | "websearch" | "mcp" | "openapi" | "lambda" | "apigateway" | "smithy";
 
 /** One tool published by a `type: "lambda"` target. */
 export interface LambdaToolDef {
@@ -204,11 +209,20 @@ export interface ToolSpec {
   kmsKeyArn?: string;
   /** type=kb: use a Knowledge Base you already have, in this account and region. */
   knowledgeBaseId?: string;
+  /** type=kb: how the documents are split and read before embedding (kb-ingestion.ts). */
+  chunking?: KbChunking;
+  parsing?: KbParsing;
+  /** type=kb: a vector store you already have, instead of the S3 Vectors one (kb-vector-store.ts). */
+  vectorStore?: KbVectorStore;
+  /** type=kb: a web crawl or a Confluence/SharePoint/Salesforce site instead of S3 (kb-data-source.ts). */
+  dataSource?: KbConnector;
   /** type=openapi: the OpenAPI 3 document itself, sent to the Gateway inline. */
   schema?: Record<string, unknown>;
   /** type=apigateway: an API Gateway REST API in this account and region. */
   restApiId?: string;
   stage?: string;
+  /** type=smithy: the AWS actions and resources the Gateway role may call for it (smithy-tool.ts). */
+  allow?: SmithyAllow;
   toolFilters?: { path: string; methods: string[] }[];
   toolOverrides?: { path: string; method: string; name: string; description?: string }[];
   /** auth=oauth2 | user | obo: the OAuth client (its secret is in toolApiKeys). `authorizationUrl`
@@ -276,8 +290,9 @@ export interface ToolSpec {
    * workflow.json to one AWS account).
    *
    * The value is a FOLDER NAME under orchestrator/app/tools/ — `source: "pricing"`
-   * means app/tools/pricing/ — and the validator accepts only the one the repo
-   * ships, because the execution role is fixed and cannot be configured. This is
+   * means app/tools/pricing/ — and the validator accepts only the ones the repo
+   * ships ("pricing", "codeInterpreter"), because each has an execution role written
+   * for it that cannot be configured. This is
    * deliberately NOT a general "deploy any directory" feature: a framework-deployed
    * function needs an execution role that config cannot express. A function of your
    * own goes in via `lambdaArn`, and the framework then touches neither its code nor
@@ -310,6 +325,8 @@ export interface ToolSpec {
    * config file, so setting both only produced their intersection.
    */
   domains?: { include?: string[]; exclude?: string[] };
+  /** source=browser: the domains the Browser tool may open, as its ALLOW_DOMAINS (browser-tool.ts). */
+  allowDomains?: string[];
   /** type=websearch: pin the connector version, e.g. "1.2.0". */
   connectorVersion?: string;
   /** type=websearch: request-level published-date bounds (ISO-8601 UTC). */
@@ -750,7 +767,8 @@ export class ToolPlane extends Construct {
     //              vector store and KB, and reads only that bucket/prefix (+ `kmsKeyArn`).
     //   existing — `knowledgeBaseId`: YOUR Knowledge Base; the framework makes nothing
     //              but the retrieval function, and never deletes it.
-    const kbSource = kbSpec.knowledgeBaseId ? "existing" : kbSpec.s3Uri ? "s3" : "upload";
+    //   connector — `dataSource`: a web crawl or a SaaS site; no documents bucket at all.
+    const kbSource = kbSpec.knowledgeBaseId ? "existing" : kbSpec.s3Uri ? "s3" : kbSpec.dataSource ? "connector" : "upload";
     let kbId = "";
     let kbArn = "";
     let kbLambda: lambda.Function | undefined;
@@ -765,11 +783,14 @@ export class ToolPlane extends Construct {
     if (kbName && kbSource !== "existing") {
       let kb: bedrock.CfnKnowledgeBase;
       const vectorBucketName = `agentcore-${dashName}-kb-${account}`;
-      const vectorBucket = new s3vectors.CfnVectorBucket(this, "KbVectorBucket", {
+      // `vectorStore`: YOUR store, so no S3 Vectors bucket or index is made.
+      validateKbVectorStore(kbName, kbSpec);
+      const ownStore = kbSpec.vectorStore ? kbVectorStore(kbSpec.vectorStore) : undefined;
+      const vectorBucket = ownStore ? undefined : new s3vectors.CfnVectorBucket(this, "KbVectorBucket", {
         vectorBucketName,
       });
 
-      const vectorIndex = new s3vectors.CfnIndex(this, "KbVectorIndex", {
+      const vectorIndex = !vectorBucket ? undefined : new s3vectors.CfnIndex(this, "KbVectorIndex", {
         // The NAME, not vectorBucket.ref: Ref on AWS::S3Vectors::VectorBucket
         // returns the ARN, and CfnIndex caps VectorBucketName at 63 chars, so
         // the ref fails validation at DEPLOY time (synth cannot catch it):
@@ -803,12 +824,12 @@ export class ToolPlane extends Construct {
         // this framework uses is `doc_type`), so excluding both costs nothing.
         metadataConfiguration: { nonFilterableMetadataKeys: KB_NON_FILTERABLE },
       });
-      vectorIndex.node.addDependency(vectorBucket);
+      if (vectorIndex && vectorBucket) vectorIndex.node.addDependency(vectorBucket);
 
       // The data source: this deployment's own docs bucket (uploads), or yours (s3Uri).
       const kbDocsDir = path.join(orchRoot, "kb_docs");
       let kbFiles: string[] = [];
-      let docsBucketArn: string;
+      let docsBucketArn = "";
       let docsPrefix = "";
       let docsDeployment: s3deploy.BucketDeployment | undefined;
       if (kbSource === "upload") {
@@ -845,7 +866,7 @@ export class ToolPlane extends Construct {
             ...sidecars,
           ],
         });
-      } else {
+      } else if (kbSource === "s3") {
         const loc = parseS3Location(String(kbSpec.s3Uri));
         docsBucketArn = `arn:aws:s3:::${loc.bucket}`;
         docsPrefix = loc.prefix;
@@ -860,7 +881,7 @@ export class ToolPlane extends Construct {
       kbRole.addToPolicy(
         new iam.PolicyStatement({ sid: "Embeddings", actions: ["bedrock:InvokeModel"], resources: [embedModel] })
       );
-      kbRole.addToPolicy(
+      if (vectorBucket) kbRole.addToPolicy(
         new iam.PolicyStatement({
           sid: "S3VectorsData",
           // The verbs a Knowledge Base uses. The wildcard also granted DeleteIndex and
@@ -881,7 +902,7 @@ export class ToolPlane extends Construct {
             resources: [docsBucketArn, `${docsBucketArn}/*`],
           })
         );
-      } else {
+      } else if (kbSource === "s3") {
         // YOUR bucket: read only, and only under the prefix you named. Mirrors the
         // DocsRead/DocsList statements in terraform/kb.tf.
         kbRole.addToPolicy(
@@ -910,11 +931,22 @@ export class ToolPlane extends Construct {
         }
       }
 
+      // `chunking` / `parsing`: the data source's ingestion settings, and the parsing
+      // model grant, added before the Knowledge Base so its create-time check sees it.
+      const ingestion = kbIngestion(kbName, kbSpec, region, account);
+      for (const s of ingestion.statements) kbRole.addToPolicy(s);
+      for (const s of ownStore?.statements ?? []) kbRole.addToPolicy(s);
+      validateKbConnector(kbName, kbSpec);
+      const connector = kbSpec.dataSource ? kbConnector(kbSpec.dataSource) : undefined;
+      for (const s of connector?.statements ?? []) kbRole.addToPolicy(s);
+
       kb = new bedrock.CfnKnowledgeBase(this, "KnowledgeBase", {
         // Digest-derived for the same reason as the index name, one level up: the
         // KB's storageConfiguration points at the index ARN and is immutable, so
         // replacing the index replaces the KB. See knowledgeBaseName.
-        name: knowledgeBaseName(dashName, KB_DIMS, KB_NON_FILTERABLE),
+        name: kbSpec.vectorStore
+          ? kbVectorStoreName(dashName, kbSpec.vectorStore, KB_DIMS, embedModelId)
+          : knowledgeBaseName(dashName, KB_DIMS, KB_NON_FILTERABLE),
         roleArn: kbRole.roleArn,
         knowledgeBaseConfiguration: {
           type: "VECTOR",
@@ -928,30 +960,33 @@ export class ToolPlane extends Construct {
             },
           },
         },
-        storageConfiguration: {
+        storageConfiguration: ownStore ? ownStore.storageConfiguration : {
           type: "S3_VECTORS",
-          s3VectorsConfiguration: { indexArn: vectorIndex.attrIndexArn },
+          s3VectorsConfiguration: { indexArn: vectorIndex!.attrIndexArn },
         },
       });
       // Bedrock validates the role's permissions at CREATE time, so the inline
       // POLICY (not just the role) must exist first.
       kb.node.addDependency(kbRole);
       dependOnDefaultPolicy(kb, kbRole);
-      kb.node.addDependency(vectorIndex);
+      if (vectorIndex) kb.node.addDependency(vectorIndex);
       this.knowledgeBaseId = kb.attrKnowledgeBaseId;
       kbId = kb.attrKnowledgeBaseId;
       kbArn = kb.attrKnowledgeBaseArn;
 
       const dataSource = new bedrock.CfnDataSource(this, "KbDataSource", {
         knowledgeBaseId: kb.attrKnowledgeBaseId,
-        name: "docs",
-        dataSourceConfiguration: {
+        // "docs" unless `chunking` or `parsing` is set; then a digest of them.
+        name: ingestion.dataSourceName,
+        dataSourceConfiguration: connector ? connector.dataSourceConfiguration : {
           type: "S3",
           s3Configuration: {
             bucketArn: docsBucketArn,
             ...(docsPrefix ? { inclusionPrefixes: [docsPrefix] } : {}),
           },
         },
+        ...(ingestion.vectorIngestionConfiguration
+          ? { vectorIngestionConfiguration: ingestion.vectorIngestionConfiguration } : {}),
       });
 
       // StartIngestionJob has no declarative equivalent. For uploads the corpus hash is
@@ -1124,6 +1159,9 @@ export class ToolPlane extends Construct {
         })
       );
     }
+    // type=smithy: read its hosted model, and make exactly the calls its `allow` names.
+    // Mirrors local.smithy_statements in terraform/tools_smithy.tf.
+    for (const s of smithyStatements(entries)) gatewayRole.addToPolicy(s);
 
     // ---- type=lambda ------------------------------------------------------
     // Mirrors the tool_lambda resources + aws_iam_role_policy.gateway_invoke_lambda
@@ -1143,12 +1181,32 @@ export class ToolPlane extends Construct {
       // is expressible in workflow.json. YOUR connector is a function you deploy,
       // declared with `lambdaArn`.
       for (const [name, spec] of lambdaTools.filter(([, s]) => s.source)) {
+        // `source: "browser"` has a function and role of its own (browser-tool.ts).
+        if (spec.source === BROWSER_SOURCE) {
+          this.builtinLambdaArns[name] = browserToolFunction(this, name, spec.allowDomains, agentName,
+            props.orchRoot, LOG_RETENTION).functionArn;
+          continue;
+        }
+        // `source: "codeInterpreter"` runs model-written code in the AWS-managed
+        // sandbox, so it gets the narrowest role of any function here (below) rather
+        // than the default one. Mirrors tool_lambda_code_interpreter in terraform/tools.tf.
+        const isCodeInterpreter = spec.source === "codeInterpreter";
+        const logGroup = new logs.LogGroup(this, `ToolLambdaLogGroup-${name}`, {
+          logGroupName: `/aws/lambda/ToolLambda-${agentName}-${name}`,
+          retention: LOG_RETENTION,
+          removalPolicy: cdk.RemovalPolicy.DESTROY,
+        });
+        // The default role carries AWSLambdaBasicExecutionRole, which can create log
+        // groups anywhere. This one writes streams to its own group and nothing else.
+        const ciRole = isCodeInterpreter
+          ? new iam.Role(this, `ToolLambdaRole-${name}`, {
+              assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+            })
+          : undefined;
+        if (ciRole) logGroup.grantWrite(ciRole);
         const fn = new lambda.Function(this, `ToolLambda-${name}`, {
-          logGroup: new logs.LogGroup(this, `ToolLambdaLogGroup-${name}`, {
-            logGroupName: `/aws/lambda/ToolLambda-${agentName}-${name}`,
-            retention: LOG_RETENTION,
-            removalPolicy: cdk.RemovalPolicy.DESTROY,
-          }),
+          logGroup,
+          ...(ciRole ? { role: ciRole } : {}),
           // Prefixed to match this function's own IAM role (ToolLambda-…) and the
           // other framework-owned functions (AgentCoreBFF-…, AgentCoreKBRetrieve-…).
           // Without a prefix the name is just "<agentName>-<tool>", which a scoped
@@ -1158,27 +1216,56 @@ export class ToolPlane extends Construct {
           runtime: lambda.Runtime.PYTHON_3_12,
           handler: "handler.lambda_handler",
           code: lambda.Code.fromAsset(path.join(props.orchRoot, "app", "tools", spec.source!)),
-          timeout: cdk.Duration.seconds(30),
+          // The code interpreter function waits on a sandbox run of up to 30 s (a
+          // constant in its handler) plus starting and stopping the session.
+          timeout: cdk.Duration.seconds(isCodeInterpreter ? 60 : 30),
           memorySize: 256,
-          environment: {
-            // Where the Price List Query API endpoint lives, which is NOT where
-            // prices are being asked about: the API is published in only two
-            // regions and describes prices for all of them. Pinned so the tool
-            // works on a deployment in any region. Mirrors terraform/tools.tf.
-            PRICING_API_REGION: "us-east-1",
-          },
+          // Only the pricing function has settings; the other gets no environment.
+          ...(isCodeInterpreter
+            ? {}
+            : {
+                environment: {
+                  // Where the Price List Query API endpoint lives, which is NOT where
+                  // prices are being asked about: the API is published in only two
+                  // regions and describes prices for all of them. Pinned so the tool
+                  // works on a deployment in any region. Mirrors terraform/tools.tf.
+                  PRICING_API_REGION: "us-east-1",
+                },
+              }),
         });
-        // Read only, and the only thing it reads is the PUBLIC price list — no
-        // customer data, no account spend. The Price List Query API has no
-        // resource-level permissions, so "*" is the only grant it accepts.
-        // Mirrors aws_iam_role_policy.tool_lambda in terraform/tools.tf.
-        fn.addToRolePolicy(
-          new iam.PolicyStatement({
-            sid: "ReadPublicPriceList",
-            actions: ["pricing:GetProducts", "pricing:DescribeServices"],
-            resources: ["*"],
-          })
-        );
+        if (isCodeInterpreter) {
+          // Three actions on ONE interpreter: the AWS-managed ("system") one, whose
+          // account field is the literal `aws`. Resource form: AgentCore Code
+          // Interpreter "Resource management",
+          // https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/code-interpreter-resource-management.html
+          // The same ARN the Builder's own code check uses (builder-plane.ts).
+          // Mirrors aws_iam_role_policy.tool_lambda_code_interpreter in terraform/tools.tf.
+          fn.addToRolePolicy(
+            new iam.PolicyStatement({
+              sid: "RunCodeInSystemInterpreter",
+              actions: [
+                "bedrock-agentcore:StartCodeInterpreterSession",
+                "bedrock-agentcore:InvokeCodeInterpreter",
+                "bedrock-agentcore:StopCodeInterpreterSession",
+              ],
+              resources: [
+                `arn:aws:bedrock-agentcore:${cdk.Stack.of(this).region}:aws:code-interpreter/aws.codeinterpreter.v1`,
+              ],
+            })
+          );
+        } else {
+          // Read only, and the only thing it reads is the PUBLIC price list — no
+          // customer data, no account spend. The Price List Query API has no
+          // resource-level permissions, so "*" is the only grant it accepts.
+          // Mirrors aws_iam_role_policy.tool_lambda in terraform/tools.tf.
+          fn.addToRolePolicy(
+            new iam.PolicyStatement({
+              sid: "ReadPublicPriceList",
+              actions: ["pricing:GetProducts", "pricing:DescribeServices"],
+              resources: ["*"],
+            })
+          );
+        }
         this.builtinLambdaArns[name] = fn.functionArn;
       }
 
@@ -1343,7 +1430,8 @@ export class ToolPlane extends Construct {
           spec.auth === "sigv4" ||
             spec.type === "kb" ||
             spec.type === "lambda" ||
-            spec.type === "websearch"
+            spec.type === "websearch" ||
+            spec.type === "smithy"
           ? [
               {
                 credentialProviderType: "GATEWAY_IAM_ROLE",
@@ -1386,6 +1474,8 @@ export class ToolPlane extends Construct {
         const upload = schemaUploads[name];
         if (upload) target.node.addDependency(upload);
       }
+      // A smithy target reads its hosted model as the role too, and its calls need `allow`.
+      if (spec.type === "smithy") dependOnDefaultPolicy(target, gatewayRole);
       if (previousTarget) target.node.addDependency(previousTarget);
       previousTarget = target;
       targets.push(target);
@@ -1544,7 +1634,8 @@ export class ToolPlane extends Construct {
             // but the CloudFormation resource does NOT — ConnectorSourceProperty
             // exposes only connectorId. So `connectorVersion` is a Terraform-only
             // option; validateTools rejects it on this path rather than accepting
-            // it and silently ignoring it.
+            // it and silently ignoring it, and also rejects the keys that need 1.2.0
+            // (the target gets the connector's default version, 1.1.0).
             source: { connectorId: "web-search" },
             configurations: [
               {
@@ -1592,6 +1683,10 @@ export class ToolPlane extends Construct {
           );
         return { openApiSchema: { s3: { uri } } };
       }
+
+      case "smithy":
+        // An AWS service's Smithy model, inline or hosted in S3 (smithy-tool.ts).
+        return smithyConfig(spec);
 
       case "apigateway":
         // A REST API stage in this account and region. The Gateway reads its definition

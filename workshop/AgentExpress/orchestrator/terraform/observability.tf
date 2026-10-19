@@ -73,6 +73,18 @@ resource "aws_iam_role_policy" "runtime_telemetry" {
       Effect   = "Allow"
       Action   = ["dynamodb:PutItem", "dynamodb:Query", "dynamodb:GetItem"]
       Resource = [aws_dynamodb_table.telemetry[0].arn, "${aws_dynamodb_table.telemetry[0].arn}/index/*"]
+      }, {
+      # The running total behind orchestrator.limits.userDailyUsd (app/features/observability/
+      # spend.py): each metered call adds its cost to ONE reserved row per user per day.
+      # UpdateItem only, and only on rows whose key starts _limit#, so the runtime still
+      # cannot edit a telemetry row. Mirrors LimitCounters in the CDK stack.
+      Sid      = "LimitCounters"
+      Effect   = "Allow"
+      Action   = ["dynamodb:UpdateItem"]
+      Resource = [aws_dynamodb_table.telemetry[0].arn]
+      Condition = {
+        "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["_limit#*"] }
+      }
     }]
   })
 }
@@ -91,6 +103,15 @@ resource "aws_iam_role_policy" "subagent_telemetry" {
       Effect   = "Allow"
       Action   = ["dynamodb:PutItem"]
       Resource = [aws_dynamodb_table.telemetry[0].arn]
+      }, {
+      # The same running total as the main runtime, from this agent's own calls.
+      Sid      = "LimitCounters"
+      Effect   = "Allow"
+      Action   = ["dynamodb:UpdateItem"]
+      Resource = [aws_dynamodb_table.telemetry[0].arn]
+      Condition = {
+        "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["_limit#*"] }
+      }
     }]
   })
 }
@@ -106,6 +127,16 @@ resource "aws_iam_role_policy" "bff_telemetry" {
       Effect   = "Allow"
       Action   = ["dynamodb:Query"]
       Resource = [aws_dynamodb_table.telemetry[0].arn, "${aws_dynamodb_table.telemetry[0].arn}/index/*"]
+      }, {
+      # orchestrator.limits (bff/limits.py): read a user's total for the day, and count the
+      # runs they start this hour. Only rows whose key starts _limit#.
+      Sid      = "LimitCounters"
+      Effect   = "Allow"
+      Action   = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+      Resource = [aws_dynamodb_table.telemetry[0].arn]
+      Condition = {
+        "ForAllValues:StringLike" = { "dynamodb:LeadingKeys" = ["_limit#*"] }
+      }
     }]
   })
 }

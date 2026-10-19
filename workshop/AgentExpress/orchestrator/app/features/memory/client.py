@@ -51,23 +51,25 @@ def _record_text(record) -> str:
     return text if isinstance(text, str) else ""
 
 
-async def recall(query: str, namespace: str = "", memory_id: str = "") -> list[str]:
+async def recall(query: str, namespace: str = "", memory_id: str = "", namespace_path: str = "") -> list[str]:
     """Search long-term memory for relevant past insights.
     Returns a list of content strings (empty if nothing found or disabled).
 
+    `namespace` matches one namespace exactly; `namespace_path` matches every namespace
+    under that path (RetrieveMemoryRecords). One of them is required.
     No session id: long-term memory is scoped by NAMESPACE (which encodes agent +
     subject), deliberately so — the point of a long-term recall is to reach across
     sessions, and passing one in would suggest it narrowed the search.
     """
-    if not (memory_id or _MEMORY_ID) or not query:
+    if not (memory_id or _MEMORY_ID) or not query or not (namespace or namespace_path):
         return []
-
+    scope = {"namespace_path": namespace_path} if namespace_path else {"namespace": namespace}
     records = await asyncio.to_thread(
         _manager(memory_id).search_long_term_memories,
         # AgentCore's searchQuery limit; a run's request is capped at the same length.
         query=query[:10000],
-        namespace=namespace or None,
         top_k=5,
+        **scope,
     )
     return [t for t in (_record_text(r) for r in (records or [])) if t]
 

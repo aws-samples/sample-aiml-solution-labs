@@ -23,7 +23,8 @@ locals {
   run_files_s3_prefixes = distinct(flatten([for p in local.run_files_s3 :
     length(split("/", p)) > 1 ? [join("/", slice(split("/", p), 1, length(split("/", p)))), "${join("/", slice(split("/", p), 1, length(split("/", p))))}/*"] : ["*"]
   ]))
-  assets_enabled = local.workflow_plane && (length(local.image_agents) > 0 || length(local.file_agents) > 0)
+  # ... or when the workflow keeps the files runs make (orchestrator.files, run_files.tf).
+  assets_enabled = local.workflow_plane && (length(local.image_agents) > 0 || length(local.file_agents) > 0 || local.files_on)
   # Agents whose model reads earlier agents' images (workflow.json `vision`, app/common/
   # images.load_for): they read the bucket as well as write it.
   vision_agents = [
@@ -176,32 +177,60 @@ resource "aws_iam_role_policy" "subagent_files" {
 }
 
 # Uploads are kept a day: long enough to start the run they were picked for, which
-# copies them into its own folder. Each run's copy is kept with the run.
+# copies them into its own folder. Each run's copy is kept with the run: for
+# orchestrator.files.retentionDays when the workflow sets orchestrator.files (run_files.tf),
+# else until the stack is deleted.
 resource "aws_s3_bucket_lifecycle_configuration" "assets" {
-  count  = local.run_files ? 1 : 0
+  count  = local.run_files || local.files_on ? 1 : 0
   bucket = aws_s3_bucket.assets[0].id
-  rule {
-    id     = "expire-uploads"
-    status = "Enabled"
-    filter {
-      prefix = "uploads/"
+  dynamic "rule" {
+    for_each = local.run_files ? [1] : []
+    content {
+      id     = "expire-uploads"
+      status = "Enabled"
+      filter {
+        prefix = "uploads/"
+      }
+      expiration {
+        days = 1
+      }
+      abort_incomplete_multipart_upload {
+        days_after_initiation = 1
+      }
     }
-    expiration {
-      days = 1
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
+  }
+  dynamic "rule" {
+    for_each = local.files_on ? [local.files_retention_days] : []
+    content {
+      id     = "expire-run-files"
+      status = "Enabled"
+      filter {
+        prefix = "runs/"
+      }
+      expiration {
+        days = rule.value
+      }
     }
   }
 }
 
-# The page uploads a run's files straight to the bucket (a presigned POST).
+# The page uploads a run's files straight to the bucket (a presigned POST), and reads a
+# text file through its link to show it (GET).
 resource "aws_s3_bucket_cors_configuration" "assets" {
-  count  = local.run_files ? 1 : 0
+  count  = local.run_files || local.files_on ? 1 : 0
   bucket = aws_s3_bucket.assets[0].id
+  dynamic "cors_rule" {
+    for_each = local.run_files ? [1] : []
+    content {
+      allowed_methods = ["POST"]
+      allowed_origins = local.ui_origins
+      allowed_headers = ["*"]
+      max_age_seconds = 3000
+    }
+  }
   cors_rule {
-    allowed_methods = ["POST"]
-    allowed_origins = ["https://${aws_cloudfront_distribution.ui.domain_name}"]
+    allowed_methods = ["GET"]
+    allowed_origins = local.ui_origins
     allowed_headers = ["*"]
     max_age_seconds = 3000
   }

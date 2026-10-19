@@ -20,7 +20,10 @@ export function toolRows(project: Project, secrets: SecretNames | null, agentNam
     const tool = raw as Entry & { type?: string; oauth?: Record<string, Json> };
     const c = connectionOf(tool, project);
     if (c.method === "fixed") {
-      return { key, connects: fixedOf(String(tool.type ?? "")), sees: "This app", status: "ready", tip: iamNote(tool, agentName) };
+      // A Smithy tool's role may call only what its `allow` lists, so an empty list is unfinished.
+      const noCalls = tool.type === "smithy" && !((tool.allow as { actions?: unknown[] } | undefined)?.actions?.length);
+      return { key, connects: fixedOf(String(tool.type ?? "")), sees: "This app", tip: iamNote(tool, agentName),
+        ...(noCalls ? { status: "setup" as const, why: "List the AWS calls it may make" } : { status: "ready" as const }) };
     }
     const m = METHOD[c.method];
     const row: Row = { key, connects: m.label,

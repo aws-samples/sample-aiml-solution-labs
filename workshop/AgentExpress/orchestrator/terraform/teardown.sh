@@ -3,7 +3,9 @@
 # Tear down EVERYTHING this stack created in the CURRENT AWS account, in the
 # right order, then clean up the pieces Terraform can't:
 #
-#   1. terraform destroy            (all TF-managed resources)
+#   1. terraform destroy            (all TF-managed resources), then a report of
+#                                   anything still tagged as this stack's (../leftovers.sh;
+#                                   it deletes nothing)
 #   2. revert CloudWatch Transaction Search  (enabled via a null_resource, so
 #                                             `destroy` does NOT undo it)
 #   3. empty + delete the remote-state S3 bucket (created by bootstrap-state.sh,
@@ -66,6 +68,14 @@ if [[ ! -f backend.hcl ]]; then
 fi
 echo "==> terraform destroy"
 terraform destroy -auto-approve
+
+# --- 1b. report what is still tagged as this stack's -----------------------
+# Reports only; it deletes nothing (see ../leftovers.sh). The agent name is the stack's tag
+# value: terraform.tfvars, else the variable's default.
+AGENT_NAME="$(awk -F'"' '/^[[:space:]]*agent_name[[:space:]]*=/ {print $2; exit}' terraform.tfvars 2>/dev/null || true)"
+AGENT_NAME="${AGENT_NAME:-multiagent_orchestrator}"
+echo "==> checking for leftovers tagged agentexpress:app=${AGENT_NAME}"
+../leftovers.sh "$AGENT_NAME" "$REGION" || true
 
 # --- 2. revert Transaction Search -----------------------------------------
 if [[ "${KEEP_TRANSACTION_SEARCH:-0}" == "1" ]]; then

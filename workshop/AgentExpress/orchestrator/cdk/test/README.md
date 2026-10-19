@@ -6,7 +6,7 @@ npm install
 npm test
 ```
 
-315 tests across seven files. No AWS credentials: `Template.fromStack` renders the
+No AWS credentials: `Template.fromStack` renders the
 template without staging the cloud assembly, which is the step that would build the
 runtime's Docker image. Synthesizing the stack does build the UI bundle
 (`npm ci && npm run build` in `../web`), locally when `npm` is on the PATH and in a
@@ -29,6 +29,7 @@ IaC.
 | `regional-model.test.ts` | 12 | model ids made regional (inference-profile prefixes) for the deploy region |
 | `nag.test.ts` | 3 | cdk-nag's AwsSolutions pack over a console and a build stack: no finding that `lib/nag.ts` has not acknowledged with a reason |
 | `parity.test.ts` | 22 | Terraform ↔ CDK agreement: the API route list, the framework vocabulary having one home, web-search domain filtering, the `kb` tool's retrieval settings, the environment and IAM grants, Cedar policy names, and the shipped `workflow.json` being read the same way by both |
+| `hardening.test.ts` | 23 | the organisation guardrails (`lib/hardening.ts`), synthesized: unset, no role gets a path or a boundary and CloudFront is unchanged; set, every role (CDK's framework roles included) carries the boundary and path, the deploy role requires the boundary, builds are passed both, the custom domain has its certificate, SNI and TLS 1.2, and the web ACL is on the distribution; a code tool's role under the organisation's boundary; each setting's validation |
 
 ## Why parity.test.ts exists
 

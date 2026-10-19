@@ -32,6 +32,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { fromGuided, NAME_RE, ARG_RE, problems, summary, type Guided, type Operator } from "./cedar";
 import type { Entry, Json, Project, Workflow } from "./model";
+import { smithyOperations } from "./smithy";
 import { policyLibrary, type GeneratedPolicy, type LibraryPolicy, type PolicySource } from "./storage";
 import type { Issue } from "./validate";
 import "./builder.css";
@@ -81,6 +82,7 @@ export function knownTools(tool: Entry | undefined): { name: string; args: strin
       }
     }
   }
+  if (kind === "smithy") out.push(...smithyOperations(tool.schema));
   if (kind === "apigateway" && Array.isArray(tool.toolOverrides)) {
     for (const o of tool.toolOverrides) if (typeof obj(o).name === "string") out.push({ name: String(obj(o).name), args: [] });
   }

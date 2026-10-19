@@ -24,6 +24,14 @@ import {
 } from "./meta";
 import { toolsOf } from "../lib/tools";
 import * as cedar from "./cedar";
+import { checkSmithy } from "./smithy";
+import { checkKbIngestion } from "./kbIngestion";
+import { checkKbVectorStore } from "./kbVectorStore";
+import { checkKbDataSource } from "./kbDataSource";
+import { checkBrowserTool } from "./browserTool";
+import { checkTasks } from "./taskCheck";
+import { checkHarness } from "./harnessCheck";
+import { checkModelRouting } from "./modelRoutingCheck";
 import { stepAgents, stepName, type Entry, type StepSpec, type Workflow } from "./model";
 
 export type Where =
@@ -161,6 +169,81 @@ function checkAttachments(orch: unknown, agents: Record<string, unknown>, add: A
   if (Array.isArray(s3) && s3.length && !readers.length) {
     add("warning", where, "orchestrator.attachments.s3",
       "no agent reads a run's files: set `attachments` on the agents that should");
+  }
+}
+
+const LIMITS_KEYS = ["userDailyUsd", "userRunsPerHour", "monthlyUsd"];
+/** Ceilings that only catch a misplaced decimal point, not a policy. Mirrors LIMITS_MAX_* in bff/validate_build.py. */
+const LIMITS_MAX_USD = 1_000_000;
+const LIMITS_MAX_RUNS = 10_000;
+const LIMITS_MAX_MONTHLY_USD = 10_000_000;
+
+/** orchestrator.limits: per-user caps on daily spend and runs per hour (bff/limits.py).
+ *  Mirrors _check_limits in bff/validate_build.py. A bad value is an error because the
+ *  runtime treats an unusable one as unset: without this, a typo would quietly mean no limit. */
+function checkLimits(orch: unknown, add: Add): void {
+  const lim = isObj(orch) && isObj(orch.limits) ? orch.limits as Record<string, unknown> : null;
+  if (lim === null) return;
+  const where: Where = { kind: "block", name: "orchestrator" };
+  for (const k of Object.keys(lim)) {
+    if (!LIMITS_KEYS.includes(k)) {
+      add("error", where, `orchestrator.limits.${k}`, `unknown key; limits takes: ${LIMITS_KEYS.join(", ")}`);
+    }
+  }
+  if ("userDailyUsd" in lim) {
+    const v = lim.userDailyUsd;
+    if (!(typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= LIMITS_MAX_USD)) {
+      add("error", where, "orchestrator.limits.userDailyUsd",
+        `must be a number of US dollars, 0 to ${LIMITS_MAX_USD} (0 means no limit)`);
+    }
+  }
+  if ("monthlyUsd" in lim) {
+    const v = lim.monthlyUsd;
+    if (!(typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= LIMITS_MAX_MONTHLY_USD)) {
+      add("error", where, "orchestrator.limits.monthlyUsd",
+        `must be a number of US dollars, 0 to ${LIMITS_MAX_MONTHLY_USD} (0 means no limit)`);
+    }
+  }
+  if ("userRunsPerHour" in lim && !intIn(lim.userRunsPerHour, 0, LIMITS_MAX_RUNS)) {
+    add("error", where, "orchestrator.limits.userRunsPerHour",
+      `must be a whole number, 0 to ${LIMITS_MAX_RUNS} (0 means no limit)`);
+  }
+}
+
+/** S3 lifecycle expiration takes a positive whole number of days; ten years only catches a
+ *  typo. Mirrors FILES_MAX_DAYS in bff/validate_build.py and the CDK. */
+const FILES_MAX_DAYS = 3650;
+/** orchestrator.files.retentionDays: in range (its type and the block's keys are checked
+ *  from keys.json like every key). Mirrors _check_files in bff/validate_build.py. */
+function checkFiles(orch: unknown, add: Add): void {
+  const files = isObj(orch) && isObj(orch.files) ? orch.files as Record<string, unknown> : {};
+  const v = files.retentionDays;
+  if (typeof v === "number" && Number.isInteger(v) && (v < 1 || v > FILES_MAX_DAYS)) {
+    add("error", { kind: "block", name: "orchestrator" }, "orchestrator.files.retentionDays",
+      `must be a whole number of days, 1 to ${FILES_MAX_DAYS}`);
+  }
+}
+/** agents.<id>.agentcore.policy.enabled does nothing: AgentCore Policy evaluates Cedar only at
+ *  the Gateway (orchestrator.policy), and has no API for a check from agent code. Kept
+ *  loadable, with this warning. Mirrors _check_agent_policy in bff/validate_build.py. */
+export const AGENT_POLICY_NO_EFFECT = "has no effect: AgentCore Policy evaluates Cedar only at the Gateway, on each tool call, for every agent (orchestrator.policy). There is no API for a check from agent code. Remove it.";
+function checkAgentPolicy(agents: Record<string, unknown>, add: Add): void {
+  for (const [id, a] of Object.entries(agents)) {
+    const core = isObj(a) ? (a as Record<string, unknown>).agentcore : undefined;
+    const pol = isObj(core) ? (core as Record<string, unknown>).policy : undefined;
+    if (isObj(pol) && "enabled" in pol) add("warning", { kind: "agent", id }, `agents.${id}.agentcore.policy.enabled`, AGENT_POLICY_NO_EFFECT);
+  }
+}
+/** orchestrator.liveConfig (bff/liveconfig.py) is admin-only, and `admin` is closed unless a
+ *  group is granted it, so on without a grant it would be on for nobody. Mirrors
+ *  _check_live_config in bff/validate_build.py. */
+function checkLiveConfig(orch: unknown, auth: unknown, add: Add): void {
+  if (!(isObj(orch) && orch.liveConfig === true)) return;
+  const actions = isObj(auth) && isObj(auth.actions) ? auth.actions as Record<string, unknown> : {};
+  if (!(Array.isArray(actions.admin) && actions.admin.length)) {
+    add("warning", { kind: "block", name: "orchestrator" }, "orchestrator.liveConfig",
+      "only an admin can change the live config, and no group is granted `admin` in "
+      + "authorization.actions, so nobody can");
   }
 }
 
@@ -466,6 +549,41 @@ function fixedNameProblems(statement: unknown, tools: Record<string, unknown>): 
     }
   }
   return out;
+}
+
+/** `litellm/<name>` models (app/common/litellm_proxy.py): an agent's own model only. The
+ *  default model is also the evaluators' judge and the Assistant's, which Bedrock answers.
+ *  Mirrors validate_build.py _check_litellm. Whether the deployment has a proxy is not known
+ *  here: models.ts modelIssues says that. */
+function checkLitellm(wf: Record<string, unknown>, add: Add): void {
+  const lite = (v: unknown) => String(v ?? "").startsWith("litellm/");
+  const orch = isObj(wf.orchestrator) ? wf.orchestrator : {};
+  if (lite(orch.defaultModel)) {
+    add("error", { kind: "block", name: "orchestrator" }, "orchestrator.defaultModel",
+      "must be a Bedrock model: it is also the evaluators' judge and the Assistant's model. Set a litellm/ model on each agent instead");
+  }
+  for (const [name, e] of Object.entries(isObj(wf.evaluators) ? wf.evaluators : {})) {
+    if (isObj(e) && lite(e.model)) {
+      add("error", { kind: "block", name: "evaluators" }, `evaluators.${name}.model`,
+        "a judge model runs on AgentCore Evaluations, which calls Bedrock: pick a Bedrock model");
+    }
+  }
+  for (const [id, a] of Object.entries(isObj(wf.agents) ? wf.agents : {})) {
+    if (!isObj(a)) continue;
+    const where: Where = { kind: "agent", id };
+    const path = `agents.${id}`;
+    if (typeof a.model === "string" && lite(a.model) && !a.model.slice("litellm/".length).trim()) {
+      add("error", where, `${path}.model`, "names no model: write litellm/ and the proxy's model name, e.g. litellm/gpt-4o");
+    }
+    const core = isObj(a.agentcore) ? a.agentcore : {};
+    const ev = isObj(core.evaluations) ? core.evaluations : {};
+    (Array.isArray(ev.custom) ? ev.custom : []).forEach((c, i) => {
+      if (isObj(c) && lite(c.model)) {
+        add("error", where, `${path}.agentcore.evaluations.custom[${i}].model`,
+          "a judge model runs on AgentCore Evaluations, which calls Bedrock: pick a Bedrock model");
+      }
+    });
+  }
 }
 
 function checkPolicy(orch: unknown, tools: Record<string, unknown>, add: Add): void {
@@ -1046,6 +1164,59 @@ function checkHitl(step: Record<string, unknown>, i: number, add: Add): void {
   if (mode === "auto") add("warning", where, `${p}.mode`, "this gate approves itself: no one reviews this stage");
 }
 
+/** `after` as a gate's timeout reads it: <n>m, <n>h or <n>d, at most 30 days. Mirrors _check_after. */
+function checkAfter(t: unknown, where: Where, p: string, add: Add): void {
+  const m = typeof t === "string" ? AFTER_RE.exec(t) : null;
+  if (!m) add("error", where, p, "must be <n>m, <n>h or <n>d, e.g. 30m, 24h, 2d");
+  else if (Number(m[1]) * ({ m: 60, h: 3600, d: 86400 } as Record<string, number>)[m[2]] > 30 * 86400) {
+    add("error", where, p, "is at most 30d");
+  }
+}
+
+/** agents.<id>.askPerson and tools.<name>.approval / approvalTimeout: an agent asking a person
+ *  mid-step (app/common/asks.py). Mirrors _check_asks in bff/validate_build.py. */
+function checkAsks(agents: Record<string, unknown>, tools: Record<string, unknown>, add: Add): void {
+  for (const [id, agent] of Object.entries(agents)) {
+    if (!isObj(agent) || variantOf("agent", agent as Entry) === "a2a") continue;
+    const a = agent as Record<string, unknown>;
+    const where: Where = { kind: "agent", id };
+    const path = `agents.${id}`;
+    const ask = a.askPerson;
+    if (variantOf("agent", a as Entry) === "main" && (ask === true || isObj(ask))) {
+      if (a.toolMode !== "model") add("error", where, `${path}.askPerson`, "needs toolMode \"model\": only a model turn can decide to ask a person");
+      if (isObj(ask)) {
+        const n = ask.maxQuestions;
+        if (typeof n === "number" && Number.isInteger(n) && (n < 1 || n > 10)) add("error", where, `${path}.askPerson.maxQuestions`, "must be from 1 to 10");
+        if ("timeout" in ask) checkAfter(ask.timeout, where, `${path}.askPerson.timeout`, add);
+      }
+    }
+    if (variantOf("agent", a as Entry) === "dedicated") {
+      for (const key of toolsOf(a.tool as string | string[] | undefined)) {
+        const t = tools[key];
+        if (isObj(t) && (t.approval === "person" || t.approval === "event")) {
+          add("error", where, `${path}.tool`, `"${key}" waits for a person to approve each call, and a dedicated agent runs in `
+            + "its own runtime, which cannot wait — run this agent in \"main\", or remove the tool's approval");
+        }
+      }
+    }
+  }
+  for (const [key, tool] of Object.entries(tools)) {
+    if (!isObj(tool) || !("approvalTimeout" in tool)) continue;
+    const where: Where = { kind: "tool", id: key };
+    const p = `tools.${key}.approvalTimeout`;
+    if (!("approval" in tool)) add("error", where, p, "only a tool with `approval` reads it");
+    const to = tool.approvalTimeout;
+    if (!isObj(to)) continue;
+    for (const k of Object.keys(to)) {
+      if (!["after", "action"].includes(k)) add("error", where, `${p}.${k}`, "unknown key; a timeout takes after, action");
+    }
+    checkAfter(to.after, where, `${p}.after`, add);
+    if (!vocab("gateTimeoutActions").includes(to.action as string)) {
+      add("error", where, `${p}.action`, `must be one of: ${vocab("gateTimeoutActions").join(", ")}`);
+    }
+  }
+}
+
 function checkBranch(steps: StepSpec[], i: number, out: Issue[]): void {
   const step = steps[i];
   const where: Where = { kind: "step", index: i };
@@ -1128,9 +1299,18 @@ export function validate(wf: Workflow): Issue[] {
   const tools = isObj(wf.tools) ? wf.tools : {};
   const steps = Array.isArray(wf.steps) ? wf.steps : [];
   checkPolicy(wf.orchestrator, tools, add);
+  checkLitellm(wf, add);
   checkAttachments(wf.orchestrator, agents as Record<string, unknown>, add);
+  checkLimits(wf.orchestrator, add);
+  checkFiles(wf.orchestrator, add);
+  checkLiveConfig(wf.orchestrator, wf.authorization, add);
+  checkAgentPolicy(agents as Record<string, unknown>, add);
   checkInterceptors(wf.orchestrator, tools, agents as Record<string, unknown>, add);
   checkTriggers(wf.orchestrator, agents as Record<string, unknown>, add);
+  checkAsks(agents as Record<string, unknown>, tools as Record<string, unknown>, add);
+  checkTasks(agents as Record<string, unknown>, tools as Record<string, unknown>, steps as StepSpec[], wf.orchestrator, add, vocab, upstreamIds);
+  checkHarness(agents as Record<string, unknown>, add, wf as unknown as Record<string, unknown>);
+  checkModelRouting(wf.orchestrator, agents as Record<string, unknown>, wf.authorization, add);
   checkSignIn(wf.authorization, add);
   checkNamed(wf, add, out);
 
@@ -1174,8 +1354,11 @@ export function validate(wf: Workflow): Issue[] {
       if (typeof kms === "string" && !KMS_KEY_ARN_RE.test(kms)) {
         add("error", where, `${path}.kmsKeyArn`, "must be a KMS key ARN, arn:aws:kms:<region>:<account>:key/<id>");
       }
+      checkKbIngestion(tool, path, where, add);
+      checkKbVectorStore(tool, path, where, add);
+      checkKbDataSource(tool, path, where, add);
       if (kbId) {
-        for (const k of ["s3Uri", "kmsKeyArn", "embeddingModel", "dimensions"]) {
+        for (const k of ["s3Uri", "kmsKeyArn", "embeddingModel", "dimensions", "dataSource", "vectorStore", "chunking", "parsing"]) {
           if (tool[k] !== undefined && tool[k] !== null) {
             add("error", where, `${path}.${k}`,
               "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings");
@@ -1245,6 +1428,7 @@ export function validate(wf: Workflow): Issue[] {
         }
       }
     }
+    if (type === "smithy") checkSmithy(tool as Record<string, unknown>, path, where, add, vocab("smithyDeniedServices"));
     const mode = tool.auth as string;
     if (OAUTH_MODES.includes(mode)) {
       if (!vocab("oauthToolTypes").includes(type)) {
@@ -1324,6 +1508,7 @@ export function validate(wf: Workflow): Issue[] {
         add("error", where, `${path}.arg`, `"${arg}" is not a property of ${called} (${propsOf[called].join(", ")}). `
           + "Set `arg` to the property the agent's query goes into.");
       }
+      checkBrowserTool(tool, path, where, add);
     }
   }
   for (const t of ["kb", "websearch"]) {
@@ -1359,7 +1544,7 @@ export function validate(wf: Workflow): Issue[] {
       if (typeof a.maxToolCalls === "number" && (a.maxToolCalls < 1 || a.maxToolCalls > 20)) {
         add("error", where, `${path}.maxToolCalls`, "must be from 1 to 20");
       }
-      if (a.toolMode === "model" && !bound.length) {
+      if (a.toolMode === "model" && !bound.length && !a.askPerson) {
         add("warning", where, `${path}.toolMode`, "\"model\" lets the model choose among the agent's tools, and it has none — bind one with `tool`");
       }
       checkVision(a, id, agents as Record<string, unknown>, steps as StepSpec[], where, path, add);

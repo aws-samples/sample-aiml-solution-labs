@@ -232,14 +232,15 @@ describe("sharing", () => {
   });
 });
 
-describe("the canvas shows an expanded agent's tools", () => {
-  it("makes the expanded agent, and its stage, taller for its chips", () => {
+describe("the canvas shows an agent's tools without selecting it", () => {
+  it("makes an agent with tools, and its stage, taller for them; an editable canvas adds the + Add row", () => {
     const wf = { agents: { a: { tool: ["x", "y", "z"] }, b: {} }, steps: [{ parallel: ["a", "b"] }], tools: {} } as never;
     const flat = layout(wf);
-    const open = layout(wf, "a");
-    expect(flat.agents[0].h).toBe(AGENT_H);
-    expect(open.agents.find((x) => x.id === "a")!.h).toBeGreaterThan(AGENT_H);
-    expect(open.agents.find((x) => x.id === "b")!.h).toBe(AGENT_H);
+    const open = layout(wf, true);
+    const a = (l: typeof flat) => l.agents.find((x) => x.id === "a")!.h;
+    expect(a(flat)).toBeGreaterThan(AGENT_H);                  // its three tools, always shown
+    expect(flat.agents.find((x) => x.id === "b")!.h).toBe(AGENT_H);
+    expect(a(open)).toBeGreaterThan(a(flat));                  // + Add, when it can be edited
     expect(open.stages[0].h).toBeGreaterThan(flat.stages[0].h);
   });
 });

@@ -62,7 +62,7 @@ def test_a_named_memory_is_read_and_written_with_its_own_strategies_and_scope(mo
     monkeypatch.setenv("MEMORIES", json.dumps({"shared": "mem-shared-123"}))
     calls: list = []
 
-    async def fake_recall(query, namespace="", memory_id=""):
+    async def fake_recall(query, namespace="", memory_id="", namespace_path=""):
         calls.append(("recall", namespace, memory_id))
         return []
 
@@ -79,8 +79,8 @@ def test_a_named_memory_is_read_and_written_with_its_own_strategies_and_scope(mo
     assert c._memory_actor() == "analysis"
     asyncio.run(c.memory_recall("t"))
     asyncio.run(c.memory_store("a plain insight about t"))
-    assert calls == [("recall", "insights/analysis", "mem-shared-123"),
-                     ("recall", "preferences/analysis", "mem-shared-123"),
+    assert calls == [("recall", "/insights/analysis/", "mem-shared-123"),
+                     ("recall", "/preferences/analysis/", "mem-shared-123"),
                      ("store", "analysis", "mem-shared-123")]
     # The run's request is stored as the USER turn, so a userPreference strategy
     # can extract what the user asked for ("Tone: casual") as a preference.
@@ -178,7 +178,7 @@ def test_each_agent_signs_in_to_the_gateway_as_itself(monkeypatch):
         who = base64.b64decode(req.headers["Authorization"].split()[1]).decode().split(":")[0]
         issued.append(who)
         return _Resp(who)
-    monkeypatch.setattr(client.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client.netguard, "urlopen", fake_urlopen)
     set_scope("s1", "analysis")
     assert client._gateway_token() == "tok-a-id"
     set_scope("s1", "report")                 # no client of its own: the shared one

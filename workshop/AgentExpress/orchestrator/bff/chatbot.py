@@ -234,6 +234,12 @@ def _t_review(args, ctx, si):
     it = _status.get_item(Key={"session_id": sid}).get("Item") or {}
     if it.get("overall") != "waiting_human":
         return {"error": f"run is '{it.get('overall')}', not awaiting review — nothing to approve"}, None
+    if (it.get("hitl") or {}).get("kind"):
+        # An agent's question, or a tool call waiting for approval (bff/asks.py): a person
+        # answers it on the run page, where they see exactly what is asked. Never the
+        # assistant, whose words come from a model reading run content.
+        return {"error": "this run is waiting for a person to answer an agent's question or approve "
+                         "a tool call; that is done on the run page, not by the assistant"}, None
     gate = (it.get("hitl") or {}).get("node")
     si({"action": "resume", "session_id": sid, "decision": decision, "comment": comment})
     verb = {"approve": "Approved", "deny": "Denied", "revise": "Sent revision to"}[decision]

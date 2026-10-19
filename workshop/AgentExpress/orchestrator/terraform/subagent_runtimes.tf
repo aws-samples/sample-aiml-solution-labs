@@ -80,6 +80,9 @@ resource "aws_iam_role" "subagent" {
       }
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "subagent" {
@@ -227,7 +230,7 @@ resource "aws_iam_role_policy" "subagent" {
 # which fails the create with an unhelpful "role cannot be assumed".
 resource "time_sleep" "subagent_iam_propagation" {
   count           = length(local.dedicated_agents) > 0 ? 1 : 0
-  depends_on      = [aws_iam_role_policy.subagent, aws_iam_role_policy.subagent_secret, aws_secretsmanager_secret_version.subagent]
+  depends_on      = [aws_iam_role_policy.subagent, aws_iam_role_policy.subagent_secret, aws_secretsmanager_secret_version.subagent, aws_iam_role_policy.subagent_otlp_export, aws_iam_role_policy.subagent_litellm]
   create_duration = "25s"
 }
 
@@ -251,7 +254,8 @@ resource "awscc_bedrockagentcore_runtime" "subagent" {
     network_mode = "PUBLIC"
   }
 
-  environment_variables = {
+  # The optional OTLP export's settings are merged in only when it is on (otlp_export.tf).
+  environment_variables = merge({
     AWS_REGION         = var.region
     BEDROCK_MODEL_ID   = local.model_id
     AGENT_ID           = each.key
@@ -297,6 +301,6 @@ resource "awscc_bedrockagentcore_runtime" "subagent" {
     TOOLS_JSON = local.tools_env
     # Where image agents store what they render (images.tf); "" when none draws.
     ASSETS_BUCKET = local.assets_bucket
-  }
+  }, local.otlp_export_env, local.litellm_env) # litellm.tf
   depends_on = [null_resource.build_push, time_sleep.subagent_iam_propagation]
 }

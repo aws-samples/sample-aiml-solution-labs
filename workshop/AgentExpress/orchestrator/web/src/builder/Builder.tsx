@@ -25,16 +25,22 @@ import Table from "@cloudscape-design/components/table";
 import Tabs from "@cloudscape-design/components/tabs";
 import Spinner from "@cloudscape-design/components/spinner";
 import {
-  useCallback, useEffect, useMemo, useRef, useState, type DragEvent,
+  lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragEvent,
   type ReactNode, type SetStateAction,
 } from "react";
 
 import type { Action } from "../types";
 import { toolsOf } from "../lib/tools";
 import { Canvas, DND_MIME, type DragPayload, type Selection } from "./Canvas";
+import { attach, type AttachTarget, type Primitive } from "./attach";
+import { addChoices, findComponent, moveComponent, removeComponent } from "./componentOps";
+import type { ComponentKind } from "./components";
+import { PaletteGroup, PRIMITIVE_TAB, PrimitivePalette } from "./Primitives";
 import { DesignChat } from "./DesignChat";
 import { BuildPolicies, policyBlock } from "./Policies";
 import { BuildInterceptors, interceptorsOf } from "./Interceptors";
+import { BuildSuites } from "./Suites";
+import { runBlockReason } from "./suiteSpec";
 import { BuildTriggers, triggersOf } from "./Triggers";
 import { PROVIDER_NAME, providerOf, SignInSettings } from "./SignIn";
 import { ToolAccess } from "./ToolAccess";
@@ -48,11 +54,13 @@ import { EntryForm } from "./EntryForm";
 import { formatWorkflow } from "./format";
 import { Inspector } from "./Inspector";
 import { IssueList } from "./IssueList";
+import { addBuiltinTool, BUILTIN_CHOICES, builtinLabel, isBuiltinChoice } from "./browserTool";
+import { FEATURE_EMOJI, toolEmoji } from "../lib/emoji";
 import type { DropTarget } from "./layout";
 import { block, vocab } from "./meta";
 import {
-  addAgent, addTool, bindTool, fromFile, insertStage, joinStage, migrateFramework, newProject,
-  refOf, relink, removeTool, replaceWorkflow, resolveProject, attachItem, unbindTool,
+  addAgent, addTask, addTool, bindTool, fromFile, TASK_KINDS, insertStage, joinStage, migrateFramework, newProject,
+  refOf, relink, removeTool, replaceWorkflow, resolveProject, attachItem,
   renameProject, setUi, stageOf, toBundle, unplaced, type Entry, type Json, type Project, type Workflow,
 } from "./model";
 import { LibraryContext, LibraryPicker, NamedTab, ShareDialog, keptNote, publishEntries, sharedLabel, useShareEntries, type LibraryCtx } from "./Library";
@@ -64,9 +72,13 @@ import {
 } from "./storage";
 import { addHits, applyUpdate, RegistryPicker } from "./RegistryPicker";
 import { RegistryPublish } from "./RegistryPublish";
+import { MoveToTeam } from "./Teams";
 import { validate, type Issue } from "./validate";
 import { modelIssues, useModels } from "./models";
 import "./builder.css";
+
+/** The Connectors gallery, loaded when it is first opened: its OpenAPI documents are not needed to edit. */
+const Connectors = lazy(() => import("./Connectors").then((m) => ({ default: m.Connectors })));
 
 /** A row of the Tools tab's table. Named, and given to <Table> explicitly: TypeScript 6
  *  otherwise infers the row from the selection props alone ({ key }) and loses `t`. */
@@ -74,7 +86,7 @@ type ToolRow = { key: string; t: Entry };
 
 const TOOL_LABELS: Record<string, string> = {
   kb: "Knowledge Base", mcp: "MCP server", openapi: "REST API (OpenAPI)",
-  lambda: "Lambda function", websearch: "Web search", apigateway: "REST API (API Gateway)",
+  lambda: "Lambda function", websearch: "Web search", apigateway: "REST API (API Gateway)", smithy: "AWS API (Smithy)",
 };
 
 /** One way in: a file becomes a new build, or replaces this one (after a confirm). */
@@ -122,8 +134,10 @@ function place(wf: Workflow, id: string, t: DropTarget): Workflow {
   return joinStage(wf, index, id);
 }
 
-function PaletteItem({ payload, label, sub, onActivate }: {
+function PaletteItem({ payload, label, sub, onActivate, emoji }: {
   payload: DragPayload; label: string; sub?: string; onActivate: () => void;
+  /** Shown before the label (decoration; lib/emoji.ts). */
+  emoji?: string;
 }) {
   return (
     <div
@@ -136,14 +150,16 @@ function PaletteItem({ payload, label, sub, onActivate }: {
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onActivate(); } }}
       title={payload.kind === "tool" ? "Drag onto an agent to give it this tool" : "Drag onto the canvas, or press Enter to add it as a new stage"}
     >
-      <span className="axb-palette-label">{label}</span>
+      <span className="axb-palette-label">{emoji ? <span className="axb-emoji" aria-hidden="true">{emoji}</span> : null}{label}</span>
       {sub ? <span className="axb-palette-sub">{sub}</span> : null}
     </div>
   );
 }
 
-function AddToolModal({ visible, onDismiss, onAdd }: {
+function AddToolModal({ visible, onDismiss, onAdd, onConnector }: {
   visible: boolean; onDismiss: () => void; onAdd: (name: string, type: string) => void;
+  /** Open the Connectors gallery instead. */
+  onConnector: () => void;
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("mcp");
@@ -161,13 +177,17 @@ function AddToolModal({ visible, onDismiss, onAdd }: {
         </Box>
       }>
       <SpaceBetween size="m">
+        <Box>
+          Connecting Salesforce, Slack, Jira or another major service?{" "}
+          <Button variant="inline-link" onClick={onConnector}>Use a connector</Button>
+        </Box>
         <FormField label="Name" description="What it is, e.g. “Claims database”. The tool key is derived from it.">
           <Input value={name} onChange={({ detail }) => setName(detail.value)} autoFocus />
         </FormField>
         <FormField label="Type" description={typeDoc}>
           <Select
-            selectedOption={{ label: TOOL_LABELS[type] ?? type, value: type }}
-            options={types.map((t) => ({ label: TOOL_LABELS[t] ?? t, value: t, description: t }))}
+            selectedOption={{ label: TOOL_LABELS[type] ?? BUILTIN_CHOICES.find((c) => c.value === type)?.label ?? type, value: type }}
+            options={[...types.map((t) => ({ label: TOOL_LABELS[t] ?? t, value: t, description: t })), ...BUILTIN_CHOICES]}
             onChange={({ detail }) => setType(detail.selectedOption.value!)}
           />
         </FormField>
@@ -252,7 +272,7 @@ const defaultStore = localStore();
  *  library lists the same kinds (App.tsx LIBRARY_GROUPS): what each agent uses; what
  *  reaches the tools and who signs in; how runs start; how good the result is. */
 const TAB_ORDER = ["design", "tools", "skills", "memory", "guardrails", "identity", "policies", "interceptors",
-  "triggers", "evals", "settings", "json"];
+  "triggers", "evals", "tests", "settings", "json"];
 /** One line at the top of a tab: the level it works at, and what uses it. */
 export const TAB_LEVEL: Record<string, string> = {
   tools: "Agent level. An agent uses the tools it lists; every call goes through the build's Gateway.",
@@ -264,6 +284,7 @@ export const TAB_LEVEL: Record<string, string> = {
   interceptors: "Gateway level. Functions that run before each tool request and after each answer, for every agent.",
   triggers: "Workflow level. What starts a run without anyone typing it.",
   evals: "Agent level. Judges that score the output of the agents that use them.",
+  tests: "Build level. Saved requests with fixed checks, run against the deployed build after each change.",
 };
 /** The tabs in TAB_ORDER, each with its level note on one row with the tab's own
  *  `actions` (buttons such as Add from registry), the note left and the buttons right. */
@@ -458,6 +479,7 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
     return () => clearInterval(t);
   }, [store.server, project?.id, running, notify, open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+
   // Deploy is gated on the same validation the Problems tab lists.
   const errorCount = useMemo(() => (view
     ? validate(view.workflow).filter((i) => i.severity === "error").length : 0), [view?.workflow]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -513,11 +535,12 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
       onUndo={hist?.past.length ? () => setHist((h) => (h ? undo(h) : h)) : undefined}
       onRedo={hist?.future.length ? () => setHist((h) => (h ? redo(h) : h)) : undefined}
       onApplied={reload} flush={flush}
-      builds={builds} server={store.server} savedAt={savedAt} saveError={saveError}
+      server={store.server} savedAt={savedAt} saveError={saveError}
       onNew={() => void open({ id: "new", nonce: Date.now() })}
       onOpen={(id) => void open({ id, nonce: Date.now() })}
       onDelete={() => void onDelete()}
       deployed={Boolean(build?.deployed?.version)}
+      testsBlock={runBlockReason({ runsHere: Boolean(onRun), canStart: can("start"), account: build?.deployed?.account })}
       deployment={store.server ? (
         <DeployPanel build={build} errors={errorCount} can={can}
           signInWith={providerOf(project) === "cognito" ? undefined : PROVIDER_NAME[providerOf(project)]}
@@ -537,8 +560,10 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
 
 function Editor({
   project, setProject, notify, server, savedAt, saveError, onNew, onDelete, deployment, deployed = false,
-  onUndo, onRedo, onApplied, flush, raw, setRaw, refs, addRefs, build, onShared, onReload, onPublishSkills,
+  onUndo, onRedo, onApplied, flush, raw, setRaw, refs, addRefs, build, onShared, onReload, onPublishSkills, testsBlock,
 }: {
+  /** Why the Tests tab cannot run a suite here (a control-plane console, a permission), if so. */
+  testsBlock?: string;
   /** Admins: publish skills to an Agent Registry (RegistryPublish.tsx). */
   onPublishSkills?: (skill?: string) => void;
   /** Resolved: what the page shows. */
@@ -558,7 +583,6 @@ function Editor({
   onApplied: () => Promise<void> | void;
   flush: () => Promise<void>;
   notify: (type: "success" | "error" | "info", msg: string) => void;
-  builds: BuildSummary[];
   server: boolean;
   savedAt: string | null;
   saveError: string | null;
@@ -570,6 +594,8 @@ function Editor({
   deployed?: boolean;
 }) {
   const [selection, setSelection] = useState<Selection>(null);
+  /** The primitive being dragged from the palette, so the canvas highlights where it may go. */
+  const [dragging, setDragging] = useState<Primitive | null>(null);
   const [tab, setTab] = useState("design");
   // "Created … · Last edited … by …", under the build's name.
   const edited = editedLines(build ? { ...build, created: build.created ?? project.createdAt } : null);
@@ -580,8 +606,10 @@ function Editor({
   const [addingTool, setAddingTool] = useState(false);
   const [exported, setExported] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [connecting, setConnecting] = useState(false);
   const [showProblems, setShowProblems] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [pickingTools, setPickingTools] = useState(false);
   const [toolsSelected, setToolsSelected] = useState<ToolRow[]>([]);
   /** Add from registry: which kind the picker is open for. */
@@ -631,14 +659,24 @@ function Editor({
   useEffect(() => { setSelection(null); }, [project.id]);
 
   const models = useModels();
-  const issues = useMemo(() => [...validate(project.workflow), ...modelIssues(project.workflow, models.models)],
-    [project.workflow, models.models]);
+  const issues = useMemo(() => [...validate(project.workflow), ...modelIssues(project.workflow, models.models, models.litellm)],
+    [project.workflow, models.models, models.litellm]);
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.length - errors;
 
   const update = useCallback((p: Project) => setProject(p), [setProject]);
 
-  const onDropPayload = useCallback((p: DragPayload, t: DropTarget) => {
+  const onDropPayload = useCallback((p: DragPayload, t: AttachTarget) => {
+    if (p.kind === "primitive") {
+      // Its own undo step, and none at all when nothing changes (a refused or repeated drop).
+      setDragging(null);
+      const r = attach(project.workflow, p.primitive, t);
+      if (t.kind === "agent") setSelection({ kind: "agent", id: t.id });
+      if (r.issue) notify("info", r.issue);
+      else if (r.workflow !== project.workflow) setProject((cur) => ({ ...cur, workflow: attach(cur.workflow, p.primitive, t).workflow }), true);
+      return;
+    }
+    if (t.kind === "tool" || p.kind === "attached") return;   // a primitive lands on a tool row; card rows are the canvas's
     setProject((cur) => {
       if (p.kind === "tool") {
         if (t.kind !== "agent") {
@@ -649,6 +687,10 @@ function Editor({
           notify("info", "A remote (A2A) agent reaches its own sources, so it takes no tool.");
           return cur;
         }
+        if (cur.workflow.agents[t.id]?.runtime === "task") {
+          notify("info", "A task step calls the one tool its settings name: pick it in the panel.");
+          return cur;
+        }
         setSelection({ kind: "agent", id: t.id });
         return bindTool(cur, t.id, p.key);
       }
@@ -657,15 +699,74 @@ function Editor({
         setSelection({ kind: "agent", id: r.id });
         return { ...r.project, workflow: place(r.project.workflow, r.id, t) };
       }
+      if (p.kind === "new-task") {
+        const r = addTask(cur, p.task);
+        setSelection({ kind: "agent", id: r.id });
+        return { ...r.project, workflow: place(r.project.workflow, r.id, t) };
+      }
       setSelection({ kind: "agent", id: p.id });
       return { ...cur, workflow: place(cur.workflow, p.id, t) };
     });
-  }, [notify, setProject]);
+  }, [notify, setProject, project.workflow]);
 
   const onMoveAgent = useCallback((id: string, t: DropTarget) => {
     setProject((cur) => ({ ...cur, workflow: place(cur.workflow, id, t) }));
     setSelection({ kind: "agent", id });
   }, [setProject]);
+
+  /** A row of an agent card (components.ts) taken off, moved, or added, as one undo step each. */
+  const removeRow = useCallback((agent: string, key: string) => {
+    const c = findComponent(project, agent, key);
+    if (!c) return;
+    if (c.kind === "policy" && c.tool) {
+      const users = Object.values(project.workflow.agents).filter((a) => toolsOf(a.tool).includes(c.tool!)).length;
+      if (users > 1 && !window.confirm(`${c.name} is on the tool ${c.tool}, which ${users} agents call. Taking it off changes the tool for all of them. Continue?`)) return;
+    }
+    setProject((cur) => { const x = findComponent(cur, agent, key); return x ? removeComponent(cur, agent, x) : cur; }, true);
+    setSelection((sel) => (sel?.kind === "component" && sel.agent === agent && sel.key === key ? { kind: "agent", id: agent } : sel));
+    notify("info", `Removed ${c.name} from ${String(project.workflow.agents[agent]?.name ?? agent)}. Undo puts it back.`);
+  }, [project, setProject, notify]);
+  const moveRow = useCallback((from: string, key: string, to: AttachTarget) => {
+    const c = findComponent(project, from, key);
+    if (!c) return;
+    if (to.kind === "tool" && c.kind === "policy" && c.ref) {
+      const r = attach(removeComponent(project, from, c).workflow, { kind: "policy", key: c.ref }, to);
+      if (r.issue) { notify("info", r.issue); return; }
+      setProject((cur) => ({ ...cur, workflow: r.workflow }), true);
+      return;
+    }
+    if (to.kind !== "agent") return;
+    const r = moveComponent(project, from, to.id, c);
+    if (r.issue) { notify("info", r.issue); return; }
+    setProject(r.project, true);
+    setSelection({ kind: "agent", id: to.id });
+  }, [project, setProject, notify]);
+  const addRow = useCallback((agent: string, index: number) => {
+    const choice = addChoices(project, agent)[index];
+    if (!choice) return;
+    setProject((cur) => choice.apply(cur), true);
+    setSelection({ kind: "agent", id: agent });
+  }, [project, setProject]);
+  const createRow = useCallback((agent: string, kind: ComponentKind) => {
+    setSelection({ kind: "agent", id: agent });
+    if (kind === "tool") { setAddingTool(true); return; }
+    const tab: Partial<Record<ComponentKind, string>> = { guardrail: "guardrails", memory: "memory", policy: "policies",
+      skill: "skills", evaluation: "evals", identity: "identity" };
+    if (tab[kind]) setTab(tab[kind]!);
+  }, []);
+  // Delete (or Backspace) takes the selected row off its agent, unless the key is typed into a field.
+  useEffect(() => {
+    if (selection?.kind !== "component") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.closest("input, textarea, select, [contenteditable='true'], [role='textbox'], [role='combobox']"))) return;
+      e.preventDefault();
+      removeRow(selection.agent, selection.key);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selection, removeRow]);
 
   const addNewAgentAtEnd = () => onDropPayload({ kind: "new-agent" }, { kind: "gap", index: project.workflow.steps.length });
 
@@ -724,35 +825,55 @@ function Editor({
             id: "design", label: "Design",
             content: (
               <div className="axb-layout">
-                <div className="axb-palette">
-                  <Box variant="h3">Agents</Box>
-                  <PaletteItem payload={{ kind: "new-agent" }} label="+ New agent" sub="runs in this deployment" onActivate={addNewAgentAtEnd} />
-                  {server ? (
-                    <Button variant="inline-link" iconName="search" onClick={() => setRegistryKind("agent")}>
-                      Add an agent from the registry</Button>
-                  ) : null}
-                  {free.map((id) => (
-                    <PaletteItem key={id} payload={{ kind: "agent", id }} label={String(wf.agents[id].name ?? id)} sub="not on the canvas"
-                      onActivate={() => onDropPayload({ kind: "agent", id }, { kind: "gap", index: wf.steps.length })} />
-                  ))}
-                  <Box variant="h3" padding={{ top: "m" }}>Tools</Box>
-                  {Object.entries(wf.tools).map(([key, t]) => (
-                    <PaletteItem key={key} payload={{ kind: "tool", key }} label={key} sub={TOOL_LABELS[String(t.type)] ?? String(t.type)}
-                      onActivate={() => setSelection({ kind: "tool", id: key })} />
-                  ))}
-                  <Button variant="inline-link" iconName="add-plus" onClick={() => setAddingTool(true)}>Add a tool</Button>
-                  <Box variant="small" color="text-body-secondary" padding={{ top: "s" }}>
-                    Drag a tool onto an agent to add it; an agent can read several. Drop an agent on a stage to run it alongside, or
-                    between stages to add a new one.
-                  </Box>
+                <div className="axb-palette" aria-label="Components"
+                  onDragOver={(e) => { if (e.dataTransfer.types.includes(DND_MIME)) e.preventDefault(); }}
+                  onDrop={(e) => {
+                    // A card row dropped back on the palette comes off its agent.
+                    const raw = e.dataTransfer.getData(DND_MIME);
+                    if (!raw) return;
+                    const payload = JSON.parse(raw) as DragPayload;
+                    if (payload.kind === "attached") { e.preventDefault(); removeRow(payload.agent, payload.key); }
+                  }}>
+                  <PaletteGroup id="agents" title="Agents" emoji={FEATURE_EMOJI.agent} count={Object.keys(wf.agents).length} defaultExpanded>
+                    <PaletteItem payload={{ kind: "new-agent" }} emoji={FEATURE_EMOJI.agent} label="+ New agent" sub="runs in this deployment" onActivate={addNewAgentAtEnd} />
+                    {/* ONE item: what the step does is picked in its panel (TaskPanel), and until
+                        it is, the step has no kind and cannot deploy (taskCheck.ts). */}
+                    <PaletteItem payload={{ kind: "new-task" }} emoji={FEATURE_EMOJI.task} label="+ New generic step"
+                      sub={`no model; pick what it does: ${TASK_KINDS.map((k) => k.name.toLowerCase()).join(", ")}`}
+                      onActivate={() => onDropPayload({ kind: "new-task" }, { kind: "gap", index: project.workflow.steps.length })} />
+                    {server ? (
+                      <Button variant="inline-link" iconName="search" onClick={() => setRegistryKind("agent")}>
+                        Add an agent from the registry</Button>
+                    ) : null}
+                    {free.map((id) => (
+                      <PaletteItem key={id} payload={{ kind: "agent", id }} emoji={wf.agents[id].runtime === "task" ? FEATURE_EMOJI.task : FEATURE_EMOJI.agent} label={String(wf.agents[id].name ?? id)} sub="not on the canvas"
+                        onActivate={() => onDropPayload({ kind: "agent", id }, { kind: "gap", index: wf.steps.length })} />
+                    ))}
+                    <Box variant="small" color="text-body-secondary">
+                      Drop an agent on a stage to run it alongside, or between stages to add a new one.
+                    </Box>
+                  </PaletteGroup>
+                  <PaletteGroup id="tools" title="Tools" emoji={FEATURE_EMOJI.tool} count={Object.keys(wf.tools).length} defaultExpanded>
+                    {Object.entries(wf.tools).map(([key, t]) => (
+                      <PaletteItem key={key} payload={{ kind: "tool", key }} emoji={toolEmoji(t)} label={key} sub={builtinLabel(t) ?? TOOL_LABELS[String(t.type)] ?? String(t.type)}
+                        onActivate={() => setSelection({ kind: "tool", id: key })} />
+                    ))}
+                    <Button variant="inline-link" iconName="add-plus" onClick={() => setAddingTool(true)}>Add a tool</Button>
+                    <Button variant="inline-link" iconName="add-plus" onClick={() => setConnecting(true)}>Add a connector</Button>
+                    <Box variant="small" color="text-body-secondary">
+                      Drag a tool onto an agent to add it; an agent can read several.
+                    </Box>
+                  </PaletteGroup>
+                  <PrimitivePalette workflow={wf} onDrag={setDragging} onOpen={(k) => setTab(PRIMITIVE_TAB[k])} />
                 </div>
                 <Canvas workflow={wf} issues={issues} selection={selection} onSelect={setSelection}
-                  onDropPayload={onDropPayload} onMoveAgent={onMoveAgent}
-                  onBind={(a, t) => setProject((cur) => bindTool(cur, a, t))}
-                  onUnbind={(a, t) => setProject((cur) => unbindTool(cur, a, t))} />
+                  onDropPayload={onDropPayload} onMoveAgent={onMoveAgent} dragging={dragging}
+                  onAddChoice={addRow} onRemoveComponent={removeRow} onMoveComponent={moveRow} onCreate={createRow} />
                 <div className="axb-inspector">
                   <Inspector project={project} selection={selection} issues={issues} onChange={update} onSelect={setSelection} server={server}
-                    callbackUrls={build?.deployed?.callbackUrls} agentName={build?.agentName} />
+                    callbackUrls={build?.deployed?.callbackUrls} agentName={build?.agentName}
+                    onRemoveComponent={removeRow} onAddChoice={addRow} onCreate={createRow}
+                    onOpenTab={(t) => setTab(t)} />
                 </div>
               </div>
             ),
@@ -770,6 +891,7 @@ function Editor({
                       Share{toolsSelected.length ? ` (${toolsSelected.length})` : ""}</Button> : null}
                     {server ? <Button onClick={() => setPickingTools(true)}>Add from library</Button> : null}
                     {server ? <Button onClick={() => setRegistryKind("tool")}>Add from registry</Button> : null}
+                    <Button onClick={() => setConnecting(true)}>Add a connector</Button>
                     <Button onClick={() => setAddingTool(true)}>Add a tool</Button>
                   </SpaceBetween>}>Tools</Header>}
                 items={Object.entries(wf.tools).map(([key, t]) => ({ key, t }))} trackBy="key"
@@ -783,7 +905,7 @@ function Editor({
                 columnDefinitions={[
                   { id: "key", header: "Key", isRowHeader: true,
                     cell: (r) => <span className="axb-nowrap"><Button variant="inline-link" onClick={() => { setSelection({ kind: "tool", id: r.key }); setTab("design"); }}>{r.key}</Button></span> },
-                  { id: "type", header: "Type", cell: (r) => TOOL_LABELS[String(r.t.type)] ?? String(r.t.type) },
+                  { id: "type", header: "Type", cell: (r) => builtinLabel(r.t) ?? TOOL_LABELS[String(r.t.type)] ?? String(r.t.type) },
                   // How it connects, at a glance; the link opens the tool where it is set.
                   { id: "connects", header: "Connects with", cell: (r) => {
                     const c = connectionOf(r.t as never, project);
@@ -864,6 +986,11 @@ function Editor({
           { id: "memory", label: `Memory (${count("memories")})`, content: named("memory") },
           { id: "evals", label: `Evals (${count("evaluators")})`, content: named("evaluator") },
           {
+            id: "tests", label: `Tests (${(project.suites ?? []).length})`,
+            content: <BuildSuites project={project} setProject={setProject} server={server} buildId={build?.id}
+              deployed={deployed} runBlock={testsBlock} flush={flush} notify={notify} />,
+          },
+          {
             id: "identity", label: `Identity (${count("identities")})`,
             content: (
               <Tabs ariaLabel="Identity" tabs={[
@@ -940,8 +1067,10 @@ function Editor({
                 { id: "new", text: "New build" },
                 { id: "import", text: "Import a file…", description: "A workflow.json or an exported bundle" },
                 { id: "delete", text: "Delete this build" },
+                ...(server && build?.id === raw.id ? [{ id: "move", text: "Move to team…", description: "Put it in a team's workspace" }] : []),
               ]}
               onItemClick={({ detail }) => {
+                if (detail.id === "move") setMoving(true);
                 if (detail.id === "new") onNew();
                 if (detail.id === "import") setImporting(true);
                 if (detail.id === "delete") onDelete();
@@ -971,6 +1100,11 @@ function Editor({
         <ProjectTitle name={project.name} onRename={(name) => setProject((p) => renameProject(p, name))} />
       </Header>
       {deployment}
+      {build?.readOnly ? (
+        <Alert type="info" header="You can look at this build, not change it">
+          You are a viewer in its team, so your changes are not saved. A team owner can make you an editor.
+        </Alert>
+      ) : null}
       {registryUpdates.length ? (
         <Alert type="info" dismissible onDismiss={() => setRegistryUpdates([])}
           header="Newer versions in the registry">
@@ -1023,13 +1157,27 @@ function Editor({
 
       <AddToolModal visible={addingTool} onDismiss={() => setAddingTool(false)}
         onAdd={(name, type) => {
-          const r = addTool(project, name, type);
+          const r = isBuiltinChoice(type) ? addBuiltinTool(project, name, type) : addTool(project, name, type);
           setProject(r.project);
           setAddingTool(false);
           setSelection({ kind: "tool", id: r.key });
           setTab("design");
-        }} />
+        }}
+        onConnector={() => { setAddingTool(false); setConnecting(true); }} />
       <ExportedModal name={exported} onDismiss={() => setExported(null)} />
+      {connecting ? (
+        <Suspense fallback={null}>
+          <Connectors visible project={project} onDismiss={() => setConnecting(false)}
+            onAdded={(r, c) => {
+              setProject(r.project);
+              setConnecting(false);
+              setMode("manual");
+              setSelection({ kind: "tool", id: r.key });
+              setTab("design");
+              notify("success", `Added ${c.name} as the tool “${r.key}”. Set its client secret under How it connects.`);
+            }} />
+        </Suspense>
+      ) : null}
       <Modal visible={showProblems} onDismiss={() => setShowProblems(false)} size="large"
         header={`Problems (${issues.length})`}>
         {issues.length ? <IssueList issues={issues} onPick={pickProblem} />
@@ -1040,6 +1188,10 @@ function Editor({
       {server && build ? (
         <ShareDialog visible={sharing} title={project.name} shares={build.shares} onDismiss={() => setSharing(false)}
           onSave={async (s) => { onShared(await shareBuild(raw.id, s)); notify("success", "Sharing saved."); }} />
+      ) : null}
+      {server && build && moving ? (
+        <MoveToTeam build={build} notify={notify} onDismiss={() => setMoving(false)}
+          onMoved={() => { setMoving(false); onReload(); }} />
       ) : null}
       {server ? toolSharer.dialog : null}
       {server ? (

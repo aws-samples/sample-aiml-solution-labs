@@ -143,6 +143,11 @@ region = "us-east-1"
 # api_throttle_burst = 1000
 # Further Hosted UI callback/logout URLs, e.g. for local development (none by default).
 # extra_callback_urls = ["https://localhost:5173"]
+# Also send the runtimes' spans to an OTLP/HTTP backend (off; see DEPLOYMENT.md, "Sending
+# traces to another OTLP backend"). The headers live in the secret, never here.
+# otlp_endpoint           = "https://cloud.langfuse.com/api/public/otel/v1/traces"
+# otlp_headers_secret_arn = "arn:aws:secretsmanager:us-east-1:111122223333:secret:otlp-headers-AbCdEf"
+# otlp_include_content    = false   # true also sends prompt and answer content
 
 # Data sources are NOT configured here. Every tool an agent can call is declared
 # in the `tools` block of app/workflow.json (your own MCP server, REST API,

@@ -129,10 +129,12 @@ def publish_request(session_id: str, hitl: dict, output: str = "") -> None:
         detail = {"app": APP_NAME, "session": session_id, "gate": node,
                   "question": str(hitl.get("question") or "")[:2000], "output": str(output or "")[:4000],
                   "at": clock.now_str(),
-                  **{k: hitl[k] for k in ("timeoutAt", "timeoutAction") if hitl.get(k)},
+                  # A tool call waiting for approval (app/common/asks.py) names the tool and its arguments.
+                  **{k: hitl[k] for k in ("timeoutAt", "timeoutAction", "kind", "tool", "args") if hitl.get(k)},
                   "answerWith": {"detail-type": DECISION, "detail": {
                       "app": APP_NAME, "session": session_id, "gate": node,
-                      "decision": "approve | deny | revise", "comment": "", "by": ""}}}
+                      "decision": "approve | deny" if hitl.get("kind") else "approve | deny | revise",
+                      "comment": "", "by": ""}}}
         boto3.client("events").put_events(Entries=[{"Source": SOURCE, "DetailType": REQUESTED,
                                                     "Detail": json.dumps(detail)}])
     except Exception as e:  # noqa: BLE001 - a missed notification never fails the run

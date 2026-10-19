@@ -573,14 +573,16 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
 
     unknown = sorted({framework_of(a) for a in workflow["agents"]
                       if framework_of(a) not in FRAMEWORKS
-                      and str((workflow["agents"][a] or {}).get("runtime") or "main") != "a2a"})
+                      and str((workflow["agents"][a] or {}).get("runtime") or "main") not in ("a2a", "task", "harness")})
     if unknown:
         print(f"scaffold: unknown agent framework(s) {unknown} in the bundle; this framework "
               f"version writes {sorted(FRAMEWORKS)}.", file=sys.stderr)
         return 2
 
+    # A remote agent's code is somebody else's, and a task step has none (its `task` block),
+    # nor a harness agent (AgentCore runs it from its `instructions`).
     local = [aid for aid, spec in workflow["agents"].items()
-             if str((spec or {}).get("runtime") or "main") != "a2a"]
+             if str((spec or {}).get("runtime") or "main") not in ("a2a", "task", "harness")]
     created, rewritten, kept, regenerated = [], [], [], []
     for aid in local:
         folder = SUBAGENTS / aid
@@ -877,6 +879,14 @@ def main() -> int:
         if placement == "a2a":
             print(f"scaffold: agent {agent_id!r} is runtime \"a2a\" in workflow.json, so its "
                   f"code is somebody else's — there is no folder to create.", file=sys.stderr)
+            return 2
+        if placement == "task":
+            print(f"scaffold: agent {agent_id!r} is runtime \"task\" in workflow.json: its `task` "
+                  f"block is the whole step, so there is no folder to create.", file=sys.stderr)
+            return 2
+        if placement == "harness":
+            print(f"scaffold: agent {agent_id!r} is runtime \"harness\" in workflow.json: AgentCore "
+                  f"runs it from its `instructions`, so there is no folder to create.", file=sys.stderr)
             return 2
         if (SUBAGENTS / agent_id).exists():
             print(f"scaffold: app/subagents/{agent_id}/ already exists, and {agent_id!r} is "

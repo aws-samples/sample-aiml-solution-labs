@@ -19,6 +19,7 @@ import os
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
+from app.common import liveconfig, model_routing
 from app.common.bus import bus
 from app.common.context import AgentContext
 from app.features.gateway import person
@@ -48,6 +49,10 @@ async def invoke(payload, context=None):
             "outputs": payload.get("outputs", {}) or {},
             # AgentContext reads feedback[self.id]; scope it to this agent.
             "feedback": {AGENT_ID: payload.get("feedback", "") or ""},
+            # The run's live config version, as the orchestrator sent it (app/common/liveconfig.py).
+            **({liveconfig.STATE_KEY: live} if (live := liveconfig.from_payload(payload)) else {}),
+            # The run's model override for this agent (app/common/model_routing.py).
+            **({model_routing.STATE_KEY: ov} if (ov := model_routing.from_payload(payload)) else {}),
         }
         config = {"configurable": {"thread_id": session_id or "subagent"}}
         # This container has no status or events table, so the agent's timeline

@@ -437,7 +437,7 @@ def test_every_tool_type_has_an_evidence_label(client, monkeypatch):
     adding a type, so pin it."""
     from app.subagents._shared.research import _EVIDENCE_LABELS
 
-    assert set(_EVIDENCE_LABELS) == {"kb", "websearch", "mcp", "openapi", "lambda", "apigateway"}
+    assert set(_EVIDENCE_LABELS) == {"kb", "websearch", "mcp", "openapi", "lambda", "apigateway", "smithy"}
     assert all(v and v.isupper() for v in _EVIDENCE_LABELS.values())
 
 

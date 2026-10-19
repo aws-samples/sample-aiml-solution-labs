@@ -209,6 +209,10 @@ class AgentContext:
         # Reviewer feedback for this agent, set when a HITL gate chose "revise"
         # and the graph looped back to re-run this agent. Empty on a first run.
         self.feedback = (state.get("feedback") or {}).get(agent.id, "")
+        # The run's live config version (orchestrator.liveConfig), from the graph state the
+        # run started with, over the deployed settings above. A no-op on version 0.
+        from app.common import liveconfig
+        liveconfig.apply(self, agent, state)
 
     @property
     def skills_by_tool(self) -> bool:
@@ -235,6 +239,14 @@ class AgentContext:
         If long-term memory was recalled for this agent (memory enabled in
         workflow.json), those past insights are auto-injected into the system
         prompt here — so memory influences the model with no per-agent code."""
+        # A live config version's prompt, in place of the deployed one (app/common/liveconfig.py).
+        from app.common import liveconfig
+        system, unplaced = liveconfig.prompt(self, system)
+        if unplaced and not getattr(self, "_live_prompt_noted", False):
+            self._live_prompt_noted = True
+            await self.log(f"config v{getattr(self, 'config_version', 0)}: this agent's live prompt was "
+                           f"not applied, because its code does not pass its own system_prompt to "
+                           f"ctx.llm; it ran with the prompt in its code")
         if self.recalled_memory:
             system = system + (
                 f"\n\n{RECALL_HEADER}\n"
@@ -262,13 +274,17 @@ class AgentContext:
         if files:
             user += ("\n\nThe run was started with these files, attached to this message: "
                      + ", ".join(f["name"] for f in files) + ".")
-        text, truncated = await run_llm(call, system, user,
-                                        model=model or self.model,
-                                        temperature=self.temperature,
-                                        max_tokens=budget,
-                                        top_p=getattr(self, "top_p", None),
-                                        stop_sequences=getattr(self, "stop_sequences", None),
-                                        images=seen, files=files)
+        from app.common import asks, model_routing
+        # The run's model override, else the agent's route, then its fallbacks
+        # (app/common/model_routing.py). One model and one plain call without them.
+        chain = model_routing.candidates(self, system, user, explicit=model)
+        # Journaled for an agent that can ask a person (asks.py): a node re-run on resume
+        # replays this call rather than billing it again. A plain call otherwise.
+        text, truncated = await asks.once(self, lambda: asks.listed(model_routing.call(
+            self, chain, lambda m: run_llm(
+                call, system, user, model=m, temperature=self.temperature,
+                max_tokens=budget, top_p=getattr(self, "top_p", None),
+                stop_sequences=getattr(self, "stop_sequences", None), images=seen, files=files))))
         if truncated:
             # SAY SO. The response is a prefix: it stopped because it ran out of room,
             # not because the model was done, so whatever the agent builds from it is
@@ -347,6 +363,18 @@ class AgentContext:
                        f"({got['latencyMs'] / 1000:.1f}s)")
         return got
 
+    async def save_file(self, name: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        """Keep a file this agent made with the run (runs/<session>/outputs/<name>,
+        app/common/artifacts.py), shown on the run's Files tab. Returns its key. Raises
+        NoFileStore when the deployment has no assets bucket (set orchestrator.files)."""
+        import asyncio
+
+        from app.common import artifacts
+        key = await asyncio.to_thread(artifacts.put_output, self.session_id, name, data,
+                                      content_type, self.agent_id)
+        await self.log(f"Saved file {key.rsplit('/', 1)[-1]}")
+        return key
+
     async def call_tool(self, tool_key: str, query: str):
         """Call a Gateway tool by its `tool` label in workflow.json.
 
@@ -358,8 +386,13 @@ class AgentContext:
         argument shape comes from the tool's declared type, not from the caller.
         Returns (summary, "gateway"). Raises ToolUnavailable or ToolDenied if the
         tool could not be called — the framework never invents evidence.
+
+        A tool with `approval` waits for a person first, and a refusal raises
+        ToolDenied(by="person") (app/common/asks.py).
         """
-        return await query_tool(tool_key, query)
+        from app.common import asks
+        await asks.guard_direct(self, tool_key, query)
+        return tuple(await asks.once(self, lambda: asks.listed(query_tool(tool_key, query))))
 
     async def call_tool_rows(self, tool_key: str, query: str | None = None):
         """The same tool call as `call_tool`, returning (rows, field_map, mode).
@@ -385,8 +418,10 @@ class AgentContext:
         LIST OF SERVICES the agent worked out first, and sending it the run's
         objective instead would price nothing.
         """
-        rows, mode = await query_tool_rows(
-            tool_key, query if query is not None else self._retrieval_query())
+        from app.common import asks
+        q = query if query is not None else self._retrieval_query()
+        await asks.guard_direct(self, tool_key, q)
+        rows, mode = await asks.once(self, lambda: asks.listed(query_tool_rows(tool_key, q)))
         field_map = dict((TOOLS.get(tool_key) or {}).get("rowFields") or {})
         return rows, field_map, mode
 
@@ -400,7 +435,8 @@ class AgentContext:
 
         Pass `doc_type` to scope retrieval to a single corpus (e.g. "reference")
         so the agent only sees chunks tagged with that doc_type metadata."""
-        return await retrieve_kb(query, doc_type=doc_type)
+        from app.common import asks
+        return tuple(await asks.once(self, lambda: asks.listed(retrieve_kb(query, doc_type=doc_type))))
 
     async def heartbeat(self, pct: int) -> None:
         """Report progress for a long-running agent (updates the UI bar).
@@ -430,6 +466,11 @@ class AgentContext:
         cfg = self._agentcore.get("guardrails", {})
         if not cfg.get(source.lower()):
             return text
+        from app.common import asks
+        # Journaled for an agent that can ask a person (asks.py), like its model calls.
+        return await asks.once(self, lambda: self._guardrail_checked(text, source, cfg))
+
+    async def _guardrail_checked(self, text: str, source: str, cfg: dict) -> str:
         import time as _t
 
         from app.features.guardrails.client import GuardrailBlocked, check, named
@@ -536,7 +577,7 @@ class AgentContext:
 
     # Long-term strategy -> namespace prefix. Matches the strategy namespace
     # templates provisioned on the semantic memory (terraform/main.tf):
-    #   semantic -> insights/{actorId}   summary -> summary/{actorId}/{sessionId}
+    #   semantic -> /insights/{actorId}/   summary -> /summary/{actorId}/{sessionId}/
     # Only the strategies both IaC paths actually provision (terraform/main.tf
     # semantic_memory_strategy + summary_memory_strategy, and the CDK equivalents).
     # `user_preference` was listed here without a provisioned strategy, so enabling
@@ -582,15 +623,27 @@ class AgentContext:
         return out
 
     def _namespace_for(self, strat: str) -> str:
-        """Concrete namespace for a strategy, matching the templates provisioned
-        in terraform/main.tf. Semantic is actor-scoped (cross-session); summary is
-        session-scoped (AgentCore requires {sessionId} for summarization)."""
+        """Concrete namespace for a strategy, matching the NamespaceTemplates provisioned
+        (terraform/evaluations.tf, cdk memoryStrategiesFor), in the form AgentCore stores
+        them: one slash at each end. Semantic is actor-scoped (cross-session); summary is
+        session-scoped (AgentCore requires {sessionId} for summarization).
+        https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/specify-long-term-memory-organization.html"""
         actor = self._memory_actor()
         if strat == "summary":
-            return f"summary/{actor}/{self.session_id}"
+            return f"/summary/{actor}/{self.session_id}/"
         if strat == "custom":
-            return f"custom-{self.agent_id}/{actor}"
-        return f"{self._NS_PREFIX.get(strat, strat)}/{actor}"
+            return f"/custom-{self.agent_id}/{actor}/"
+        return f"/{self._NS_PREFIX.get(strat, strat)}/{actor}/"
+
+    def _recall_scope(self, strat: str) -> tuple[str, str]:
+        """What a recall for `strat` searches: ("namespace", exact) or ("namespacePath",
+        hierarchy). `namespace` is an exact match and `namespacePath` matches everything
+        under a path (RetrieveMemoryRecords). Summaries are written per session, so a recall
+        reads every earlier session's summary of this actor, under /summary/<actor>/; the
+        others are one namespace per actor."""
+        if strat == "summary":
+            return "namespacePath", f"/summary/{self._memory_actor()}/"
+        return "namespace", self._namespace_for(strat)
 
     async def memory_recall(self, query: str) -> list[str]:
         """Recall past insights from long-term memory (scoped to this agent +
@@ -600,15 +653,22 @@ class AgentContext:
         strategies = self._longterm_strategies()
         if not strategies:
             return []
+        from app.common import asks
+        # Journaled for an agent that can ask a person (asks.py), like its model calls.
+        return await asks.once(self, lambda: self._recalled(query, strategies))
+
+    async def _recalled(self, query: str, strategies: list[str]) -> list[str]:
         import time as _t
 
         from app.features.memory import recall
         combined: list[str] = []
         for strat in strategies:
-            namespace = self._namespace_for(strat)
+            how, namespace = self._recall_scope(strat)
             start = _t.perf_counter()
             try:
-                results = await recall(query, namespace=namespace, memory_id=self._memory_id())
+                results = await (recall(query, namespace_path=namespace, memory_id=self._memory_id())
+                                 if how == "namespacePath"
+                                 else recall(query, namespace=namespace, memory_id=self._memory_id()))
             except Exception as e:  # noqa: BLE001 - memory must never break a run
                 self._record_memory("recall", namespace, query,
                                     f"(recall error: {type(e).__name__})",
@@ -768,20 +828,16 @@ class AgentContext:
         return await get_api_key(target)
 
     async def policy_check(self, action: str) -> bool:
-        """Optional app-level Cedar authorization check. Returns True when policy
-        is disabled for this agent or the engine allows the action.
+        """Always True, kept so agent code that calls it still runs.
 
-        NOTE: this is the SECONDARY path. Tool calls made through the Gateway are
-        already governed server-side by the attached policy engine — see
-        app/features/policy/."""
-        cfg = self._agentcore.get("policy", {})
-        if not cfg.get("enabled"):
-            return True
-        import os
-
-        from app.features.policy import is_authorized
-        engine_id = os.getenv("POLICY_ENGINE_ID", "")
-        return await is_authorized(engine_id, self.agent_id, action, self.session_id)
+        AgentCore Policy evaluates Cedar only at the Gateway, on each tool call
+        (app/features/policy/client.py); it has no API for a decision from agent code. An
+        earlier version called one that does not exist and so also always allowed. To
+        govern an action, make it a Gateway tool, where the attached engine decides."""
+        if self._agentcore.get("policy", {}).get("enabled"):
+            print(f"[policy] {self.agent_id}: agentcore.policy.enabled has no effect; Cedar is "
+                  f"enforced at the Gateway on tool calls (orchestrator.policy). '{action}' not checked.")
+        return True
 
 
 def _record_image(model: str, prompt: str, latency_ms: int, cost: float, status: str,

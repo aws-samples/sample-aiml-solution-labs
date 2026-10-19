@@ -44,9 +44,9 @@ SHIPPED = json.loads((ORCH_ROOT / "app" / "workflow.json").read_text())
 
 #: Agents whose code ships in this repo. Derived from the workflow, so renaming or
 #: removing one is not a test to fix — and `runtime: "a2a"` is excluded because there is
-#: no folder to check: the code is somebody else's.
+#: no folder to check: the code is somebody else's. A `task` step has no code of its own.
 LOCAL_AGENTS = sorted(aid for aid, spec in SHIPPED["agents"].items()
-                      if str(spec.get("runtime") or "main") != "a2a")
+                      if str(spec.get("runtime") or "main") not in ("a2a", "task"))
 
 #: Folders that are not agents. `_shared` is SAMPLE code the agents happen to reuse
 #: (the two runners and the contracts), deliberately under subagents/ rather than in the
@@ -390,6 +390,12 @@ def test_no_tool_source_folder_is_orphaned():
                 if spec.get("source")}
     present = {p.name for p in TOOLS_DIR.iterdir()
                if p.is_dir() and p.name != "__pycache__"}
+    # A function the framework ships and a workflow MAY name (`builtinLambdaSource`) is not
+    # dead code when this sample leaves it out: it is deployed when a tool asks for it, and
+    # `scaffold.py apply --exact` keeps it for any build that does. The sandbox function
+    # (`codeInterpreter`) is off by default, so the shipped workflow does not declare it.
+    vocab = json.loads((ORCH_ROOT / "app" / "vocabulary.json").read_text())
+    present -= set(vocab["builtinLambdaSource"]["values"]) - declared
     assert present == declared, (
         f"app/tools/ and workflow.json disagree. Folders no tool declares: "
         f"{sorted(present - declared)}. Declared with no folder: {sorted(declared - present)}")

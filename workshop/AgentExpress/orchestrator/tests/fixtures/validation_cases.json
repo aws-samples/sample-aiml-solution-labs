@@ -241,9 +241,6 @@
        "Builtin.Faithfulness",
        "Builtin.ResponseRelevance"
       ]
-     },
-     "policy": {
-      "enabled": true
      }
     }
    },
@@ -264,9 +261,6 @@
        "Builtin.Faithfulness",
        "Builtin.ResponseRelevance"
       ]
-     },
-     "policy": {
-      "enabled": true
      }
     }
    },
@@ -287,9 +281,6 @@
        "Builtin.Faithfulness",
        "Builtin.ResponseRelevance"
       ]
-     },
-     "policy": {
-      "enabled": true
      }
     }
    },
@@ -307,9 +298,6 @@
        "Builtin.Faithfulness",
        "Builtin.ResponseRelevance"
       ]
-     },
-     "policy": {
-      "enabled": true
      }
     }
    },
@@ -404,9 +392,6 @@
        "Builtin.Faithfulness",
        "Builtin.ResponseRelevance"
       ]
-     },
-     "policy": {
-      "enabled": true
      }
     }
    }
@@ -1375,7 +1360,7 @@
       "id": "docs"
      },
      "path": "tools.docs.type",
-     "message": "\"bogus\" is not one of: kb, websearch, mcp, openapi, lambda, apigateway"
+     "message": "\"bogus\" is not one of: kb, websearch, mcp, openapi, lambda, apigateway, smithy"
     }
    ]
   },
@@ -2209,7 +2194,7 @@
       "id": "intake"
      },
      "path": "agents.intake.runtime",
-     "message": "\"Remote\" is not one of: main, dedicated, a2a"
+     "message": "\"Remote\" is not one of: main, dedicated, a2a, task, harness"
     }
    ]
   },
@@ -2606,7 +2591,7 @@
       "kb",
       "s3Uri"
      ],
-     "s3://my-docs-bucket/policies/"
+     "s3://acme-docs-111122223333/policies/"
     ],
     [
      "set",
@@ -2654,7 +2639,7 @@
       "kb",
       "s3Uri"
      ],
-     "s3://my-docs-bucket"
+     "s3://acme-docs-111122223333"
     ],
     [
      "set",
@@ -9154,6 +9139,6087 @@
      "message": "an example is 1 to 100 characters"
     }
    ]
+  },
+  {
+   "name": "limits: sensible values are accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUsd": 5,
+      "userRunsPerHour": 20
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "limits: zero means no limit and is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUsd": 0,
+      "userRunsPerHour": 0
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "limits: a fractional dollar amount is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUsd": 0.5
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "limits: a negative or text value is refused, not read as no limit",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUsd": -1,
+      "userRunsPerHour": "ten"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userDailyUsd",
+     "message": "must be a number of US dollars, 0 to 1000000 (0 means no limit)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userRunsPerHour",
+     "message": "must be a whole number, 0 to 10000 (0 means no limit)"
+    }
+   ]
+  },
+  {
+   "name": "limits: a true and a fractional run count are refused",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUsd": true,
+      "userRunsPerHour": 2.5
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userDailyUsd",
+     "message": "must be a number of US dollars, 0 to 1000000 (0 means no limit)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userRunsPerHour",
+     "message": "must be a whole number, 0 to 10000 (0 means no limit)"
+    }
+   ]
+  },
+  {
+   "name": "limits: a misplaced decimal point is caught",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUsd": 5000000,
+      "userRunsPerHour": 100000
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userDailyUsd",
+     "message": "must be a number of US dollars, 0 to 1000000 (0 means no limit)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userRunsPerHour",
+     "message": "must be a whole number, 0 to 10000 (0 means no limit)"
+    }
+   ]
+  },
+  {
+   "name": "limits: an unknown key is named",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "userDailyUSD": 5
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.userDailyUSD",
+     "message": "unknown key; limits takes: userDailyUsd, userRunsPerHour, monthlyUsd"
+    }
+   ]
+  },
+  {
+   "name": "limits: a monthly budget is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "monthlyUsd": 200
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "limits: a monthly budget of text or below zero is refused",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "monthlyUsd": -5
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.monthlyUsd",
+     "message": "must be a number of US dollars, 0 to 10000000 (0 means no limit)"
+    }
+   ]
+  },
+  {
+   "name": "limits: a monthly budget past the ceiling is caught",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "limits"
+     ],
+     {
+      "monthlyUsd": 50000000
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.limits.monthlyUsd",
+     "message": "must be a number of US dollars, 0 to 10000000 (0 means no limit)"
+    }
+   ]
+  },
+  {
+   "name": "a code interpreter tool the framework ships",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Run code in a sandbox and return what it printed.",
+      "source": "codeInterpreter",
+      "call": "execute_code",
+      "arg": "code",
+      "toolSchema": [
+       {
+        "name": "execute_code",
+        "description": "Run code and return stdout, stderr and the exit status.",
+        "properties": {
+         "language": {
+          "type": "string",
+          "required": true,
+          "description": "python, javascript or typescript."
+         },
+         "code": {
+          "type": "string",
+          "required": true,
+          "description": "The program to run."
+         }
+        }
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a lambda source the framework does not ship",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Run code in a sandbox and return what it printed.",
+      "source": "sandbox",
+      "call": "execute_code",
+      "arg": "code",
+      "toolSchema": [
+       {
+        "name": "execute_code",
+        "description": "Run code and return stdout, stderr and the exit status.",
+        "properties": {
+         "language": {
+          "type": "string",
+          "required": true,
+          "description": "python, javascript or typescript."
+         },
+         "code": {
+          "type": "string",
+          "required": true,
+          "description": "The program to run."
+         }
+        }
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sandbox"
+     },
+     "path": "tools.sandbox.source",
+     "message": "\"sandbox\" is not one of: pricing, codeInterpreter, browser"
+    }
+   ]
+  },
+  {
+   "name": "the code interpreter source is spelled exactly",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Run code in a sandbox and return what it printed.",
+      "source": "codeinterpreter",
+      "call": "execute_code",
+      "arg": "code",
+      "toolSchema": [
+       {
+        "name": "execute_code",
+        "description": "Run code and return stdout, stderr and the exit status.",
+        "properties": {
+         "language": {
+          "type": "string",
+          "required": true,
+          "description": "python, javascript or typescript."
+         },
+         "code": {
+          "type": "string",
+          "required": true,
+          "description": "The program to run."
+         }
+        }
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sandbox"
+     },
+     "path": "tools.sandbox.source",
+     "message": "\"codeinterpreter\" is not one of: pricing, codeInterpreter, browser"
+    }
+   ]
+  },
+  {
+   "name": "a code interpreter tool also naming a function of its own",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Run code in a sandbox and return what it printed.",
+      "source": "codeInterpreter",
+      "call": "execute_code",
+      "arg": "code",
+      "toolSchema": [
+       {
+        "name": "execute_code",
+        "description": "Run code and return stdout, stderr and the exit status.",
+        "properties": {
+         "language": {
+          "type": "string",
+          "required": true,
+          "description": "python, javascript or typescript."
+         },
+         "code": {
+          "type": "string",
+          "required": true,
+          "description": "The program to run."
+         }
+        }
+       }
+      ],
+      "lambdaArn": "arn:aws:lambda:us-east-1:123456789012:function:mine"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sandbox"
+     },
+     "path": "tools.sandbox",
+     "message": "set exactly one of `lambdaArn` / `source` / `code` (found lambdaArn and source). lambdaArn = a function you already own, which the framework only registers. source = one the framework ships and deploys. code = one you write in the build (its handler.py travels with it), which the framework deploys with a role of only the grants you pick. Same rule, for the same reason, as an a2a agent's agentCard vs source."
+    }
+   ]
+  },
+  {
+   "name": "a code interpreter tool with no tool schema",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Run code in a sandbox and return what it printed.",
+      "source": "codeInterpreter",
+      "call": "execute_code",
+      "arg": "code"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sandbox"
+     },
+     "path": "tools.sandbox.toolSchema",
+     "message": "`toolSchema` is required for type \"lambda\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sandbox"
+     },
+     "path": "tools.sandbox.toolSchema",
+     "message": "a Lambda tool needs at least one tool in `toolSchema`, so the Gateway can publish it"
+    }
+   ]
+  },
+  {
+   "name": "liveConfig: on, with a group granted admin, is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "liveConfig"
+     ],
+     true
+    ],
+    [
+     "set",
+     [
+      "authorization",
+      "actions",
+      "admin"
+     ],
+     [
+      "admins"
+     ]
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "liveConfig: on with no group granted admin is on for nobody",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "liveConfig"
+     ],
+     true
+    ],
+    [
+     "set",
+     [
+      "authorization",
+      "actions"
+     ],
+     {
+      "decision": [
+       "approvers"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.liveConfig",
+     "message": "only an admin can change the live config, and no group is granted `admin` in authorization.actions, so nobody can"
+    }
+   ]
+  },
+  {
+   "name": "liveConfig: an empty admin grant is the same as none",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "liveConfig"
+     ],
+     true
+    ],
+    [
+     "set",
+     [
+      "authorization",
+      "actions",
+      "admin"
+     ],
+     []
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.liveConfig",
+     "message": "only an admin can change the live config, and no group is granted `admin` in authorization.actions, so nobody can"
+    }
+   ]
+  },
+  {
+   "name": "liveConfig: off says nothing, with or without admins",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "liveConfig"
+     ],
+     false
+    ],
+    [
+     "set",
+     [
+      "authorization",
+      "actions"
+     ],
+     {}
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "liveConfig: text in place of true is refused",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "liveConfig"
+     ],
+     "yes"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.liveConfig",
+     "message": "must be a boolean"
+    }
+   ]
+  },
+  {
+   "name": "askPerson needs toolMode model",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     true
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.askPerson",
+     "message": "needs toolMode \"model\": only a model turn can decide to ask a person"
+    }
+   ]
+  },
+  {
+   "name": "askPerson on a model-mode agent with no tool is quiet",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     {
+      "maxQuestions": 2,
+      "timeout": "24h"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "askPerson bounds and keys",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     {
+      "maxQuestions": 11,
+      "timeout": "45d",
+      "other": 1
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.askPerson.maxQuestions",
+     "message": "must be from 1 to 10"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.askPerson.timeout",
+     "message": "is at most 30d"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.askPerson.other",
+     "message": "unknown key; allowed: maxQuestions, timeout"
+    }
+   ]
+  },
+  {
+   "name": "askPerson with a malformed timeout",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     {
+      "timeout": "soon"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.askPerson.timeout",
+     "message": "must be <n>m, <n>h or <n>d, e.g. 30m, 24h, 2d"
+    }
+   ]
+  },
+  {
+   "name": "askPerson on a dedicated agent",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "askPerson"
+     ],
+     true
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.askPerson",
+     "message": "`askPerson` does not apply to runtime \"dedicated\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "askPerson false is fine",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     false
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "an approval tool bound to a dedicated agent",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "docs",
+      "approval"
+     ],
+     "person"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.tool",
+     "message": "\"docs\" waits for a person to approve each call, and a dedicated agent runs in its own runtime, which cannot wait — run this agent in \"main\", or remove the tool's approval"
+    }
+   ]
+  },
+  {
+   "name": "an approval value and timeout action that are not known",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "approval"
+     ],
+     "always"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "approvalTimeout"
+     ],
+     {
+      "after": "2h",
+      "action": "maybe",
+      "when": 1
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.approvalTimeout.when",
+     "message": "unknown key; a timeout takes after, action"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.approvalTimeout.action",
+     "message": "must be one of: approve, deny"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.approval",
+     "message": "\"always\" is not one of: person, event"
+    }
+   ]
+  },
+  {
+   "name": "an approvalTimeout without approval",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lifecycle",
+      "approvalTimeout"
+     ],
+     {
+      "after": "1h",
+      "action": "deny"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lifecycle"
+     },
+     "path": "tools.lifecycle.approvalTimeout",
+     "message": "only a tool with `approval` reads it"
+    }
+   ]
+  },
+  {
+   "name": "approval on a knowledge base",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "approval"
+     ],
+     "person"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.tool",
+     "message": "\"kb\" waits for a person to approve each call, and a dedicated agent runs in its own runtime, which cannot wait — run this agent in \"main\", or remove the tool's approval"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.approval",
+     "message": "`approval` does not apply to type \"kb\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "an approval tool on a main agent, by event, with a timeout",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "approval"
+     ],
+     "event"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "approvalTimeout"
+     ],
+     {
+      "after": "1h",
+      "action": "approve"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a Smithy model tool, inline, with its grant",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "smithy": "2.0",
+       "shapes": {
+        "example.weather#WeatherService": {
+         "type": "service",
+         "version": "1.0.0",
+         "operations": [
+          {
+           "target": "example.weather#GetCurrentWeather"
+          }
+         ],
+         "traits": {
+          "aws.protocols#restJson1": {}
+         }
+        },
+        "example.weather#GetCurrentWeather": {
+         "type": "operation",
+         "input": {
+          "target": "example.weather#GetCurrentWeatherInput"
+         },
+         "traits": {
+          "smithy.api#http": {
+           "method": "GET",
+           "uri": "/weather"
+          }
+         }
+        },
+        "example.weather#GetCurrentWeatherInput": {
+         "type": "structure",
+         "members": {
+          "location": {
+           "target": "smithy.api#String",
+           "traits": {
+            "smithy.api#required": {},
+            "smithy.api#httpQuery": "location"
+           }
+          }
+         }
+        }
+       }
+      },
+      "allow": {
+       "actions": [
+        "dynamodb:GetItem"
+       ],
+       "resources": [
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a Smithy model tool from S3",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "allow": {
+       "actions": [
+        "dynamodb:GetItem"
+       ],
+       "resources": [
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location",
+      "schemaS3Uri": "s3://amzn-s3-demo-bucket/models/orders.json"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a Smithy tool needs exactly one model",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "smithy": "2.0",
+       "shapes": {
+        "example.weather#WeatherService": {
+         "type": "service",
+         "version": "1.0.0",
+         "operations": [
+          {
+           "target": "example.weather#GetCurrentWeather"
+          }
+         ],
+         "traits": {
+          "aws.protocols#restJson1": {}
+         }
+        },
+        "example.weather#GetCurrentWeather": {
+         "type": "operation",
+         "input": {
+          "target": "example.weather#GetCurrentWeatherInput"
+         },
+         "traits": {
+          "smithy.api#http": {
+           "method": "GET",
+           "uri": "/weather"
+          }
+         }
+        },
+        "example.weather#GetCurrentWeatherInput": {
+         "type": "structure",
+         "members": {
+          "location": {
+           "target": "smithy.api#String",
+           "traits": {
+            "smithy.api#required": {},
+            "smithy.api#httpQuery": "location"
+           }
+          }
+         }
+        }
+       }
+      },
+      "allow": {
+       "actions": [
+        "dynamodb:GetItem"
+       ],
+       "resources": [
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location",
+      "schemaS3Uri": "s3://amzn-s3-demo-bucket/models/orders.json"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders",
+     "message": "set exactly one of `schemaS3Uri` / `schema` (found schemaS3Uri and schema). One of two has to say where the Smithy model is: schemaS3Uri = a JSON model you already host in S3; schema = the model itself (Smithy JSON AST), inline. None leaves the target with no operations; both is ambiguous."
+    }
+   ]
+  },
+  {
+   "name": "a Smithy tool needs its grant",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "smithy": "2.0",
+       "shapes": {
+        "example.weather#WeatherService": {
+         "type": "service",
+         "version": "1.0.0",
+         "operations": [
+          {
+           "target": "example.weather#GetCurrentWeather"
+          }
+         ],
+         "traits": {
+          "aws.protocols#restJson1": {}
+         }
+        },
+        "example.weather#GetCurrentWeather": {
+         "type": "operation",
+         "input": {
+          "target": "example.weather#GetCurrentWeatherInput"
+         },
+         "traits": {
+          "smithy.api#http": {
+           "method": "GET",
+           "uri": "/weather"
+          }
+         }
+        },
+        "example.weather#GetCurrentWeatherInput": {
+         "type": "structure",
+         "members": {
+          "location": {
+           "target": "smithy.api#String",
+           "traits": {
+            "smithy.api#required": {},
+            "smithy.api#httpQuery": "location"
+           }
+          }
+         }
+        }
+       }
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow",
+     "message": "`allow` is required for type \"smithy\""
+    }
+   ]
+  },
+  {
+   "name": "a Smithy tool's grant is named actions on full ARNs",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "smithy": "2.0",
+       "shapes": {
+        "example.weather#WeatherService": {
+         "type": "service",
+         "version": "1.0.0",
+         "operations": [
+          {
+           "target": "example.weather#GetCurrentWeather"
+          }
+         ],
+         "traits": {
+          "aws.protocols#restJson1": {}
+         }
+        },
+        "example.weather#GetCurrentWeather": {
+         "type": "operation",
+         "input": {
+          "target": "example.weather#GetCurrentWeatherInput"
+         },
+         "traits": {
+          "smithy.api#http": {
+           "method": "GET",
+           "uri": "/weather"
+          }
+         }
+        },
+        "example.weather#GetCurrentWeatherInput": {
+         "type": "structure",
+         "members": {
+          "location": {
+           "target": "smithy.api#String",
+           "traits": {
+            "smithy.api#required": {},
+            "smithy.api#httpQuery": "location"
+           }
+          }
+         }
+        }
+       }
+      },
+      "allow": {
+       "actions": [
+        "dynamodb:*",
+        "iam:CreateUser",
+        "s3:GetObject"
+       ],
+       "resources": [
+        "*",
+        "arn:aws:s3:::*",
+        "arn:aws:dynamodb:*:111122223333:table/orders",
+        "arn:aws:s3:::amzn-s3-demo-bucket/reports/*"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.actions[0]",
+     "message": "must be one named IAM action, like dynamodb:GetItem (no *)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.actions[1]",
+     "message": "iam is not allowed: a Smithy tool's calls run as the Gateway role every tool shares"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.resources[0]",
+     "message": "must be a full ARN with its region and account written out (or empty where the service has none), not a bare *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.resources[1]",
+     "message": "must be a full ARN with its region and account written out (or empty where the service has none), not a bare *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.resources[2]",
+     "message": "must be a full ARN with its region and account written out (or empty where the service has none), not a bare *"
+    }
+   ]
+  },
+  {
+   "name": "a Smithy tool's grant is not empty",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "smithy": "2.0",
+       "shapes": {
+        "example.weather#WeatherService": {
+         "type": "service",
+         "version": "1.0.0",
+         "operations": [
+          {
+           "target": "example.weather#GetCurrentWeather"
+          }
+         ],
+         "traits": {
+          "aws.protocols#restJson1": {}
+         }
+        },
+        "example.weather#GetCurrentWeather": {
+         "type": "operation",
+         "input": {
+          "target": "example.weather#GetCurrentWeatherInput"
+         },
+         "traits": {
+          "smithy.api#http": {
+           "method": "GET",
+           "uri": "/weather"
+          }
+         }
+        },
+        "example.weather#GetCurrentWeatherInput": {
+         "type": "structure",
+         "members": {
+          "location": {
+           "target": "smithy.api#String",
+           "traits": {
+            "smithy.api#required": {},
+            "smithy.api#httpQuery": "location"
+           }
+          }
+         }
+        }
+       }
+      },
+      "allow": {
+       "actions": [],
+       "resources": "arn:aws:s3:::b/k"
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.resources",
+     "message": "must be an array"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.actions",
+     "message": "must list 1 to 20 IAM actions, each one named action like dynamodb:GetItem (no *)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.allow.resources",
+     "message": "must list 1 to 20 resource ARNs"
+    }
+   ]
+  },
+  {
+   "name": "a Smithy model has a service and an operation",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "smithy": "2.0",
+       "shapes": {
+        "example#Svc": {
+         "type": "service"
+        }
+       }
+      },
+      "allow": {
+       "actions": [
+        "dynamodb:GetItem"
+       ],
+       "resources": [
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.schema.shapes",
+     "message": "has no operation, so the target would expose no tool"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.schema.shapes",
+     "message": "names no service using aws.protocols#restJson1: the Gateway supports only the RestJson protocol"
+    }
+   ]
+  },
+  {
+   "name": "a Smithy model is a Smithy JSON model",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "schema": {
+       "openapi": "3.0.0",
+       "paths": {}
+      },
+      "allow": {
+       "actions": [
+        "dynamodb:GetItem"
+       ],
+       "resources": [
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.schema",
+     "message": "must be a Smithy JSON model: {\"smithy\": \"2.0\", \"shapes\": {...}}"
+    }
+   ]
+  },
+  {
+   "name": "a Smithy tool takes no auth or bad S3 URI",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "orders"
+     ],
+     {
+      "type": "smithy",
+      "description": "Orders table",
+      "allow": {
+       "actions": [
+        "dynamodb:GetItem"
+       ],
+       "resources": [
+        "arn:aws:dynamodb:us-east-1:111122223333:table/orders"
+       ]
+      },
+      "call": "GetCurrentWeather",
+      "arg": "location",
+      "schemaS3Uri": "https://example.com/m.json",
+      "auth": "apikey"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.auth",
+     "message": "`auth` does not apply to type \"smithy\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "orders"
+     },
+     "path": "tools.orders.schemaS3Uri",
+     "message": "must be s3://<bucket>/<key> — the Gateway loads a Smithy model from S3 or inline"
+    }
+   ]
+  },
+  {
+   "name": "files: a retention in days is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {
+      "retentionDays": 30
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "files: the bare block is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "files: retention outside 1 to 3650 days, an unknown key",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {
+      "retentionDays": 0,
+      "keep": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.files.keep",
+     "message": "unknown key; allowed: retentionDays"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.files.retentionDays",
+     "message": "must be a whole number of days, 1 to 3650"
+    }
+   ]
+  },
+  {
+   "name": "files: retention is a whole number",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {
+      "retentionDays": "90"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.files.retentionDays",
+     "message": "must be an integer"
+    }
+   ]
+  },
+  {
+   "name": "files: not an object",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     true
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.files",
+     "message": "must be an object"
+    }
+   ]
+  },
+  {
+   "name": "kb chunking and parsing, each strategy well formed",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "fixedSize",
+      "maxTokens": 300,
+      "overlapPercentage": 20
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "parsing"
+     ],
+     {
+      "strategy": "foundationModel",
+      "model": "us.amazon.nova-pro-v1:0",
+      "prompt": "Transcribe tables as Markdown."
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb semantic and no chunking are accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "semantic",
+      "maxTokens": 300,
+      "bufferSize": 0,
+      "breakpointPercentileThreshold": 95
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "parsing"
+     ],
+     {
+      "strategy": "foundationModel",
+      "model": "anthropic.claude-3-haiku-20240307-v1:0"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb chunking: unknown strategy, unknown key, bad parsing strategy",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "FIXED_SIZE",
+      "size": 3
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "parsing"
+     ],
+     {
+      "strategy": "dataAutomation"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.size",
+     "message": "unknown key; allowed: strategy, maxTokens, overlapPercentage, parentMaxTokens, childMaxTokens, overlapTokens, bufferSize, breakpointPercentileThreshold"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.strategy",
+     "message": "must be one of: fixedSize, hierarchical, semantic, none"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.parsing.strategy",
+     "message": "must be one of: foundationModel"
+    }
+   ]
+  },
+  {
+   "name": "kb chunking: missing and out-of-range settings, a setting of another strategy",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "fixedSize",
+      "maxTokens": 9000,
+      "bufferSize": 1
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.maxTokens",
+     "message": "must be a whole number from 1 to 8192"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.overlapPercentage",
+     "message": "is required for fixedSize chunking"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.bufferSize",
+     "message": "does not apply to fixedSize chunking"
+    }
+   ]
+  },
+  {
+   "name": "kb hierarchical chunking: child must be smaller, and a warning about S3 Vectors",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "hierarchical",
+      "parentMaxTokens": 300,
+      "childMaxTokens": 1500,
+      "overlapTokens": 0
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.overlapTokens",
+     "message": "must be a whole number, 1 or more"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.childMaxTokens",
+     "message": "must be smaller than parentMaxTokens: the second layer holds the smaller chunks"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.strategy",
+     "message": "AWS does not recommend hierarchical chunking with S3 Vectors, the store this framework creates: large chunks can exceed its per-vector metadata limit and fail ingestion"
+    }
+   ]
+  },
+  {
+   "name": "kb semantic chunking ranges and a non-integer setting",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "semantic",
+      "maxTokens": 300.5,
+      "bufferSize": 2,
+      "breakpointPercentileThreshold": 49
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.maxTokens",
+     "message": "must be an integer"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.bufferSize",
+     "message": "must be a whole number from 0 to 1"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking.breakpointPercentileThreshold",
+     "message": "must be a whole number from 50 to 99"
+    }
+   ]
+  },
+  {
+   "name": "kb parsing: no model and an empty prompt",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "parsing"
+     ],
+     {
+      "strategy": "foundationModel",
+      "prompt": ""
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.parsing.model",
+     "message": "is required: the Bedrock model that reads the documents"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.parsing.prompt",
+     "message": "must be 1 to 10000 characters"
+    }
+   ]
+  },
+  {
+   "name": "kb parsing model must be one id, not an ARN or a wildcard",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "parsing"
+     ],
+     {
+      "strategy": "foundationModel",
+      "model": "arn:aws:bedrock:us-east-1::foundation-model/*"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.parsing.model",
+     "message": "must be a Bedrock model or inference profile id, like anthropic.claude-3-haiku-20240307-v1:0"
+    }
+   ]
+  },
+  {
+   "name": "an existing Knowledge Base takes no chunking or parsing",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "knowledgeBaseId"
+     ],
+     "ABCDEFGH12"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "none"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "parsing"
+     ],
+     {
+      "strategy": "foundationModel",
+      "model": "amazon.nova-pro-v1:0"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.chunking",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.parsing",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    }
+   ]
+  },
+  {
+   "name": "task: a tool step with placeholders is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "docs",
+       "arguments": {
+        "query": "{{outputs.intake.objective}} for {{request}}",
+        "n": 3
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "task: a code step is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "attachments": true,
+      "task": {
+       "kind": "code",
+       "language": "python",
+       "code": "print('{}')"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "task: an extract step is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "attachments": true,
+      "task": {
+       "kind": "extract",
+       "features": [
+        "TABLES"
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "task: an output step is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "output",
+       "format": "csv",
+       "from": [
+        "report.sections"
+       ],
+       "name": "report-{{session}}.csv"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "task: no task block",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task"
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task",
+     "message": "`task` is required for runtime \"task\""
+    }
+   ]
+  },
+  {
+   "name": "task: model keys on a task",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "maxTokens": 100,
+      "model": "x",
+      "task": {
+       "kind": "code",
+       "code": "print(1)"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.maxTokens",
+     "message": "`maxTokens` does not apply to runtime \"task\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.model",
+     "message": "`model` does not apply to runtime \"task\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "task: no kind",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "tool": "docs"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.kind",
+     "message": "say what this step does: one of tool, code, extract, output"
+    }
+   ]
+  },
+  {
+   "name": "task: an unknown kind",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "lambda"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.kind",
+     "message": "\"lambda\" is not one of: tool, code, extract, output"
+    }
+   ]
+  },
+  {
+   "name": "task: a key of another kind",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "docs",
+       "code": "x"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.code",
+     "message": "does not apply to a \"tool\" step"
+    }
+   ]
+  },
+  {
+   "name": "task: an unknown sub-key",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "docs",
+       "bogus": 1
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.bogus",
+     "message": "unknown key; allowed: kind, tool, arguments, language, code, file, features, format, name, from"
+    }
+   ]
+  },
+  {
+   "name": "task: a tool step with no tool",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.tool",
+     "message": "pick the tool this step calls"
+    }
+   ]
+  },
+  {
+   "name": "task: a tool step naming no tool",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "nope"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.tool",
+     "message": "\"nope\" is not a tool. Declare it under Tools, or pick one of: kb, websearch, docs, pricing, lifecycle"
+    }
+   ]
+  },
+  {
+   "name": "task: a placeholder it does not know",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "docs",
+       "arguments": {
+        "q": "{{topic}}"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.arguments",
+     "message": "{{topic}} is not a placeholder this step knows: use {{request}}, {{session}} or {{outputs.<agent>.<field>}}"
+    }
+   ]
+  },
+  {
+   "name": "task: a placeholder naming a later step",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "docs",
+       "arguments": {
+        "q": "{{outputs.report}}"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      0
+     ],
+     {
+      "sequence": [
+       "step",
+       "intake"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.arguments",
+     "message": "{{outputs.report}}: \"report\" does not run before this step"
+    }
+   ]
+  },
+  {
+   "name": "task: a code step with no code",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "code",
+       "code": "  "
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.code",
+     "message": "write the script this step runs"
+    }
+   ]
+  },
+  {
+   "name": "task: a code step that is too long",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "code",
+       "code": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.code",
+     "message": "is 50001 bytes; a script may be at most 50000"
+    }
+   ]
+  },
+  {
+   "name": "task: a code step in an unknown language",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "code",
+       "code": "1",
+       "language": "ruby"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.language",
+     "message": "\"ruby\" is not one of: python, javascript, typescript"
+    }
+   ]
+  },
+  {
+   "name": "task: an extract step without attachments",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "extract"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.attachments",
+     "message": "an extract step reads the run's files: turn on attachments"
+    }
+   ]
+  },
+  {
+   "name": "task: an extract step with an unknown feature",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "attachments": true,
+      "task": {
+       "kind": "extract",
+       "features": [
+        "LAYOUT"
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.features[0]",
+     "message": "\"LAYOUT\" is not one of: TABLES, FORMS"
+    }
+   ]
+  },
+  {
+   "name": "task: an extract step with no features",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "attachments": true,
+      "task": {
+       "kind": "extract",
+       "features": []
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.features",
+     "message": "name at least one of TABLES, FORMS, or leave it out for both"
+    }
+   ]
+  },
+  {
+   "name": "task: an output step with no format and no files",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "output"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.format",
+     "message": "pick the file format: csv, json, markdown, txt"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task",
+     "message": "an output step saves a file, which needs orchestrator.files so the run keeps it"
+    }
+   ]
+  },
+  {
+   "name": "task: an output step in an unknown format",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "output",
+       "format": "xlsx"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.format",
+     "message": "\"xlsx\" is not one of: csv, json, markdown, txt"
+    }
+   ]
+  },
+  {
+   "name": "task: an output step from a later or malformed source",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "output",
+       "format": "json",
+       "from": [
+        "nobody",
+        "bad..x"
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.from[0]",
+     "message": "\"nobody\" does not run before this step"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.from[1]",
+     "message": "must be an agent id, or <agent>.<field>"
+    }
+   ]
+  },
+  {
+   "name": "task: a task with memory and evaluations",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "agentcore": {
+       "guardrails": {
+        "output": true
+       },
+       "memory": {
+        "longTerm": [
+         "semantic"
+        ]
+       },
+       "evaluations": {
+        "enabled": true
+       }
+      },
+      "task": {
+       "kind": "code",
+       "code": "print(1)"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.agentcore.memory",
+     "message": "a task step makes no model call, so memory has nothing to work on — remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.agentcore.evaluations",
+     "message": "a task step makes no model call, so evaluations has nothing to work on — remove it"
+    }
+   ]
+  },
+  {
+   "name": "litellm: an agent on a LiteLLM model",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "model"
+     ],
+     "litellm/gpt-4o"
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "litellm: litellm/ with no model name",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "model"
+     ],
+     "litellm/ "
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.model",
+     "message": "names no model: write litellm/ and the proxy's model name, e.g. litellm/gpt-4o"
+    }
+   ]
+  },
+  {
+   "name": "litellm: the default model must be Bedrock",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "defaultModel"
+     ],
+     "litellm/gpt-4o"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.defaultModel",
+     "message": "must be a Bedrock model: it is also the evaluators' judge and the Assistant's model. Set a litellm/ model on each agent instead"
+    }
+   ]
+  },
+  {
+   "name": "litellm: a judge model must be Bedrock",
+   "ops": [
+    [
+     "set",
+     [
+      "evaluators"
+     ],
+     {
+      "tone": {
+       "model": "litellm/gpt-4o",
+       "instructions": "Score the tone of {context}."
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "agentcore",
+      "evaluations"
+     ],
+     {
+      "enabled": true,
+      "custom": [
+       {
+        "name": "Tone",
+        "model": "litellm/gpt-4o",
+        "instructions": "Score the tone of {context}."
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "evaluators"
+     },
+     "path": "evaluators.tone.model",
+     "message": "a judge model runs on AgentCore Evaluations, which calls Bedrock: pick a Bedrock model"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "report"
+     },
+     "path": "agents.report.agentcore.evaluations.custom[0].model",
+     "message": "a judge model runs on AgentCore Evaluations, which calls Bedrock: pick a Bedrock model"
+    }
+   ]
+  },
+  {
+   "name": "harness: an agent with instructions, a model and limits is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write a short draft from the earlier outputs. Return JSON.",
+      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "temperature": 0.2,
+      "maxTokens": 2000,
+      "harness": {
+       "maxIterations": 10,
+       "timeoutSeconds": 300
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "harness: instructions are required for a harness agent and read by no other",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "instructions"
+     ],
+     "Be brief."
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "harness"
+     ],
+     {
+      "shell": true
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.instructions",
+     "message": "`instructions` is required for runtime \"harness\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.instructions",
+     "message": "`instructions` does not apply to runtime \"main\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.harness",
+     "message": "`harness` does not apply to runtime \"main\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "kb on your OpenSearch Serverless collection",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb on your Aurora PostgreSQL table",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "aurora",
+      "resourceArn": "arn:aws:rds:us-east-1:123456789012:cluster:kb",
+      "credentialsSecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:kb-AbCdEf",
+      "databaseName": "postgres",
+      "tableName": "bedrock_integration.bedrock_kb",
+      "primaryKeyField": "id",
+      "vectorField": "embedding",
+      "textField": "chunks",
+      "metadataField": "metadata",
+      "customMetadataField": "custom_metadata"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb on Neptune Analytics, with hierarchical chunking (no S3 Vectors warning)",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "neptuneAnalytics",
+      "graphArn": "arn:aws:neptune-graph:us-east-1:123456789012:graph/g-abcdefghij",
+      "graphModel": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "chunking"
+     ],
+     {
+      "strategy": "hierarchical",
+      "parentMaxTokens": 1500,
+      "childMaxTokens": 300,
+      "overlapTokens": 60
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb on Pinecone, MongoDB-style keys refused",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "pinecone",
+      "connectionString": "https://kb.svc.pinecone.io",
+      "credentialsSecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:kb-AbCdEf",
+      "textField": "text",
+      "metadataField": "meta",
+      "collectionName": "x"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.collectionName",
+     "message": "does not apply to the pinecone store"
+    }
+   ]
+  },
+  {
+   "name": "kb vector store: an unknown store",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "chroma"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.type",
+     "message": "must be one of: opensearchServerless, opensearchManaged, aurora, neptuneAnalytics, pinecone, mongodbAtlas"
+    }
+   ]
+  },
+  {
+   "name": "kb vector store: missing settings, an accountless ARN, a bad column",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "aurora",
+      "resourceArn": "arn:aws:rds:us-east-1::cluster:kb",
+      "vectorField": "bad field"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.credentialsSecretArn",
+     "message": "is required for the aurora store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.databaseName",
+     "message": "is required for the aurora store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.tableName",
+     "message": "is required for the aurora store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.primaryKeyField",
+     "message": "is required for the aurora store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.textField",
+     "message": "is required for the aurora store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.metadataField",
+     "message": "is required for the aurora store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.resourceArn",
+     "message": "\"arn:aws:rds:us-east-1::cluster:kb\" does not match ^arn:aws(-cn|-us-gov)?:rds:[a-z0-9-]+:[0-9]{12}:cluster:[a-zA-Z0-9-]{1,63}$"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.vectorField",
+     "message": "\"bad field\" does not match ^[a-zA-Z0-9_-]{1,63}$"
+    }
+   ]
+  },
+  {
+   "name": "an existing Knowledge Base takes no vector store",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "knowledgeBaseId"
+     ],
+     "ABCDEFGH12"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.collectionArn",
+     "message": "is required for the opensearchServerless store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.indexName",
+     "message": "is required for the opensearchServerless store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.vectorField",
+     "message": "is required for the opensearchServerless store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.textField",
+     "message": "is required for the opensearchServerless store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore.metadataField",
+     "message": "is required for the opensearchServerless store"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.vectorStore",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    }
+   ]
+  },
+  {
+   "name": "kb from a web crawl on OpenSearch Serverless",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "web",
+      "seedUrls": [
+       "https://docs.example.com/"
+      ],
+      "scope": "hostOnly",
+      "rateLimit": 60,
+      "maxPages": 500,
+      "exclusionFilters": [
+       ".*\\.pdf$"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb from Confluence with content filters",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "confluence",
+      "hostUrl": "https://acme.atlassian.net",
+      "authType": "oauth2",
+      "credentialsSecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:c-AbCdEf",
+      "filters": [
+       {
+        "objectType": "Page",
+        "include": [
+         ".*Policy.*"
+        ]
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "kb from SharePoint Online",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "sharepoint",
+      "domain": "acme",
+      "siteUrls": [
+       "https://acme.sharepoint.com/sites/hr"
+      ],
+      "tenantId": "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0",
+      "credentialsSecretArn": "arn:aws:secretsmanager:us-east-1:123456789012:secret:c-AbCdEf"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a connector needs OpenSearch Serverless, and replaces s3Uri",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "s3Uri"
+     ],
+     "s3://acme-docs-111122223333"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "web",
+      "seedUrls": [
+       "https://docs.example.com/"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.type",
+     "message": "needs vectorStore.type \"opensearchServerless\": AWS supports the web connector only on OpenSearch Serverless"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource",
+     "message": "takes the place of s3Uri: the documents come from one or the other"
+    }
+   ]
+  },
+  {
+   "name": "kb connector: an unknown connector",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "gdrive"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.type",
+     "message": "must be one of: web, confluence, sharepoint, salesforce"
+    }
+   ]
+  },
+  {
+   "name": "kb web crawl: bad URLs, ranges, scope, user agent, a key of another connector",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "web",
+      "seedUrls": [
+       "ftp://x"
+      ],
+      "scope": "all",
+      "rateLimit": 999,
+      "maxPages": 0,
+      "userAgent": "short",
+      "hostUrl": "https://x.y"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.seedUrls[0]",
+     "message": "\"ftp://x\" does not match ^https?://[A-Za-z0-9]\\S*$"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.scope",
+     "message": "must be one of: hostOnly, subdomains"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.rateLimit",
+     "message": "must be a whole number from 1 to 300"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.maxPages",
+     "message": "must be a whole number from 1 to 25000"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.userAgent",
+     "message": "\"short\" does not match ^.{15,40}$"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.hostUrl",
+     "message": "does not apply to the web connector"
+    }
+   ]
+  },
+  {
+   "name": "kb SaaS connector: missing settings, a bad secret ARN, malformed filters",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "vectorStore"
+     ],
+     {
+      "type": "opensearchServerless",
+      "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123",
+      "indexName": "kb-index",
+      "vectorField": "vec",
+      "textField": "text",
+      "metadataField": "meta"
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "confluence",
+      "hostUrl": "http://acme.atlassian.net",
+      "credentialsSecretArn": "arn:aws:secretsmanager:us-east-1::secret:x",
+      "filters": [
+       {
+        "objectType": "",
+        "include": [],
+        "bogus": 1
+       },
+       "Page"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.authType",
+     "message": "is required for the confluence connector"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.hostUrl",
+     "message": "\"http://acme.atlassian.net\" does not match ^https://[A-Za-z0-9]\\S*$"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.credentialsSecretArn",
+     "message": "\"arn:aws:secretsmanager:us-east-1::secret:x\" does not match ^arn:aws(-cn|-us-gov)?:secretsmanager:[a-z0-9-]{1,20}:[0-9]{12}:secret:[a-zA-Z0-9!/_+=.@-]{1,512}$"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.filters[0].bogus",
+     "message": "unknown key; allowed: objectType, include, exclude"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.filters[0].objectType",
+     "message": "is required: a content type such as Page, 1 to 50 characters"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.filters[0].include",
+     "message": "must list 1 to 25 patterns"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.filters[1]",
+     "message": "must be {\"objectType\": \"...\", \"include\": [...], \"exclude\": [...]}"
+    }
+   ]
+  },
+  {
+   "name": "an existing Knowledge Base takes no connector",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "knowledgeBaseId"
+     ],
+     "ABCDEFGH12"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb",
+      "dataSource"
+     ],
+     {
+      "type": "web",
+      "seedUrls": [
+       "https://docs.example.com/"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource.type",
+     "message": "needs vectorStore.type \"opensearchServerless\": AWS supports the web connector only on OpenSearch Serverless"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.dataSource",
+     "message": "does not apply with knowledgeBaseId: that Knowledge Base already has its documents and embeddings"
+    }
+   ]
+  },
+  {
+   "name": "model overrides with no `override` grant are offered to nobody",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "models"
+     ],
+     {
+      "overrides": [
+       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+       "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.models.overrides",
+     "message": "only a person granted `override` can pick a run's models, and no group is granted it in authorization.actions, so nobody can"
+    }
+   ]
+  },
+  {
+   "name": "model overrides granted to a group raise nothing",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "models"
+     ],
+     {
+      "overrides": [
+       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+       "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "authorization",
+      "actions",
+      "override"
+     ],
+     [
+      "operators"
+     ]
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "model overrides are model ids, each listed once",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "models"
+     ],
+     {
+      "overrides": [
+       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+       "",
+       "litellm/",
+       7
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "authorization",
+      "actions",
+      "override"
+     ],
+     [
+      "operators"
+     ]
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.models.overrides[1]",
+     "message": "is listed twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.models.overrides[2]",
+     "message": "must be a model id"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.models.overrides[3]",
+     "message": "names no model: write litellm/ and the proxy's model name, e.g. litellm/gpt-4o"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.models.overrides[4]",
+     "message": "must be a model id"
+    }
+   ]
+  },
+  {
+   "name": "an agent's fallback models: at most 3, never its own model",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "models"
+     ],
+     {
+      "fallback": [
+       "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+       "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+       "litellm/gpt-4o"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.fallback",
+     "message": "at most 3 models: each is tried in turn while the step waits"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.fallback[1]",
+     "message": "is this agent's own model"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.fallback[2]",
+     "message": "is listed twice"
+    }
+   ]
+  },
+  {
+   "name": "a fallback that differs from the agent's own model is fine",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "model"
+     ],
+     "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "report",
+      "models"
+     ],
+     {
+      "fallback": [
+       "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+       "litellm/gpt-4o"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "route rules: one condition each, a whole number or a pattern",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "models"
+     ],
+     {
+      "route": [
+       {
+        "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "inputTokensOver": 0
+       },
+       {
+        "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "matches": "(invoice"
+       },
+       {
+        "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+       },
+       {
+        "inputTokensOver": 5,
+        "matches": "x",
+        "why": 1
+       },
+       {
+        "model": "",
+        "inputTokensOver": 2.5
+       },
+       {
+        "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "matches": ""
+       },
+       "big"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[0].inputTokensOver",
+     "message": "must be a whole number from 1 to 1000000"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[1].matches",
+     "message": "is not a valid regular expression"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[2]",
+     "message": "set exactly one of `inputTokensOver` / `matches`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[3].why",
+     "message": "unknown key; a rule takes: model, inputTokensOver, matches"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[3].model",
+     "message": "needs the model this rule picks"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[3]",
+     "message": "set exactly one of `inputTokensOver` / `matches`"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[4].model",
+     "message": "must be a model id"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[4].inputTokensOver",
+     "message": "must be a whole number from 1 to 1000000"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[5].matches",
+     "message": "must be a regular expression of 1 to 200 characters"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route[6]",
+     "message": "must be {\"model\": ..., \"inputTokensOver\": N} or {\"model\": ..., \"matches\": \"...\"}"
+    }
+   ]
+  },
+  {
+   "name": "a route rule by size and one by subject are fine",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "models"
+     ],
+     {
+      "route": [
+       {
+        "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "inputTokensOver": 20000
+       },
+       {
+        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "matches": "invoice|refund"
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "models does not apply to a remote agent",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "models"
+     ],
+     {
+      "fallback": [
+       "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.models",
+     "message": "`models` does not apply to runtime \"a2a\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "models takes fallback and route only",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "models"
+     ],
+     {
+      "fallbacks": [
+       "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      ],
+      "route": "x"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.fallbacks",
+     "message": "unknown key; allowed: fallback, route"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.models.route",
+     "message": "must be an array"
+    }
+   ]
+  },
+  {
+   "name": "harness: limits are bounded, shell is a warning, and code and identity keys do not apply",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "  ",
+      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "temperature": 0.2,
+      "maxTokens": 2000,
+      "harness": {
+       "maxIterations": 0,
+       "timeoutSeconds": 901,
+       "shell": true,
+       "memory": true
+      },
+      "tool": "docs",
+      "framework": "strands",
+      "stopSequences": [
+       "END"
+      ],
+      "agentcore": {
+       "identity": {
+        "outbound": [
+         "crm"
+        ]
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.instructions",
+     "message": "write the system prompt the harness is created with"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.maxIterations",
+     "message": "must be a whole number from 1 to 100"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.timeoutSeconds",
+     "message": "must be a whole number from 1 to 900"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.shell",
+     "message": "the agent can run shell commands and reach the internet from its own session, with the request and every earlier step's output in hand"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.agentcore.identity",
+     "message": "a harness agent calls no API with this build's identities — remove it"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.shell",
+     "message": "shell commands run in the session that holds this agent's Gateway token and model API key — turn shell off unless the agent needs it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.memory",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.framework",
+     "message": "`framework` does not apply to runtime \"harness\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.stopSequences",
+     "message": "`stopSequences` does not apply to runtime \"harness\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "harness: Gateway tools, MCP, browser, code interpreter, skills, memory, a container, mounts, a VPC and an endpoint are valid",
+   "ops": [
+    [
+     "set",
+     [
+      "memories"
+     ],
+     {
+      "notes": {
+       "strategies": [
+        "semantic"
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "tool": [
+       "docs",
+       "pricing"
+      ],
+      "harness": {
+       "maxIterations": 10,
+       "browser": true,
+       "codeInterpreter": "arn:aws:bedrock-agentcore:us-east-1:123456789012:code-interpreter-custom/my_ci-AbCdEf1234",
+       "mcp": [
+        {
+         "name": "wiki",
+         "url": "https://wiki.example.com/mcp"
+        }
+       ],
+       "skills": [
+        {
+         "aws": [
+          "core-skills/*"
+         ]
+        },
+        {
+         "git": "https://github.com/anthropics/skills",
+         "path": "skills/docx"
+        },
+        {
+         "s3": "s3://acme-skills-111122223333/style/"
+        }
+       ],
+       "memory": "notes",
+       "container": "123456789012.dkr.ecr.us-east-1.amazonaws.com/agent-env:v1",
+       "mounts": [
+        {
+         "session": "/mnt/data"
+        },
+        {
+         "efs": "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
+         "path": "/mnt/efs"
+        }
+       ],
+       "network": {
+        "subnetIds": [
+         "subnet-0123456789abcdef0"
+        ],
+        "securityGroupIds": [
+         "sg-0123456789abcdef0"
+        ]
+       },
+       "endpoint": "live"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "harness: other providers need a model and an API key, never the deployment's LiteLLM proxy",
+   "ops": [
+    [
+     "set",
+     [
+      "identities"
+     ],
+     {
+      "openaiKey": {
+       "type": "apikey"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "model": "gpt-5.4",
+      "harness": {
+       "provider": "openai",
+       "apiKey": "openaiKey"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "gem"
+     ],
+     {
+      "name": "Gem",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "harness": {
+       "provider": "gemini"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "lite"
+     ],
+     {
+      "name": "Lite",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "model": "litellm/gpt-4o",
+      "harness": {
+       "provider": "litellm",
+       "apiKey": "nope",
+       "apiBase": "https://10.0.0.5/v1"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "bed"
+     ],
+     {
+      "name": "Bed",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "harness": {
+       "provider": "azure",
+       "apiKey": "arn:aws:bedrock-agentcore:us-east-1:123456789012:token-vault/default/apikeycredentialprovider/openai",
+       "apiBase": "https://proxy.example.com"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer",
+       "gem",
+       "lite",
+       "bed"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "gem"
+     },
+     "path": "agents.gem.model",
+     "message": "harness.provider \"gemini\" needs `model`: the provider's model id"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "gem"
+     },
+     "path": "agents.gem.harness.apiKey",
+     "message": "harness.provider \"gemini\" needs `apiKey`: an apikey identity or an API key credential provider ARN"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "lite"
+     },
+     "path": "agents.lite.model",
+     "message": "a harness calls its model itself, not through this deployment's LiteLLM proxy: set harness.provider \"litellm\" and the provider's model id (e.g. gemini/gemini-2.5-pro)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "lite"
+     },
+     "path": "agents.lite.harness.apiKey",
+     "message": "\"nope\" is not an apikey identity. Declare it under `identities` (type apikey, its key in the build's secrets), or give a credential provider ARN"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "lite"
+     },
+     "path": "agents.lite.harness.apiBase",
+     "message": "must be an https:// URL on a public host"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "bed"
+     },
+     "path": "agents.bed.harness.provider",
+     "message": "must be one of: bedrock, openai, gemini, litellm"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "bed"
+     },
+     "path": "agents.bed.harness.apiBase",
+     "message": "only for harness.provider \"litellm\""
+    }
+   ]
+  },
+  {
+   "name": "harness: tools, skills and mounts take only what the harness can reach",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "tool": "docs",
+      "harness": {
+       "shell": true,
+       "browser": "arn:aws:bedrock-agentcore:us-east-1:123456789012:gateway/x",
+       "mcp": [
+        {
+         "name": "gateway",
+         "url": "http://wiki.example.com/mcp"
+        },
+        {
+         "name": "local",
+         "url": "https://localhost:8080/mcp",
+         "headers": {}
+        },
+        {
+         "name": "ip",
+         "url": "https://169.254.169.254/"
+        }
+       ],
+       "skills": [
+        {
+         "aws": [
+          "../etc"
+         ]
+        },
+        {
+         "git": "https://user@github.com/x/y"
+        },
+        {
+         "s3": "bucket/prefix"
+        },
+        {
+         "aws": [],
+         "s3": "s3://b/p/"
+        }
+       ],
+       "memory": "missing",
+       "container": "docker.io/library/python:3",
+       "mounts": [
+        {
+         "session": "/data"
+        },
+        {
+         "efs": "arn:aws:elasticfilesystem:us-east-1:123456789012:access-point/fsap-0123456789abcdef0",
+         "path": "/mnt/efs"
+        },
+        {
+         "session": "/mnt/efs/"
+        }
+       ],
+       "endpoint": "DEFAULT",
+       "hooks": []
+      },
+      "agentcore": {
+       "memory": {
+        "longTerm": [
+         "semantic"
+        ]
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.shell",
+     "message": "the agent can run shell commands and reach the internet from its own session, with the request and every earlier step's output in hand"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.hooks",
+     "message": "lifecycle hooks cannot be deployed yet: neither CloudFormation (AWS::BedrockAgentCore::Harness) nor the Terraform provider can set them on a harness"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.endpoint",
+     "message": "1-48 letters, digits and underscores, starting with a letter, not DEFAULT"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.browser",
+     "message": "must be true, false or a custom browser ARN"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mcp[0].name",
+     "message": "\"gateway\" is taken — pick another name"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mcp[0].url",
+     "message": "must be an https:// URL on a public host"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mcp[1].headers",
+     "message": "unknown key; allowed: name, url"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mcp[1].url",
+     "message": "must be an https:// URL on a public host"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mcp[2].url",
+     "message": "must be an https:// URL on a public host"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.shell",
+     "message": "shell commands run in the session that holds this agent's Gateway token and model API key — turn shell off unless the agent needs it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.skills[0].aws",
+     "message": "a list of catalog paths like \"core-skills/*\" ([] for all), relative, no \"..\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.skills[1].git",
+     "message": "must be the repository's https:// URL on a public host"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.skills[2].s3",
+     "message": "must be s3://<bucket>/<prefix>/"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.skills[3]",
+     "message": "set exactly one of \"aws\", \"git\", \"s3\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.memory",
+     "message": "\"missing\" is not one of the build's memories: (none yet)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.memory",
+     "message": "harness.memory and agentcore.memory would both store this agent's turns — keep one"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.container",
+     "message": "must be an image URI: <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag> or public.ecr.aws/<repo>:<tag>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mounts[0].session",
+     "message": "must be a path under /mnt, like /mnt/data"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mounts[1].efs",
+     "message": "EFS and S3 Files mounts need harness.network (a VPC)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.mounts[2]",
+     "message": "/mnt/efs/ is mounted twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.hooks",
+     "message": "unknown key; allowed: maxIterations, timeoutSeconds, shell, provider, apiKey, apiBase, browser, codeInterpreter, mcp, skills, memory, container, mounts, network, endpoint, arn"
+    }
+   ]
+  },
+  {
+   "name": "harness: a harness you bring takes only its ARN, an endpoint and limits",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "model": "m",
+      "tool": "docs",
+      "harness": {
+       "arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:harness/research_agent-AbCdEf1234",
+       "endpoint": "prod",
+       "timeoutSeconds": 120,
+       "shell": true
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "other"
+     ],
+     {
+      "name": "Other",
+      "runtime": "harness",
+      "harness": {
+       "arn": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/x"
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer",
+       "other"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.shell",
+     "message": "the agent can run shell commands and reach the internet from its own session, with the request and every earlier step's output in hand"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.model",
+     "message": "is set on the harness you brought (harness.arn) — remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.tool",
+     "message": "is set on the harness you brought (harness.arn) — remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.harness.shell",
+     "message": "is set on the harness you brought (harness.arn) — remove it"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "other"
+     },
+     "path": "agents.other.harness.arn",
+     "message": "must be a harness ARN: arn:aws:bedrock-agentcore:<region>:<account>:harness/<name>-<id>"
+    }
+   ]
+  },
+  {
+   "name": "a Browser tool as the Builder writes it, with an allow-list",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "web"
+     ],
+     {
+      "type": "lambda",
+      "description": "Web",
+      "source": "browser",
+      "call": "open_page",
+      "arg": "url",
+      "toolSchema": [
+       {
+        "name": "open_page",
+        "description": "Open a web page. Returns its title, visible text and links.",
+        "properties": {
+         "url": {
+          "type": "string",
+          "required": true,
+          "description": "The page to open, https:// or http://."
+         }
+        }
+       }
+      ],
+      "allowDomains": [
+       "docs.aws.amazon.com",
+       "example.org"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a Code Interpreter tool as the Builder writes it",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Sandbox",
+      "source": "codeInterpreter",
+      "call": "execute_code",
+      "arg": "code",
+      "toolSchema": [
+       {
+        "name": "execute_code",
+        "description": "Run code in a sandbox. Returns stdout, stderr and the exit status.",
+        "properties": {
+         "language": {
+          "type": "string",
+          "required": true,
+          "description": "python, javascript or typescript."
+         },
+         "code": {
+          "type": "string",
+          "required": true,
+          "description": "The program to run."
+         }
+        }
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a Browser tool's allow-list must be domain names, and it publishes only open_page",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "web"
+     ],
+     {
+      "type": "lambda",
+      "description": "Web",
+      "source": "browser",
+      "call": "browse",
+      "arg": "url",
+      "toolSchema": [
+       {
+        "name": "browse",
+        "properties": {
+         "url": {
+          "type": "string"
+         }
+        }
+       }
+      ],
+      "allowDomains": [
+       "https://docs.aws.amazon.com",
+       "*.example.com",
+       "example.com/path",
+       "Example.com",
+       "localhost",
+       "ok.example.com",
+       5
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains[6]",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains[0]",
+     "message": "\"https://docs.aws.amazon.com\" is not a domain name: write it like docs.aws.amazon.com, with no https://, path, port or *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains[1]",
+     "message": "\"*.example.com\" is not a domain name: write it like docs.aws.amazon.com, with no https://, path, port or *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains[2]",
+     "message": "\"example.com/path\" is not a domain name: write it like docs.aws.amazon.com, with no https://, path, port or *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains[3]",
+     "message": "\"Example.com\" is not a domain name: write it like docs.aws.amazon.com, with no https://, path, port or *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains[4]",
+     "message": "\"localhost\" is not a domain name: write it like docs.aws.amazon.com, with no https://, path, port or *"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.toolSchema[0].name",
+     "message": "the Browser function publishes one tool, \"open_page\""
+    }
+   ]
+  },
+  {
+   "name": "a Browser tool lists at most 50 domains",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "web"
+     ],
+     {
+      "type": "lambda",
+      "description": "Web",
+      "source": "browser",
+      "call": "open_page",
+      "arg": "url",
+      "toolSchema": [
+       {
+        "name": "open_page",
+        "description": "Open a web page. Returns its title, visible text and links.",
+        "properties": {
+         "url": {
+          "type": "string",
+          "required": true,
+          "description": "The page to open, https:// or http://."
+         }
+        }
+       }
+      ],
+      "allowDomains": [
+       "d0.example.com",
+       "d1.example.com",
+       "d2.example.com",
+       "d3.example.com",
+       "d4.example.com",
+       "d5.example.com",
+       "d6.example.com",
+       "d7.example.com",
+       "d8.example.com",
+       "d9.example.com",
+       "d10.example.com",
+       "d11.example.com",
+       "d12.example.com",
+       "d13.example.com",
+       "d14.example.com",
+       "d15.example.com",
+       "d16.example.com",
+       "d17.example.com",
+       "d18.example.com",
+       "d19.example.com",
+       "d20.example.com",
+       "d21.example.com",
+       "d22.example.com",
+       "d23.example.com",
+       "d24.example.com",
+       "d25.example.com",
+       "d26.example.com",
+       "d27.example.com",
+       "d28.example.com",
+       "d29.example.com",
+       "d30.example.com",
+       "d31.example.com",
+       "d32.example.com",
+       "d33.example.com",
+       "d34.example.com",
+       "d35.example.com",
+       "d36.example.com",
+       "d37.example.com",
+       "d38.example.com",
+       "d39.example.com",
+       "d40.example.com",
+       "d41.example.com",
+       "d42.example.com",
+       "d43.example.com",
+       "d44.example.com",
+       "d45.example.com",
+       "d46.example.com",
+       "d47.example.com",
+       "d48.example.com",
+       "d49.example.com",
+       "d50.example.com"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "web"
+     },
+     "path": "tools.web.allowDomains",
+     "message": "at most 50 domains"
+    }
+   ]
+  },
+  {
+   "name": "allowDomains on a lambda tool that is not the Browser",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "sandbox"
+     ],
+     {
+      "type": "lambda",
+      "description": "Sandbox",
+      "source": "codeInterpreter",
+      "call": "execute_code",
+      "arg": "code",
+      "toolSchema": [
+       {
+        "name": "execute_code",
+        "description": "Run code in a sandbox. Returns stdout, stderr and the exit status.",
+        "properties": {
+         "language": {
+          "type": "string",
+          "required": true,
+          "description": "python, javascript or typescript."
+         },
+         "code": {
+          "type": "string",
+          "required": true,
+          "description": "The program to run."
+         }
+        }
+       }
+      ],
+      "allowDomains": [
+       "example.com"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "sandbox"
+     },
+     "path": "tools.sandbox.allowDomains",
+     "message": "only the Browser tool (source \"browser\") reads allowDomains"
+    }
+   ]
+  },
+  {
+   "name": "a Salesforce connector, each person signing in",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "salesforce"
+     ],
+     {
+      "type": "openapi",
+      "description": "Salesforce (acme.my.salesforce.com): Query, read, create and update Salesforce records (accounts, contacts, cases, opportunities, any object).",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "Salesforce",
+        "version": "1"
+       },
+       "servers": [
+        {
+         "url": "https://acme.my.salesforce.com/services/data/v60.0"
+        }
+       ],
+       "paths": {
+        "/query": {
+         "get": {
+          "operationId": "query",
+          "summary": "Run a SOQL query, e.g. SELECT Id, Name FROM Account WHERE Name LIKE 'Acme%' LIMIT 10",
+          "parameters": [
+           {
+            "name": "q",
+            "in": "query",
+            "description": "The SOQL query",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        },
+        "/sobjects/{sObject}/{id}": {
+         "get": {
+          "operationId": "getRecord",
+          "summary": "Get one record by its object type and id",
+          "parameters": [
+           {
+            "name": "sObject",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "name": "fields",
+            "in": "query",
+            "description": "Optional comma-separated field names to return",
+            "required": false,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         },
+         "patch": {
+          "operationId": "updateRecord",
+          "summary": "Update fields of one record",
+          "parameters": [
+           {
+            "name": "sObject",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "requestBody": {
+           "required": true,
+           "content": {
+            "application/json": {
+             "schema": {
+              "type": "object",
+              "description": "Field names and their new values"
+             }
+            }
+           }
+          },
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        },
+        "/sobjects/{sObject}": {
+         "post": {
+          "operationId": "createRecord",
+          "summary": "Create a record of an object type",
+          "parameters": [
+           {
+            "name": "sObject",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "requestBody": {
+           "required": true,
+           "content": {
+            "application/json": {
+             "schema": {
+              "type": "object",
+              "description": "Field names and values, e.g. {\"Name\": \"Acme\"}"
+             }
+            }
+           }
+          },
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        }
+       }
+      },
+      "auth": "user",
+      "oauth": {
+       "clientId": "client-123",
+       "scopes": [
+        "api",
+        "refresh_token"
+       ],
+       "tokenUrl": "https://acme.my.salesforce.com/services/oauth2/token",
+       "authorizationUrl": "https://acme.my.salesforce.com/services/oauth2/authorize"
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a Jira connector, a service account's app login",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "jira"
+     ],
+     {
+      "type": "openapi",
+      "description": "Jira (11223344-a1b2-3b33-c444-def123456789): Search issues with JQL, read an issue, create one and add a comment, in Jira Cloud.",
+      "schema": {
+       "openapi": "3.0.1",
+       "info": {
+        "title": "Jira",
+        "version": "1"
+       },
+       "servers": [
+        {
+         "url": "https://api.atlassian.com/ex/jira/11223344-a1b2-3b33-c444-def123456789"
+        }
+       ],
+       "paths": {
+        "/rest/api/3/search/jql": {
+         "get": {
+          "operationId": "searchIssues",
+          "summary": "Search issues with JQL, e.g. project = OPS AND status = \"In Progress\"",
+          "parameters": [
+           {
+            "name": "jql",
+            "in": "query",
+            "description": "The JQL query",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           },
+           {
+            "name": "maxResults",
+            "in": "query",
+            "description": "How many issues to return",
+            "required": false,
+            "schema": {
+             "type": "integer"
+            }
+           },
+           {
+            "name": "fields",
+            "in": "query",
+            "description": "Optional comma-separated fields, e.g. summary,status,assignee",
+            "required": false,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        },
+        "/rest/api/2/issue/{issueIdOrKey}": {
+         "get": {
+          "operationId": "getIssue",
+          "summary": "Get one issue by key or id, e.g. OPS-12",
+          "parameters": [
+           {
+            "name": "issueIdOrKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        },
+        "/rest/api/2/issue": {
+         "post": {
+          "operationId": "createIssue",
+          "summary": "Create an issue",
+          "requestBody": {
+           "required": true,
+           "content": {
+            "application/json": {
+             "schema": {
+              "type": "object",
+              "description": "The new issue",
+              "properties": {
+               "fields": {
+                "type": "object",
+                "description": "At least project {\"key\"}, summary and issuetype {\"name\"}; optionally description (plain text)"
+               }
+              },
+              "required": [
+               "fields"
+              ]
+             }
+            }
+           }
+          },
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        },
+        "/rest/api/2/issue/{issueIdOrKey}/comment": {
+         "post": {
+          "operationId": "addComment",
+          "summary": "Add a comment to an issue",
+          "parameters": [
+           {
+            "name": "issueIdOrKey",
+            "in": "path",
+            "required": true,
+            "schema": {
+             "type": "string"
+            }
+           }
+          ],
+          "requestBody": {
+           "required": true,
+           "content": {
+            "application/json": {
+             "schema": {
+              "type": "object",
+              "description": "The comment",
+              "properties": {
+               "body": {
+                "type": "string",
+                "description": "The comment text"
+               }
+              },
+              "required": [
+               "body"
+              ]
+             }
+            }
+           }
+          },
+          "responses": {
+           "200": {
+            "description": "OK"
+           }
+          }
+         }
+        }
+       }
+      },
+      "auth": "oauth2",
+      "oauth": {
+       "clientId": "client-123",
+       "scopes": [],
+       "tokenUrl": "https://auth.atlassian.com/oauth/token"
+      }
+     }
+    ]
+   ],
+   "expect": []
   }
  ]
 }

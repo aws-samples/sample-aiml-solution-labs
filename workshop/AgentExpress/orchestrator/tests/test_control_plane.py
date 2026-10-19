@@ -49,6 +49,7 @@ def test_me_says_it_is_a_control_plane(console):
     ("POST /api/insights/run", "/api/insights/run"),
     ("GET /api/telemetry/aggregate", "/api/telemetry/aggregate"),
     ("GET /api/sessions/{id}/telemetry", "/api/sessions/abc/telemetry"),
+    ("GET /api/sessions/{id}/flow", "/api/sessions/abc/flow"),
     ("POST /api/chat", "/api/chat"),
     ("GET /api/images", "/api/images"),
 ])

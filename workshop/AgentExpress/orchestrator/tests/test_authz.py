@@ -145,7 +145,7 @@ def test_the_recognised_actions_are_exactly_the_ones_the_iac_validates(monkeypat
     authz = load_authz(None, monkeypatch)
     assert sorted(authz.ACTIONS) == [
         "admin", "audit", "cancel", "decision", "delete", "deploy", "destroy", "evaluate",
-        "insights", "rerun", "start"]
+        "insights", "override", "rerun", "start"]
 
 
 # --- claim shapes ----------------------------------------------------------

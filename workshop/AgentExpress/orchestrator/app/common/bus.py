@@ -70,9 +70,14 @@ def _apply(snap: dict[str, Any], event: dict[str, Any]) -> None:
     elif etype == "hitl_request":
         snap["overall"] = "waiting_human"
         snap["hitl"] = {"node": node, "question": event.get("question", "")}
+        if event.get("kind"):
+            # An agent asking mid-step (app/common/asks.py): what the run page needs to show it.
+            snap["hitl"].update({k: event[k] for k in ("approval", "timeoutAt", "timeoutAction",
+                                                       "kind", "askId", "tool", "args") if event.get(k)})
         if node in nodes:
             nodes[node]["status"] = "waiting_human"
-    elif etype == "hitl_resolved":
+    elif etype == "hitl_resolved" or (
+            etype == "ask_resolved" and (snap.get("hitl") or {}).get("askId") == event.get("askId")):
         snap["hitl"] = None
         if snap["overall"] == "waiting_human":
             snap["overall"] = "running"

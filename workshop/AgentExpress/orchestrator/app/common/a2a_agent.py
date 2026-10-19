@@ -52,10 +52,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 import uuid
 
+from app.common import netguard
 from app.common.base import Agent
 from app.common.config import A2A_INVOKE, AGENTS
 from app.common.errors import RemoteAgentUnavailable
@@ -70,7 +72,13 @@ _ENDPOINTS: dict = json.loads(os.getenv("A2A_ENDPOINTS", "{}"))
 _CARD_PATH = "/.well-known/agent-card.json"
 #: Sent so a version-aware agent can reject us explicitly instead of misreading the
 #: request. Agents that predate the header ignore it.
-_PROTOCOL_VERSION = "0.3"
+_PROTOCOL_VERSION = "0.3.0"   # A2A v0.3.0 AgentCard.protocolVersion form
+#: An agent hosted on AgentCore Runtime is reached at bedrock-agentcore.<region>.amazonaws.com.
+#: Its requests carry a runtime session id (at least 33 characters), so a task's polls reach
+#: the microVM that holds it, and SigV4 signs for service "bedrock-agentcore".
+#: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-a2a-protocol-contract.html
+_AGENTCORE_HOST = re.compile(r"^bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com$")
+_SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
 
 # Task lifecycle. The spec moved from lower-case-hyphen names to a TASK_STATE_*
 # enum, and both are in the wild, so compare on a normalised form.
@@ -137,10 +145,28 @@ def _require_public_host(url: str, what: str) -> None:
                 f"on the runtime if this one is deliberately private.")
 
 
+def _open(request: urllib.request.Request, timeout: float):
+    """Send one request, through the SSRF guard (app/common/netguard.py): every address the
+    host resolves to, and every redirect, is checked again at the moment of connecting.
+    _require_https above is the early, readable refusal; this is the one that holds."""
+    return netguard.urlopen(request, timeout=timeout, allow_private=_ALLOW_PRIVATE)
+
+
 #: Hosts a request may be SigV4-signed for: AWS endpoints (`*.amazonaws.com`) and Lambda
 #: Function URLs (`*.on.aws`). A signature is made with the runtime's own role, so it is
 #: never sent to anyone else's server.
 _SIGV4_HOST_SUFFIXES = (".amazonaws.com", ".on.aws")
+
+
+def _on_agentcore(url: str) -> bool:
+    from urllib.parse import urlsplit
+    return bool(_AGENTCORE_HOST.match((urlsplit(url).hostname or "").lower()))
+
+
+def _runtime_session(session_id: str, agent_id: str) -> str:
+    """A stable AgentCore runtime session id for (run, agent): 33 to 256 characters."""
+    import hashlib
+    return f"a2a-{hashlib.sha256(f'{session_id}|{agent_id}'.encode()).hexdigest()}"[:64]
 
 
 def _text_parts(parts: object) -> list[str]:
@@ -288,7 +314,8 @@ class A2AAgent(Agent):
                 f"agent '{self.id}' uses auth \"sigv4\" but no AWS credentials are available to "
                 f"sign with. In the runtime this is the execution role; locally, configure a "
                 f"profile.")
-        service = str(A2A_INVOKE.get("sigv4Service") or "lambda")
+        # AgentCore Runtime signs as "bedrock-agentcore"; a Function URL as "lambda".
+        service = str(A2A_INVOKE.get("sigv4Service") or ("bedrock-agentcore" if _AGENTCORE_HOST.match(host) else "lambda"))
         region = session.region_name or os.getenv("AWS_REGION", "us-east-1")
         signed = AWSRequest(method=request.get_method(), url=request.full_url,
                             data=request.data, headers=dict(request.headers))
@@ -298,18 +325,22 @@ class A2AAgent(Agent):
             # add — otherwise an unsigned duplicate can shadow the signed one.
             request.add_unredirected_header(header, value)
 
-    def _post(self, url: str, body: dict, token: str) -> dict:
-        """One JSON-RPC call. Returns the `result`, raising on a transport or RPC error."""
+    def _post(self, url: str, body: dict, token: str, session: str = "") -> dict:
+        """One JSON-RPC call. Returns the `result`, raising on a transport or RPC error.
+        `session` is this run's id: sent as the runtime session to an agent on AgentCore
+        Runtime (_AGENTCORE_HOST), so every call of one task lands on the same microVM."""
+        headers = self._headers(token)
+        if session and _on_agentcore(url):
+            headers[_SESSION_HEADER] = _runtime_session(session, self.id)
         request = urllib.request.Request(  # noqa: S310 - https enforced by _require_https
             _require_https(url, f"agent '{self.id}' endpoint"),
             data=json.dumps(body).encode(),
-            headers=self._headers(token),
+            headers=headers,
         )
         if self.auth == "sigv4":
             self._sign(request)
         try:
-            with urllib.request.urlopen(  # noqa: S310 - https enforced above  # nosec B310
-                    request, timeout=float(A2A_INVOKE["timeoutSeconds"])) as resp:
+            with _open(request, timeout=float(A2A_INVOKE["timeoutSeconds"])) as resp:
                 payload = json.loads(resp.read())
         except urllib.error.HTTPError as e:
             # A2A says deliver JSON-RPC errors over HTTP 200, but real servers
@@ -360,8 +391,7 @@ class A2AAgent(Agent):
         if self.auth == "sigv4":
             self._sign(request)
         try:
-            with urllib.request.urlopen(  # noqa: S310 - https enforced above  # nosec B310
-                    request, timeout=float(A2A_INVOKE["timeoutSeconds"])) as resp:
+            with _open(request, timeout=float(A2A_INVOKE["timeoutSeconds"])) as resp:
                 card = json.loads(resp.read())
         except (urllib.error.URLError, TimeoutError, ValueError) as e:
             raise RemoteAgentUnavailable(
@@ -406,6 +436,9 @@ class A2AAgent(Agent):
         return {
             "role": "user",
             "messageId": uuid.uuid4().hex,
+            # Shared across this run's calls to this agent, so a stateful remote agent can
+            # correlate them: what makes a revise cycle coherent on their side.
+            "contextId": f"{ctx.session_id}-{self.id}",
             "parts": [{"kind": "text",
                        "text": json.dumps({k: v for k, v in task.items() if v is not None},
                                           ensure_ascii=False, default=str)}],
@@ -429,20 +462,18 @@ class A2AAgent(Agent):
         return {"items": items, "caveat": RECALL_CAVEAT} if items else None
 
     def _send(self, url: str, ctx, token: str) -> dict:
+        # MessageSendParams is {message, configuration, metadata}: the context id goes on
+        # the Message (A2A v0.3.0), set in _message.
         return self._post(url, {
             "jsonrpc": "2.0",
             "id": uuid.uuid4().hex,
             "method": "message/send",
-            # A context id shared across this run's calls lets a stateful remote
-            # agent correlate them, which is what makes a revise cycle coherent
-            # on their side rather than looking like unrelated requests.
-            "params": {"message": self._message(ctx),
-                       "contextId": f"{ctx.session_id}-{self.id}"},
-        }, token)
+            "params": {"message": self._message(ctx)},
+        }, token, session=str(ctx.session_id or ""))
 
-    def _poll(self, url: str, task_id: str, token: str) -> dict:
+    def _poll(self, url: str, task_id: str, token: str, session: str = "") -> dict:
         return self._post(url, {"jsonrpc": "2.0", "id": uuid.uuid4().hex,
-                                "method": "tasks/get", "params": {"id": task_id}}, token)
+                                "method": "tasks/get", "params": {"id": task_id}}, token, session=session)
 
     async def run(self, ctx) -> str:
         if self.auth == "bearer":
@@ -495,7 +526,7 @@ class A2AAgent(Agent):
                     f"`orchestrator.a2aInvoke.maxPollSeconds` if their agent is legitimately "
                     f"this slow.")
             await asyncio.sleep(float(A2A_INVOKE["pollIntervalSeconds"]))
-            result = await asyncio.to_thread(self._poll, url, task_id, token)
+            result = await asyncio.to_thread(self._poll, url, task_id, token, str(ctx.session_id or ""))
             state = _state(result.get("status"))
 
         if state in _TERMINAL_BAD:

@@ -42,12 +42,14 @@
             "default": "sync"
           },
           "runtime": {
-            "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a'\n\nDefault: \"main\"",
+            "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
             "type": "string",
             "enum": [
               "main",
               "dedicated",
-              "a2a"
+              "a2a",
+              "task",
+              "harness"
             ],
             "default": "main"
           },
@@ -55,8 +57,151 @@
             "description": "The name of this agent's deliverable, e.g. \"claim-decision\". Names the asset type, is injected into the task prompt, and is what the framework stamps as `assetType` on the asset.\n\nRead by: nodes.py task prompt; a2a_agent.py _as_asset (the envelope on a remote reply)",
             "type": "string"
           },
+          "task": {
+            "description": "A step with no model call. {\"kind\": \"tool\", \"tool\": \"pricing\", \"arguments\": {\"service\": \"{{outputs.intake.service}}\"}} calls a tool through the Gateway (Cedar policy and interceptors apply); {\"kind\": \"code\", \"code\": \"...\"} runs a script in the AgentCore Code Interpreter sandbox; {\"kind\": \"extract\"} reads the run's PDFs and images with Amazon Textract (needs `attachments`); {\"kind\": \"output\", \"format\": \"csv\"} writes a file from earlier outputs (needs orchestrator.files). Its output is JSON, read downstream with ctx.input(<id>) like any agent's.\n\nRead by: registry.py -> TaskAgent (app/common/task_agent.py); bff/task_check.py, web/src/builder/taskCheck.ts; tasks.tf / cdk/lib/tasks.ts (IAM)",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "What the step does: \"tool\", \"code\", \"extract\" or \"output\" (taskKinds in vocabulary.json)."
+              },
+              "tool": {
+                "type": "string",
+                "description": "kind \"tool\": the key of the tool to call, in the `tools` block. Its `call` picks the published tool when it publishes several."
+              },
+              "arguments": {
+                "type": "object",
+                "description": "kind \"tool\": the arguments to send. A string may hold {{request}}, {{session}}, {{outputs.<agent>}} or {{outputs.<agent>.<field>}}; a string that is only one of those takes its value as it is (a number, a list). The tool's fixed `args` win."
+              },
+              "language": {
+                "type": "string",
+                "description": "kind \"code\": \"python\" (default), \"javascript\" or \"typescript\"."
+              },
+              "code": {
+                "type": "string",
+                "description": "kind \"code\": the script, at most 50,000 bytes. It finds the request in in/request.txt, earlier steps' outputs in in/outputs.json and the run's files in in/; what it prints is the step's output (JSON when it parses); files it writes to out/ are kept with the run."
+              },
+              "file": {
+                "type": "string",
+                "description": "kind \"extract\": the name of the run's file to read. Omit to read every PDF, PNG and JPEG the run brought."
+              },
+              "features": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "kind \"extract\": what to read besides the text, \"TABLES\" and/or \"FORMS\" (default both)."
+              },
+              "format": {
+                "type": "string",
+                "description": "kind \"output\": \"csv\", \"json\", \"markdown\" or \"txt\"."
+              },
+              "name": {
+                "type": "string",
+                "description": "kind \"output\": the file's name; it may hold {{session}} and {{outputs.<agent>.<field>}}. Default <agent id>.<format>."
+              },
+              "from": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "kind \"output\": which earlier outputs to write: agent ids, or <agent>.<field> for part of one. Default every earlier step's."
+              }
+            }
+          },
+          "instructions": {
+            "description": "The harness agent's system prompt: who it is, what it does with the request and the earlier steps' outputs, and the JSON it returns. Set on the AgentCore Harness at deploy time, so a change needs a deploy. Required, except with harness.arn (a harness you bring has its own).\n\nRead by: harness.tf / cdk/lib/harness.ts -> the harness's systemPrompt; harness_agent.py (telemetry)",
+            "type": "string"
+          },
+          "harness": {
+            "description": "What a harness agent may do: {\"maxIterations\": 10, \"timeoutSeconds\": 300, \"shell\": true, \"browser\": true, \"mcp\": [...], \"skills\": [...], \"memory\": \"notes\", \"endpoint\": \"live\"}, or {\"arn\": \"...\"} to use a harness made elsewhere. The agent gets exactly the tools named here and in `tool`, and nothing else.\n\nRead by: harness.tf / cdk/lib/harness.ts -> the harness (model, tools, allowedTools, skills, memory, environment, endpoint) and its role; harness_agent.py (allowedTools, qualifier and actorId on every call, the read timeout)",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "maxIterations": {
+                "type": "integer",
+                "description": "The most model turns one step may take (1-100). Omit for the harness's own default."
+              },
+              "timeoutSeconds": {
+                "type": "integer",
+                "description": "The longest one step may run, in seconds (1-900). Omit for the harness's own default."
+              },
+              "shell": {
+                "type": "boolean",
+                "description": "Let the agent run shell commands and read and write files in its own isolated session, which can reach the internet. Default false."
+              },
+              "provider": {
+                "type": "string",
+                "description": "Who serves the model: \"bedrock\" (default), \"openai\", \"gemini\" or \"litellm\" (any LiteLLM provider, model ids like gemini/gemini-2.5-pro). Anything but bedrock needs `model`; openai and gemini need `apiKey`."
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "The model provider's API key: the name of an `identities` entry of type apikey (its key in the build's secrets; the deploy makes an AgentCore API key credential provider from it) or the ARN of an existing API key credential provider. Never the key itself."
+              },
+              "apiBase": {
+                "type": "string",
+                "description": "provider \"litellm\" only: the https:// URL of an OpenAI-compatible endpoint (a proxy or gateway) on a public host. The API key is sent to it."
+              },
+              "browser": {
+                "type": [
+                  "boolean",
+                  "string"
+                ],
+                "description": "Give the agent the AgentCore Browser: true for the managed one, or a custom browser's ARN."
+              },
+              "codeInterpreter": {
+                "type": [
+                  "boolean",
+                  "string"
+                ],
+                "description": "Give the agent the AgentCore Code Interpreter: true for the managed one, or a custom code interpreter's ARN."
+              },
+              "mcp": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "Remote MCP servers the agent may call, up to 10: [{\"name\": \"docs\", \"url\": \"https://docs.example.com/mcp\"}]. https:// on a public host; no headers (no secrets in workflow.json)."
+              },
+              "skills": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "Skills the harness fetches, up to 20, each one of: {\"aws\": [\"core-skills/*\"]} (the AWS skills catalog; [] for all), {\"git\": \"https://github.com/org/repo\", \"path\": \"skills/x\", \"credential\": \"<apikey identity or ARN>\"}, {\"s3\": \"s3://bucket/prefix/\"}."
+              },
+              "memory": {
+                "type": "string",
+                "description": "The name of one of the build's `memories`: the harness keeps its conversation there and recalls long-term records itself, per user by that memory's scope. Default: no memory on the harness. Not with agentcore.memory."
+              },
+              "container": {
+                "type": "string",
+                "description": "Your own container image for the session (linux/arm64): <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag> or public.ecr.aws/... The role may pull that repository only."
+              },
+              "mounts": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "Up to 5 filesystems under /mnt: {\"session\": \"/mnt/data\"} (per-session storage, kept across stop and resume), {\"efs\": \"<EFS access point ARN>\", \"path\": \"/mnt/efs\"}, {\"s3Files\": \"<S3 Files access point ARN>\", \"path\": \"/mnt/s3\"}. EFS and S3 Files need `network`."
+              },
+              "network": {
+                "type": "object",
+                "description": "Run the session in your VPC: {\"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]}. The VPC needs endpoints for ECR (api, dkr) and S3, and Bedrock if the model is there."
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "A named endpoint the orchestrator calls: created on the harness and moved to each new version a deploy makes. With `arn`, an endpoint of that harness. Letters, digits and underscores, not DEFAULT."
+              },
+              "arn": {
+                "type": "string",
+                "description": "Use a harness made elsewhere (same account and region): arn:aws:bedrock-agentcore:<region>:<account>:harness/<name>-<id>. The deploy then creates no harness and no role for this agent, and `instructions`, `model`, `tool` and the other harness settings are not set (only endpoint, maxIterations, timeoutSeconds)."
+              }
+            }
+          },
           "model": {
-            "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model.\n\nRead by: registry.py -> agent.model -> ctx.llm",
+            "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model. `litellm/<model>` (e.g. litellm/gpt-4o) is a non-Bedrock model served by the deployment's LiteLLM proxy (litellm_base_url / -c litellmBaseUrl; DEPLOYMENT.md).\n\nRead by: registry.py -> agent.model -> ctx.llm",
             "type": "string"
           },
           "temperature": {
@@ -73,6 +218,27 @@
             "type": "array",
             "items": {
               "type": "string"
+            }
+          },
+          "models": {
+            "description": "Which model answers, call by call: `route` picks one by input size or by what the run is about, `fallback` keeps the step going when that model is busy. Each model must be one the runtimes' IAM grant covers (any foundation model or inference profile in this region and account). A run started with a model override (orchestrator.models.overrides) uses that model only, with no routing and no fallback. Every call's telemetry row says which model answered and why.\n\nRead by: app/common/model_routing.py (from ctx.llm and the tool-calling turn)",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fallback": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Models tried in order (up to 3) when this agent's model is busy or not ready: Bedrock ThrottlingException, ServiceUnavailableException or ModelNotReadyException (HTTP 429 or 503 from a LiteLLM proxy). Never on any other error: a validation, access or guardrail refusal fails the step as before."
+              },
+              "route": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "Rules that pick the model for each call, first match wins, else the agent's model (up to 10): {\"model\": \"...\", \"inputTokensOver\": 20000} when the call's prompt is estimated (characters / 4) at more tokens than that; {\"model\": \"...\", \"matches\": \"invoice|refund\"} when the run's request or subject matches that regular expression (case-insensitive)."
+              }
             }
           },
           "framework": {
@@ -187,7 +353,7 @@
             "default": "none"
           },
           "tool": {
-            "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs.\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve",
+            "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs. On a harness agent: the Gateway tools its harness may call itself (needs the Gateway, signed in with the Cognito machine client; not tools that act as the person).\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve; harness.tf / cdk/lib/harness.ts (a harness agent's Gateway tool and allowedTools)",
             "type": [
               "string",
               "array"
@@ -254,6 +420,24 @@
             "description": "With toolMode \"model\": the most tool calls the model may make before it must work with what it has. Each call costs a Gateway call and a model turn.\n\nRead by: registry._configure -> ctx.max_tool_calls -> tool_loop\n\nDefault: 6",
             "type": "integer",
             "default": 6
+          },
+          "askPerson": {
+            "description": "Let this agent ask a person a question in the middle of its step (\"Which region did the claimant mean?\"): its model is offered an `ask_person` tool, the run waits for the answer on the run page, and the model reads it as the tool's result. true, or {\"maxQuestions\": 3, \"timeout\": \"24h\"}. Needs toolMode \"model\". A run started unattended (gates \"auto\") answers \"no person is available\". Model and tool calls made before the question are not repeated when the run resumes.\n\nRead by: app/common/asks.py ask_spec -> tool_loop (ask_person); bff/asks.py",
+            "type": [
+              "boolean",
+              "object"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "maxQuestions": {
+                "type": "integer",
+                "description": "Questions this agent may ask a person in one step, 1-10. Defaults to 3."
+              },
+              "timeout": {
+                "type": "string",
+                "description": "With no answer by then (<n>m, <n>h or <n>d, at most 30d), the question goes unanswered and the agent carries on."
+              }
+            }
           },
           "agentcore": {
             "type": "object",
@@ -334,7 +518,7 @@
                     "type": "boolean"
                   },
                   "evaluators": {
-                    "description": "Which judges to run: any of the 13 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
+                    "description": "Which judges to run: any of the 18 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy, SkillSelectionAccuracy, SkillInstructionFollowing and the three Trajectory*Match ground-truth ones — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
                     "type": "array",
                     "items": {
                       "type": "string",
@@ -371,7 +555,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "enabled": {
-                    "description": "An app-level Cedar check via ctx.policy_check. Secondary — tool calls through the Gateway are already authorized server-side by the attached engine.\n\nRead by: context.py policy_check",
+                    "description": "Has no effect, and is accepted only so older workflow.json files still load (a warning says so). AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy` instead. AgentCore has no API for a Cedar decision from agent code.\n\nRead by: nothing (validate_build.py / validate.ts warn when it is set)",
                     "type": "boolean"
                   }
                 }
@@ -509,7 +693,7 @@
                           "type": "boolean"
                         },
                         "evaluators": {
-                          "description": "Which judges to run: any of the 13 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
+                          "description": "Which judges to run: any of the 18 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy, SkillSelectionAccuracy, SkillInstructionFollowing and the three Trajectory*Match ground-truth ones — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
                           "type": "array",
                           "items": {
                             "type": "string",
@@ -546,13 +730,31 @@
                       "additionalProperties": false,
                       "properties": {
                         "enabled": {
-                          "description": "An app-level Cedar check via ctx.policy_check. Secondary — tool calls through the Gateway are already authorized server-side by the attached engine.\n\nRead by: context.py policy_check",
+                          "description": "Has no effect, and is accepted only so older workflow.json files still load (a warning says so). AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy` instead. AgentCore has no API for a Cedar decision from agent code.\n\nRead by: nothing (validate_build.py / validate.ts warn when it is set)",
                           "type": "boolean"
                         }
                       }
                     }
                   },
                   "description": "The AgentCore feature switches: memory, guardrails, evaluations, identity, policy. Omit a block to leave that capability off. See the `agentcore` spec."
+                },
+                "askPerson": {
+                  "description": "Let this agent ask a person a question in the middle of its step (\"Which region did the claimant mean?\"): its model is offered an `ask_person` tool, the run waits for the answer on the run page, and the model reads it as the tool's result. true, or {\"maxQuestions\": 3, \"timeout\": \"24h\"}. Needs toolMode \"model\". A run started unattended (gates \"auto\") answers \"no person is available\". Model and tool calls made before the question are not repeated when the run resumes.\n\nRead by: app/common/asks.py ask_spec -> tool_loop (ask_person); bff/asks.py",
+                  "type": [
+                    "boolean",
+                    "object"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "maxQuestions": {
+                      "type": "integer",
+                      "description": "Questions this agent may ask a person in one step, 1-10. Defaults to 3."
+                    },
+                    "timeout": {
+                      "type": "string",
+                      "description": "With no answer by then (<n>m, <n>h or <n>d, at most 30d), the question goes unanswered and the agent carries on."
+                    }
+                  }
                 },
                 "attachments": {
                   "description": "Let this agent's model READ the files a run is started with: documents (PDF, Word, Excel, CSV, HTML, text, Markdown, JSON...) and images uploaded on Start run, or named there as s3:// paths in a bucket orchestrator.attachments.s3 allows. Each of its model calls gets them as content next to the text (at most 5 files; documents up to 4.5 MB, images 3.75 MB). The model must accept them (Claude, Amazon Nova, ...). The files are copied into the run's own folder when it starts, so a re-run reads the same ones. Bedrock's text guardrails do not inspect them.\n\nRead by: registry.py -> agent.attachments -> ctx.llm -> attachments.load_for, llm.run_llm; bff/runfiles.py; images.tf / orchestrator-stack.ts assets bucket\n\nDefault: false",
@@ -624,8 +826,29 @@
                   "default": 6
                 },
                 "model": {
-                  "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model.\n\nRead by: registry.py -> agent.model -> ctx.llm",
+                  "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model. `litellm/<model>` (e.g. litellm/gpt-4o) is a non-Bedrock model served by the deployment's LiteLLM proxy (litellm_base_url / -c litellmBaseUrl; DEPLOYMENT.md).\n\nRead by: registry.py -> agent.model -> ctx.llm",
                   "type": "string"
+                },
+                "models": {
+                  "description": "Which model answers, call by call: `route` picks one by input size or by what the run is about, `fallback` keeps the step going when that model is busy. Each model must be one the runtimes' IAM grant covers (any foundation model or inference profile in this region and account). A run started with a model override (orchestrator.models.overrides) uses that model only, with no routing and no fallback. Every call's telemetry row says which model answered and why.\n\nRead by: app/common/model_routing.py (from ctx.llm and the tool-calling turn)",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "fallback": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Models tried in order (up to 3) when this agent's model is busy or not ready: Bedrock ThrottlingException, ServiceUnavailableException or ModelNotReadyException (HTTP 429 or 503 from a LiteLLM proxy). Never on any other error: a validation, access or guardrail refusal fails the step as before."
+                    },
+                    "route": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Rules that pick the model for each call, first match wins, else the agent's model (up to 10): {\"model\": \"...\", \"inputTokensOver\": 20000} when the call's prompt is estimated (characters / 4) at more tokens than that; {\"model\": \"...\", \"matches\": \"invoice|refund\"} when the run's request or subject matches that regular expression (case-insensitive)."
+                    }
+                  }
                 },
                 "name": {
                   "description": "Display name, shown on the diagram, in the timeline and on a review gate.\n\nRead by: registry.py -> agent.name; bff/workflow.py; the UI node title",
@@ -645,12 +868,14 @@
                   "type": "string"
                 },
                 "runtime": {
-                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a'\n\nDefault: \"main\"",
+                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
                   "type": "string",
                   "enum": [
                     "main",
                     "dedicated",
-                    "a2a"
+                    "a2a",
+                    "task",
+                    "harness"
                   ],
                   "default": "main"
                 },
@@ -674,7 +899,7 @@
                   "default": 0
                 },
                 "tool": {
-                  "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs.\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve",
+                  "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs. On a harness agent: the Gateway tools its harness may call itself (needs the Gateway, signed in with the Cognito machine client; not tools that act as the person).\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve; harness.tf / cdk/lib/harness.ts (a harness agent's Gateway tool and allowedTools)",
                   "type": [
                     "string",
                     "array"
@@ -820,7 +1045,7 @@
                           "type": "boolean"
                         },
                         "evaluators": {
-                          "description": "Which judges to run: any of the 13 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
+                          "description": "Which judges to run: any of the 18 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy, SkillSelectionAccuracy, SkillInstructionFollowing and the three Trajectory*Match ground-truth ones — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
                           "type": "array",
                           "items": {
                             "type": "string",
@@ -857,7 +1082,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "enabled": {
-                          "description": "An app-level Cedar check via ctx.policy_check. Secondary — tool calls through the Gateway are already authorized server-side by the attached engine.\n\nRead by: context.py policy_check",
+                          "description": "Has no effect, and is accepted only so older workflow.json files still load (a warning says so). AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy` instead. AgentCore has no API for a Cedar decision from agent code.\n\nRead by: nothing (validate_build.py / validate.ts warn when it is set)",
                           "type": "boolean"
                         }
                       }
@@ -935,8 +1160,29 @@
                   "default": 6
                 },
                 "model": {
-                  "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model.\n\nRead by: registry.py -> agent.model -> ctx.llm",
+                  "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model. `litellm/<model>` (e.g. litellm/gpt-4o) is a non-Bedrock model served by the deployment's LiteLLM proxy (litellm_base_url / -c litellmBaseUrl; DEPLOYMENT.md).\n\nRead by: registry.py -> agent.model -> ctx.llm",
                   "type": "string"
+                },
+                "models": {
+                  "description": "Which model answers, call by call: `route` picks one by input size or by what the run is about, `fallback` keeps the step going when that model is busy. Each model must be one the runtimes' IAM grant covers (any foundation model or inference profile in this region and account). A run started with a model override (orchestrator.models.overrides) uses that model only, with no routing and no fallback. Every call's telemetry row says which model answered and why.\n\nRead by: app/common/model_routing.py (from ctx.llm and the tool-calling turn)",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "fallback": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Models tried in order (up to 3) when this agent's model is busy or not ready: Bedrock ThrottlingException, ServiceUnavailableException or ModelNotReadyException (HTTP 429 or 503 from a LiteLLM proxy). Never on any other error: a validation, access or guardrail refusal fails the step as before."
+                    },
+                    "route": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Rules that pick the model for each call, first match wins, else the agent's model (up to 10): {\"model\": \"...\", \"inputTokensOver\": 20000} when the call's prompt is estimated (characters / 4) at more tokens than that; {\"model\": \"...\", \"matches\": \"invoice|refund\"} when the run's request or subject matches that regular expression (case-insensitive)."
+                    }
+                  }
                 },
                 "name": {
                   "description": "Display name, shown on the diagram, in the timeline and on a review gate.\n\nRead by: registry.py -> agent.name; bff/workflow.py; the UI node title",
@@ -956,12 +1202,14 @@
                   "type": "string"
                 },
                 "runtime": {
-                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a'\n\nDefault: \"main\"",
+                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
                   "type": "string",
                   "enum": [
                     "main",
                     "dedicated",
-                    "a2a"
+                    "a2a",
+                    "task",
+                    "harness"
                   ],
                   "default": "main"
                 },
@@ -985,7 +1233,7 @@
                   "default": 0
                 },
                 "tool": {
-                  "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs.\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve",
+                  "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs. On a harness agent: the Gateway tools its harness may call itself (needs the Gateway, signed in with the Cognito machine client; not tools that act as the person).\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve; harness.tf / cdk/lib/harness.ts (a harness agent's Gateway tool and allowedTools)",
                   "type": [
                     "string",
                     "array"
@@ -1128,7 +1376,7 @@
                           "type": "boolean"
                         },
                         "evaluators": {
-                          "description": "Which judges to run: any of the 13 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
+                          "description": "Which judges to run: any of the 18 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy, SkillSelectionAccuracy, SkillInstructionFollowing and the three Trajectory*Match ground-truth ones — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
                           "type": "array",
                           "items": {
                             "type": "string",
@@ -1165,7 +1413,7 @@
                       "additionalProperties": false,
                       "properties": {
                         "enabled": {
-                          "description": "An app-level Cedar check via ctx.policy_check. Secondary — tool calls through the Gateway are already authorized server-side by the attached engine.\n\nRead by: context.py policy_check",
+                          "description": "Has no effect, and is accepted only so older workflow.json files still load (a warning says so). AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy` instead. AgentCore has no API for a Cedar decision from agent code.\n\nRead by: nothing (validate_build.py / validate.ts warn when it is set)",
                           "type": "boolean"
                         }
                       }
@@ -1229,12 +1477,14 @@
                   }
                 },
                 "runtime": {
-                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a'\n\nDefault: \"main\"",
+                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
                   "type": "string",
                   "enum": [
                     "main",
                     "dedicated",
-                    "a2a"
+                    "a2a",
+                    "task",
+                    "harness"
                   ],
                   "default": "main"
                 },
@@ -1259,6 +1509,525 @@
               },
               "additionalProperties": false
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "runtime": {
+                  "const": "task"
+                }
+              },
+              "required": [
+                "runtime"
+              ]
+            },
+            "then": {
+              "properties": {
+                "agentcore": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "memory": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "longTerm": {
+                          "description": "Long-term memory strategies: \"semantic\" extracts discrete facts and insights across runs, \"summary\" keeps a running summary of each run, \"userPreference\" learns the preferences, choices and style of whoever runs the agent, \"episodic\" records what happened in a run (situation, intent, outcome) and reflects on it across runs. The framework recalls before run() and stores after. `true` is shorthand for [\"semantic\"]. userPreference and episodic are provisioned only when an agent names them: each strategy is a model call per stored turn.\n\nRead by: context.py _longterm_strategies; validated by registry.validate_features\n\nAllowed values (memoryStrategies in app/vocabulary.json): 'semantic', 'summary', 'userPreference', 'episodic'",
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "semantic",
+                              "summary",
+                              "userPreference",
+                              "episodic"
+                            ]
+                          }
+                        },
+                        "scope": {
+                          "description": "Whose memories these are. \"user\" (default): each user's own — one user's runs never feed another's. \"subject\": shared by everyone for the run's subject_id (a customer, a case), per user when a run has none. \"agent\": shared by everyone who runs this agent. \"run\": this run only. The framework builds the memory actor from it, so no namespace can reach another scope.\n\nRead by: context.py _memory_actor\n\nAllowed values (memoryScopes in app/vocabulary.json): 'user', 'subject', 'agent', 'run'\n\nDefault: \"user\"",
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "subject",
+                            "agent",
+                            "run"
+                          ],
+                          "default": "user"
+                        },
+                        "custom": {
+                          "description": "A custom long-term strategy of this agent's own: a built-in one (`base`: semantic, summary or userPreference) whose extraction follows YOUR `instructions` (what to keep, what to ignore) with the `model` you name (default: the workflow's default model). {\"base\": \"semantic\", \"instructions\": \"Keep only the customer's product configuration and open issues.\"}. Recalled like the others.\n\nRead by: orchestrator-stack.ts CustomMemoryStrategy, main.tf custom_memory_strategy, context.py _namespace_for",
+                          "type": "object"
+                        },
+                        "use": {
+                          "description": "Use a memory defined in `memories` (its strategies, expiry and scope) instead of setting them here. Each one is its own AgentCore Memory, so agents that name the same memory share what it holds, within its scope.\n\nRead by: context.py _memory_def / memory client MEMORIES; main.tf, orchestrator-stack.ts named memories",
+                          "type": "string",
+                          "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+                        }
+                      }
+                    },
+                    "guardrails": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "description": "Screen this agent's input before the model sees it. Use on any agent that reads text a human typed.\n\nRead by: context.py guardrail(\"INPUT\")",
+                          "type": "boolean"
+                        },
+                        "output": {
+                          "description": "Screen this agent's output. Use on any agent handling untrusted text.\n\nRead by: context.py guardrail(\"OUTPUT\")",
+                          "type": "boolean"
+                        },
+                        "guardrailId": {
+                          "description": "Use a DIFFERENT guardrail for this one agent, instead of the deployment's own. For a step whose content policy genuinely differs — a medical or legal stage inside a general pipeline. Omit and the deployment guardrail applies.\n\nRead by: context.py guardrail() -> the GuardrailIdentifier on the Bedrock call",
+                          "type": "string"
+                        },
+                        "use": {
+                          "description": "Apply a guardrail defined in `guardrails` instead of the deployment's own (the `guardrail` block). Turn on `input` and/or `output` to say where.\n\nRead by: context.py guardrail() via GUARDRAILS; guardrail.tf, orchestrator-stack.ts named guardrails",
+                          "type": "string",
+                          "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+                        }
+                      }
+                    },
+                    "evaluations": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "description": "Turn on AgentCore Evaluations for this agent and show its Evaluate button.\n\nRead by: evaluations/service.py is_enabled; bff/workflow.py evalAgents",
+                          "type": "boolean"
+                        },
+                        "auto": {
+                          "description": "true scores the agent automatically when the run completes; false means on demand only. Each evaluator is a billed model call, so false is the cheaper default.\n\nRead by: evaluations/service.py is_auto",
+                          "type": "boolean"
+                        },
+                        "evaluators": {
+                          "description": "Which judges to run: any of the 18 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy, SkillSelectionAccuracy, SkillInstructionFollowing and the three Trajectory*Match ground-truth ones — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^(Builtin|Custom)\\.[A-Za-z][A-Za-z0-9]*$"
+                          },
+                          "default": [
+                            "Builtin.Faithfulness"
+                          ]
+                        },
+                        "custom": {
+                          "description": "Your own LLM-as-a-judge evaluators for this agent: [{\"name\": \"policyTone\", \"instructions\": \"Score how well the reply keeps to our policy wording...\", \"model\": \"...\" (the judge; default the workflow's default model), \"scale\": [{\"value\": 1, \"label\": \"Good\", \"definition\": \"...\"}, ...] (default: a five-point scale from 0 to 1)}]. The framework creates each as an AgentCore evaluator, scores the agent's output with it like a built-in, and deletes it on destroy. The instructions may use {context} and {assistant_turn}; when they use neither, both are appended.\n\nRead by: orchestrator-stack.ts CfnEvaluator, evaluations.tf aws_bedrockagentcore_evaluator, CUSTOM_EVALUATORS -> evaluations/service.py",
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    },
+                    "identity": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "outbound": {
+                          "description": "Identities this agent may get a credential from, to call an external API DIRECTLY: names from `identities` (the framework creates their AgentCore Identity providers), or the names of providers that already exist in the account. Not needed for anything reached through the Gateway. Required when a remote agent's `auth` is \"oauth2\".\n\nRead by: context.py get_identity_token / get_api_key via IDENTITY_PROVIDERS",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "policy": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "description": "Has no effect, and is accepted only so older workflow.json files still load (a warning says so). AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy` instead. AgentCore has no API for a Cedar decision from agent code.\n\nRead by: nothing (validate_build.py / validate.ts warn when it is set)",
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  },
+                  "description": "The AgentCore feature switches: memory, guardrails, evaluations, identity, policy. Omit a block to leave that capability off. See the `agentcore` spec."
+                },
+                "attachments": {
+                  "description": "Let this agent's model READ the files a run is started with: documents (PDF, Word, Excel, CSV, HTML, text, Markdown, JSON...) and images uploaded on Start run, or named there as s3:// paths in a bucket orchestrator.attachments.s3 allows. Each of its model calls gets them as content next to the text (at most 5 files; documents up to 4.5 MB, images 3.75 MB). The model must accept them (Claude, Amazon Nova, ...). The files are copied into the run's own folder when it starts, so a re-run reads the same ones. Bedrock's text guardrails do not inspect them.\n\nRead by: registry.py -> agent.attachments -> ctx.llm -> attachments.load_for, llm.run_llm; bff/runfiles.py; images.tf / orchestrator-stack.ts assets bucket\n\nDefault: false",
+                  "type": "boolean",
+                  "default": false
+                },
+                "kind": {
+                  "description": "Whether the step completes inline or is long-running. Presentation only today: the UI shows a chip when it is not \"sync\".\n\nRead by: registry.py -> agent.kind; bff/workflow.py ships it; index.html renders the chip\n\nDefault: \"sync\"",
+                  "type": "string",
+                  "enum": [
+                    "sync",
+                    "async"
+                  ],
+                  "default": "sync"
+                },
+                "name": {
+                  "description": "Display name, shown on the diagram, in the timeline and on a review gate.\n\nRead by: registry.py -> agent.name; bff/workflow.py; the UI node title",
+                  "type": "string"
+                },
+                "produces": {
+                  "description": "The name of this agent's deliverable, e.g. \"claim-decision\". Names the asset type, is injected into the task prompt, and is what the framework stamps as `assetType` on the asset.\n\nRead by: nodes.py task prompt; a2a_agent.py _as_asset (the envelope on a remote reply)",
+                  "type": "string"
+                },
+                "runtime": {
+                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "dedicated",
+                    "a2a",
+                    "task",
+                    "harness"
+                  ],
+                  "default": "main"
+                },
+                "task": {
+                  "description": "A step with no model call. {\"kind\": \"tool\", \"tool\": \"pricing\", \"arguments\": {\"service\": \"{{outputs.intake.service}}\"}} calls a tool through the Gateway (Cedar policy and interceptors apply); {\"kind\": \"code\", \"code\": \"...\"} runs a script in the AgentCore Code Interpreter sandbox; {\"kind\": \"extract\"} reads the run's PDFs and images with Amazon Textract (needs `attachments`); {\"kind\": \"output\", \"format\": \"csv\"} writes a file from earlier outputs (needs orchestrator.files). Its output is JSON, read downstream with ctx.input(<id>) like any agent's.\n\nRead by: registry.py -> TaskAgent (app/common/task_agent.py); bff/task_check.py, web/src/builder/taskCheck.ts; tasks.tf / cdk/lib/tasks.ts (IAM)",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "description": "What the step does: \"tool\", \"code\", \"extract\" or \"output\" (taskKinds in vocabulary.json)."
+                    },
+                    "tool": {
+                      "type": "string",
+                      "description": "kind \"tool\": the key of the tool to call, in the `tools` block. Its `call` picks the published tool when it publishes several."
+                    },
+                    "arguments": {
+                      "type": "object",
+                      "description": "kind \"tool\": the arguments to send. A string may hold {{request}}, {{session}}, {{outputs.<agent>}} or {{outputs.<agent>.<field>}}; a string that is only one of those takes its value as it is (a number, a list). The tool's fixed `args` win."
+                    },
+                    "language": {
+                      "type": "string",
+                      "description": "kind \"code\": \"python\" (default), \"javascript\" or \"typescript\"."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "kind \"code\": the script, at most 50,000 bytes. It finds the request in in/request.txt, earlier steps' outputs in in/outputs.json and the run's files in in/; what it prints is the step's output (JSON when it parses); files it writes to out/ are kept with the run."
+                    },
+                    "file": {
+                      "type": "string",
+                      "description": "kind \"extract\": the name of the run's file to read. Omit to read every PDF, PNG and JPEG the run brought."
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "kind \"extract\": what to read besides the text, \"TABLES\" and/or \"FORMS\" (default both)."
+                    },
+                    "format": {
+                      "type": "string",
+                      "description": "kind \"output\": \"csv\", \"json\", \"markdown\" or \"txt\"."
+                    },
+                    "name": {
+                      "type": "string",
+                      "description": "kind \"output\": the file's name; it may hold {{session}} and {{outputs.<agent>.<field>}}. Default <agent id>.<format>."
+                    },
+                    "from": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "kind \"output\": which earlier outputs to write: agent ids, or <agent>.<field> for part of one. Default every earlier step's."
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "task"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "runtime": {
+                  "const": "harness"
+                }
+              },
+              "required": [
+                "runtime"
+              ]
+            },
+            "then": {
+              "properties": {
+                "agentcore": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "memory": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "longTerm": {
+                          "description": "Long-term memory strategies: \"semantic\" extracts discrete facts and insights across runs, \"summary\" keeps a running summary of each run, \"userPreference\" learns the preferences, choices and style of whoever runs the agent, \"episodic\" records what happened in a run (situation, intent, outcome) and reflects on it across runs. The framework recalls before run() and stores after. `true` is shorthand for [\"semantic\"]. userPreference and episodic are provisioned only when an agent names them: each strategy is a model call per stored turn.\n\nRead by: context.py _longterm_strategies; validated by registry.validate_features\n\nAllowed values (memoryStrategies in app/vocabulary.json): 'semantic', 'summary', 'userPreference', 'episodic'",
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "semantic",
+                              "summary",
+                              "userPreference",
+                              "episodic"
+                            ]
+                          }
+                        },
+                        "scope": {
+                          "description": "Whose memories these are. \"user\" (default): each user's own — one user's runs never feed another's. \"subject\": shared by everyone for the run's subject_id (a customer, a case), per user when a run has none. \"agent\": shared by everyone who runs this agent. \"run\": this run only. The framework builds the memory actor from it, so no namespace can reach another scope.\n\nRead by: context.py _memory_actor\n\nAllowed values (memoryScopes in app/vocabulary.json): 'user', 'subject', 'agent', 'run'\n\nDefault: \"user\"",
+                          "type": "string",
+                          "enum": [
+                            "user",
+                            "subject",
+                            "agent",
+                            "run"
+                          ],
+                          "default": "user"
+                        },
+                        "custom": {
+                          "description": "A custom long-term strategy of this agent's own: a built-in one (`base`: semantic, summary or userPreference) whose extraction follows YOUR `instructions` (what to keep, what to ignore) with the `model` you name (default: the workflow's default model). {\"base\": \"semantic\", \"instructions\": \"Keep only the customer's product configuration and open issues.\"}. Recalled like the others.\n\nRead by: orchestrator-stack.ts CustomMemoryStrategy, main.tf custom_memory_strategy, context.py _namespace_for",
+                          "type": "object"
+                        },
+                        "use": {
+                          "description": "Use a memory defined in `memories` (its strategies, expiry and scope) instead of setting them here. Each one is its own AgentCore Memory, so agents that name the same memory share what it holds, within its scope.\n\nRead by: context.py _memory_def / memory client MEMORIES; main.tf, orchestrator-stack.ts named memories",
+                          "type": "string",
+                          "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+                        }
+                      }
+                    },
+                    "guardrails": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "description": "Screen this agent's input before the model sees it. Use on any agent that reads text a human typed.\n\nRead by: context.py guardrail(\"INPUT\")",
+                          "type": "boolean"
+                        },
+                        "output": {
+                          "description": "Screen this agent's output. Use on any agent handling untrusted text.\n\nRead by: context.py guardrail(\"OUTPUT\")",
+                          "type": "boolean"
+                        },
+                        "guardrailId": {
+                          "description": "Use a DIFFERENT guardrail for this one agent, instead of the deployment's own. For a step whose content policy genuinely differs — a medical or legal stage inside a general pipeline. Omit and the deployment guardrail applies.\n\nRead by: context.py guardrail() -> the GuardrailIdentifier on the Bedrock call",
+                          "type": "string"
+                        },
+                        "use": {
+                          "description": "Apply a guardrail defined in `guardrails` instead of the deployment's own (the `guardrail` block). Turn on `input` and/or `output` to say where.\n\nRead by: context.py guardrail() via GUARDRAILS; guardrail.tf, orchestrator-stack.ts named guardrails",
+                          "type": "string",
+                          "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+                        }
+                      }
+                    },
+                    "evaluations": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "description": "Turn on AgentCore Evaluations for this agent and show its Evaluate button.\n\nRead by: evaluations/service.py is_enabled; bff/workflow.py evalAgents",
+                          "type": "boolean"
+                        },
+                        "auto": {
+                          "description": "true scores the agent automatically when the run completes; false means on demand only. Each evaluator is a billed model call, so false is the cheaper default.\n\nRead by: evaluations/service.py is_auto",
+                          "type": "boolean"
+                        },
+                        "evaluators": {
+                          "description": "Which judges to run: any of the 18 built-in evaluators (Builtin.<Name>; the session- and tool-call-level ones — GoalSuccessRate, ToolSelectionAccuracy, ToolParameterAccuracy, SkillSelectionAccuracy, SkillInstructionFollowing and the three Trajectory*Match ground-truth ones — are not scored by this framework yet), and Custom.<name> for one you define in `evaluations.custom`. A custom one is always run, listed or not. A custom one is either this agent's own (`evaluations.custom`) or one defined for the whole build in `evaluators`.\n\nRead by: evaluations/service.py evaluators_for; shape-checked by registry.validate_features\n\nDefault: [\"Builtin.Faithfulness\"]",
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "pattern": "^(Builtin|Custom)\\.[A-Za-z][A-Za-z0-9]*$"
+                          },
+                          "default": [
+                            "Builtin.Faithfulness"
+                          ]
+                        },
+                        "custom": {
+                          "description": "Your own LLM-as-a-judge evaluators for this agent: [{\"name\": \"policyTone\", \"instructions\": \"Score how well the reply keeps to our policy wording...\", \"model\": \"...\" (the judge; default the workflow's default model), \"scale\": [{\"value\": 1, \"label\": \"Good\", \"definition\": \"...\"}, ...] (default: a five-point scale from 0 to 1)}]. The framework creates each as an AgentCore evaluator, scores the agent's output with it like a built-in, and deletes it on destroy. The instructions may use {context} and {assistant_turn}; when they use neither, both are appended.\n\nRead by: orchestrator-stack.ts CfnEvaluator, evaluations.tf aws_bedrockagentcore_evaluator, CUSTOM_EVALUATORS -> evaluations/service.py",
+                          "type": "array",
+                          "items": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    },
+                    "identity": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "outbound": {
+                          "description": "Identities this agent may get a credential from, to call an external API DIRECTLY: names from `identities` (the framework creates their AgentCore Identity providers), or the names of providers that already exist in the account. Not needed for anything reached through the Gateway. Required when a remote agent's `auth` is \"oauth2\".\n\nRead by: context.py get_identity_token / get_api_key via IDENTITY_PROVIDERS",
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "policy": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "enabled": {
+                          "description": "Has no effect, and is accepted only so older workflow.json files still load (a warning says so). AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy` instead. AgentCore has no API for a Cedar decision from agent code.\n\nRead by: nothing (validate_build.py / validate.ts warn when it is set)",
+                          "type": "boolean"
+                        }
+                      }
+                    }
+                  },
+                  "description": "The AgentCore feature switches: memory, guardrails, evaluations, identity, policy. Omit a block to leave that capability off. See the `agentcore` spec."
+                },
+                "harness": {
+                  "description": "What a harness agent may do: {\"maxIterations\": 10, \"timeoutSeconds\": 300, \"shell\": true, \"browser\": true, \"mcp\": [...], \"skills\": [...], \"memory\": \"notes\", \"endpoint\": \"live\"}, or {\"arn\": \"...\"} to use a harness made elsewhere. The agent gets exactly the tools named here and in `tool`, and nothing else.\n\nRead by: harness.tf / cdk/lib/harness.ts -> the harness (model, tools, allowedTools, skills, memory, environment, endpoint) and its role; harness_agent.py (allowedTools, qualifier and actorId on every call, the read timeout)",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "maxIterations": {
+                      "type": "integer",
+                      "description": "The most model turns one step may take (1-100). Omit for the harness's own default."
+                    },
+                    "timeoutSeconds": {
+                      "type": "integer",
+                      "description": "The longest one step may run, in seconds (1-900). Omit for the harness's own default."
+                    },
+                    "shell": {
+                      "type": "boolean",
+                      "description": "Let the agent run shell commands and read and write files in its own isolated session, which can reach the internet. Default false."
+                    },
+                    "provider": {
+                      "type": "string",
+                      "description": "Who serves the model: \"bedrock\" (default), \"openai\", \"gemini\" or \"litellm\" (any LiteLLM provider, model ids like gemini/gemini-2.5-pro). Anything but bedrock needs `model`; openai and gemini need `apiKey`."
+                    },
+                    "apiKey": {
+                      "type": "string",
+                      "description": "The model provider's API key: the name of an `identities` entry of type apikey (its key in the build's secrets; the deploy makes an AgentCore API key credential provider from it) or the ARN of an existing API key credential provider. Never the key itself."
+                    },
+                    "apiBase": {
+                      "type": "string",
+                      "description": "provider \"litellm\" only: the https:// URL of an OpenAI-compatible endpoint (a proxy or gateway) on a public host. The API key is sent to it."
+                    },
+                    "browser": {
+                      "type": [
+                        "boolean",
+                        "string"
+                      ],
+                      "description": "Give the agent the AgentCore Browser: true for the managed one, or a custom browser's ARN."
+                    },
+                    "codeInterpreter": {
+                      "type": [
+                        "boolean",
+                        "string"
+                      ],
+                      "description": "Give the agent the AgentCore Code Interpreter: true for the managed one, or a custom code interpreter's ARN."
+                    },
+                    "mcp": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Remote MCP servers the agent may call, up to 10: [{\"name\": \"docs\", \"url\": \"https://docs.example.com/mcp\"}]. https:// on a public host; no headers (no secrets in workflow.json)."
+                    },
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Skills the harness fetches, up to 20, each one of: {\"aws\": [\"core-skills/*\"]} (the AWS skills catalog; [] for all), {\"git\": \"https://github.com/org/repo\", \"path\": \"skills/x\", \"credential\": \"<apikey identity or ARN>\"}, {\"s3\": \"s3://bucket/prefix/\"}."
+                    },
+                    "memory": {
+                      "type": "string",
+                      "description": "The name of one of the build's `memories`: the harness keeps its conversation there and recalls long-term records itself, per user by that memory's scope. Default: no memory on the harness. Not with agentcore.memory."
+                    },
+                    "container": {
+                      "type": "string",
+                      "description": "Your own container image for the session (linux/arm64): <account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag> or public.ecr.aws/... The role may pull that repository only."
+                    },
+                    "mounts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "Up to 5 filesystems under /mnt: {\"session\": \"/mnt/data\"} (per-session storage, kept across stop and resume), {\"efs\": \"<EFS access point ARN>\", \"path\": \"/mnt/efs\"}, {\"s3Files\": \"<S3 Files access point ARN>\", \"path\": \"/mnt/s3\"}. EFS and S3 Files need `network`."
+                    },
+                    "network": {
+                      "type": "object",
+                      "description": "Run the session in your VPC: {\"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]}. The VPC needs endpoints for ECR (api, dkr) and S3, and Bedrock if the model is there."
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "description": "A named endpoint the orchestrator calls: created on the harness and moved to each new version a deploy makes. With `arn`, an endpoint of that harness. Letters, digits and underscores, not DEFAULT."
+                    },
+                    "arn": {
+                      "type": "string",
+                      "description": "Use a harness made elsewhere (same account and region): arn:aws:bedrock-agentcore:<region>:<account>:harness/<name>-<id>. The deploy then creates no harness and no role for this agent, and `instructions`, `model`, `tool` and the other harness settings are not set (only endpoint, maxIterations, timeoutSeconds)."
+                    }
+                  }
+                },
+                "instructions": {
+                  "description": "The harness agent's system prompt: who it is, what it does with the request and the earlier steps' outputs, and the JSON it returns. Set on the AgentCore Harness at deploy time, so a change needs a deploy. Required, except with harness.arn (a harness you bring has its own).\n\nRead by: harness.tf / cdk/lib/harness.ts -> the harness's systemPrompt; harness_agent.py (telemetry)",
+                  "type": "string"
+                },
+                "kind": {
+                  "description": "Whether the step completes inline or is long-running. Presentation only today: the UI shows a chip when it is not \"sync\".\n\nRead by: registry.py -> agent.kind; bff/workflow.py ships it; index.html renders the chip\n\nDefault: \"sync\"",
+                  "type": "string",
+                  "enum": [
+                    "sync",
+                    "async"
+                  ],
+                  "default": "sync"
+                },
+                "maxTokens": {
+                  "description": "Output token budget. Required, because too low does not surface as \"budget exceeded\" — it surfaces as an unparseable asset, so the number belongs in front of you rather than defaulted in code.\n\nRead by: registry.py -> agent.max_tokens\n\nDefault: 4000",
+                  "type": "integer",
+                  "default": 4000
+                },
+                "model": {
+                  "description": "Bedrock model id for THIS agent. Omit to use orchestrator.defaultModel — no shipped agent sets it; the mechanism is here for when one step needs a bigger model. `litellm/<model>` (e.g. litellm/gpt-4o) is a non-Bedrock model served by the deployment's LiteLLM proxy (litellm_base_url / -c litellmBaseUrl; DEPLOYMENT.md).\n\nRead by: registry.py -> agent.model -> ctx.llm",
+                  "type": "string"
+                },
+                "name": {
+                  "description": "Display name, shown on the diagram, in the timeline and on a review gate.\n\nRead by: registry.py -> agent.name; bff/workflow.py; the UI node title",
+                  "type": "string"
+                },
+                "produces": {
+                  "description": "The name of this agent's deliverable, e.g. \"claim-decision\". Names the asset type, is injected into the task prompt, and is what the framework stamps as `assetType` on the asset.\n\nRead by: nodes.py task prompt; a2a_agent.py _as_asset (the envelope on a remote reply)",
+                  "type": "string"
+                },
+                "runtime": {
+                  "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
+                  "type": "string",
+                  "enum": [
+                    "main",
+                    "dedicated",
+                    "a2a",
+                    "task",
+                    "harness"
+                  ],
+                  "default": "main"
+                },
+                "temperature": {
+                  "description": "Sampling temperature. Defaults to 0, which is what you want for an agent that emits a structured asset. Some models (Claude Sonnet 5, for one) refuse a temperature; the call then goes without it, and the telemetry says so.\n\nRead by: registry.py -> agent.temperature\n\nDefault: 0",
+                  "type": "number",
+                  "default": 0
+                },
+                "tool": {
+                  "description": "The tool(s) this agent reads: one key in the `tools` block, or a list of them (e.g. [\"policyDocs\", \"claimsDb\"]). Each is queried before the agent reasons and its results are handed to the model as evidence. Validated — a name that does not resolve fails at plan/synth, not at run time. Omit and the agent reasons purely over upstream outputs. On a harness agent: the Gateway tools its harness may call itself (needs the Gateway, signed in with the Cognito machine client; not tools that act as the person).\n\nRead by: registry.py -> agent.tools (agent.tool = the first) -> _shared/evidence.gather -> ctx.call_tool / ctx.retrieve; harness.tf / cdk/lib/harness.ts (a harness agent's Gateway tool and allowedTools)",
+                  "type": [
+                    "string",
+                    "array"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "topP": {
+                  "description": "Nucleus sampling: only the most likely tokens whose probabilities add up to this (0-1) are considered. Unset uses the model's own default. Several Claude models accept either temperature or topP, not both: with topP set, the call leaves the temperature out if the model says so.\n\nRead by: registry.py -> agent.top_p -> ctx.llm",
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         ]
       }
@@ -1275,7 +2044,7 @@
         "additionalProperties": false,
         "properties": {
           "type": {
-            "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+            "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
             "type": "string",
             "enum": [
               "kb",
@@ -1283,7 +2052,8 @@
               "mcp",
               "openapi",
               "lambda",
-              "apigateway"
+              "apigateway",
+              "smithy"
             ]
           },
           "description": {
@@ -1320,8 +2090,243 @@
             "type": "string"
           },
           "knowledgeBaseId": {
-            "description": "Use a Knowledge Base you already have (its 10-character id), in the deploy's account and region. The framework creates no vector store, bucket or Knowledge Base, grants the retrieval function bedrock:Retrieve on exactly this one, and never deletes it on destroy. embeddingModel, dimensions, s3Uri and kmsKeyArn do not apply. Corpora are values of `corpusKey` in its documents' metadata.\n\nRead by: tool-plane.ts kbSource, kb.tf kb_existing_id -> KB_ID",
+            "description": "Use a Knowledge Base you already have (its 10-character id), in the deploy's account and region. The framework creates no vector store, bucket or Knowledge Base, grants the retrieval function bedrock:Retrieve on exactly this one, and never deletes it on destroy. embeddingModel, dimensions, s3Uri, kmsKeyArn, dataSource, vectorStore, chunking and parsing do not apply. Corpora are values of `corpusKey` in its documents' metadata.\n\nRead by: tool-plane.ts kbSource, kb.tf kb_existing_id -> KB_ID",
             "type": "string"
+          },
+          "dataSource": {
+            "description": "Take the documents from a web crawl or a Confluence, SharePoint or Salesforce site instead of files in S3. Needs vectorStore.type \"opensearchServerless\": AWS supports these connectors only on OpenSearch Serverless. Re-synced on every deploy. Credentials live in a Secrets Manager secret, by ARN; the Knowledge Base role may read that secret and nothing else (Confluence with oauth2 may also write it, to refresh the token). AWS stops accepting new connectors of these types on customer-managed knowledge bases from September 30, 2026; existing ones keep syncing. Corpus filtering needs `corpusKey` to be an attribute the connector writes; otherwise give agents no `corpus`. Not with s3Uri or knowledgeBaseId.\n\nRead by: kb_data_source.tf kb_ds -> kb.tf data source + KB role, kb-data-source.ts kbConnector -> tool-plane.ts KbDataSource + KbRole",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "web, confluence, sharepoint or salesforce (vocabulary.json kbDataSources)."
+              },
+              "seedUrls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "web: 1 to 100 start URLs, http(s). Only crawl sites you own or may crawl; the crawler follows robots.txt."
+              },
+              "scope": {
+                "type": "string",
+                "description": "web: hostOnly (the seed's host) or subdomains (its whole domain). Omit for the seed's host AND path."
+              },
+              "inclusionFilters": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "web: up to 25 regular expressions; only URLs matching one are crawled."
+              },
+              "exclusionFilters": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "web: up to 25 regular expressions; URLs matching one are skipped (wins over inclusion)."
+              },
+              "rateLimit": {
+                "type": "integer",
+                "description": "web: most pages a minute per host, 1 to 300."
+              },
+              "maxPages": {
+                "type": "integer",
+                "description": "web: most pages crawled, 1 to 25000. A site with more fails the sync."
+              },
+              "userAgent": {
+                "type": "string",
+                "description": "web: a 15 to 40 character suffix to the crawler's user agent, to allow it through bot protection."
+              },
+              "hostUrl": {
+                "type": "string",
+                "description": "confluence: your https://<name>.atlassian.net; salesforce: your instance's https:// URL."
+              },
+              "authType": {
+                "type": "string",
+                "description": "confluence: basic (an email and API token) or oauth2 (an OAuth 2.0 app). SharePoint and Salesforce always use OAuth 2.0 client credentials."
+              },
+              "credentialsSecretArn": {
+                "type": "string",
+                "description": "confluence, sharepoint, salesforce: the Secrets Manager secret holding the connector's credentials, by full ARN, with the keys AWS documents for that connector. Never the credentials themselves."
+              },
+              "domain": {
+                "type": "string",
+                "description": "sharepoint: your SharePoint Online domain (the <name> of <name>.sharepoint.com)."
+              },
+              "siteUrls": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "sharepoint: 1 to 100 site URLs, https://<name>.sharepoint.com/sites/<site>."
+              },
+              "tenantId": {
+                "type": "string",
+                "description": "sharepoint: your Microsoft 365 tenant id."
+              },
+              "filters": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "confluence, sharepoint, salesforce: up to 25 {objectType, include, exclude} entries, each a content type (e.g. Page, Attachment) and up to 25 regular expressions to include or exclude."
+              }
+            }
+          },
+          "vectorStore": {
+            "description": "Use a vector store YOU already have instead of the S3 Vectors store the framework creates: OpenSearch Serverless, OpenSearch (managed cluster), Aurora PostgreSQL with pgvector, Neptune Analytics (GraphRAG), Pinecone or MongoDB Atlas. The framework still creates the Knowledge Base, its data source (your uploads, or `s3Uri`) and the ingestion, and grants the Knowledge Base role only what AWS documents for that store, on the resource named. The store, its index (or table, or graph) and the fields named here must exist first, sized for the embedding model's dimension, and the store must let role AgentCoreKB-<agent> in (an OpenSearch Serverless data access policy, an OpenSearch domain access policy). Credentials live in Secrets Manager, by ARN. Changing it replaces the Knowledge Base. Corpus filtering needs `corpusKey` to be filterable in your store. Not with knowledgeBaseId.\n\nRead by: kb_vector_store.tf kb_vs -> kb.tf storage_configuration + KB role, kb-vector-store.ts kbVectorStore -> tool-plane.ts KnowledgeBase + KbRole",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "opensearchServerless, opensearchManaged, aurora, neptuneAnalytics, pinecone or mongodbAtlas (vocabulary.json kbVectorStores)."
+              },
+              "collectionArn": {
+                "type": "string",
+                "description": "opensearchServerless: the collection's ARN, arn:aws:aoss:<region>:<account>:collection/<id>."
+              },
+              "domainArn": {
+                "type": "string",
+                "description": "opensearchManaged: the domain's ARN, arn:aws:es:<region>:<account>:domain/<name>."
+              },
+              "domainEndpoint": {
+                "type": "string",
+                "description": "opensearchManaged: the domain's https:// endpoint."
+              },
+              "indexName": {
+                "type": "string",
+                "description": "opensearchServerless, opensearchManaged, mongodbAtlas: the vector index the Knowledge Base writes to and searches. It must already exist, with a vector field of the embedding model's dimension."
+              },
+              "resourceArn": {
+                "type": "string",
+                "description": "aurora: the Aurora PostgreSQL cluster's ARN, arn:aws:rds:<region>:<account>:cluster:<id>. The Data API must be on."
+              },
+              "databaseName": {
+                "type": "string",
+                "description": "aurora, mongodbAtlas: the database name."
+              },
+              "tableName": {
+                "type": "string",
+                "description": "aurora: the table, schema included, e.g. bedrock_integration.bedrock_kb."
+              },
+              "collectionName": {
+                "type": "string",
+                "description": "mongodbAtlas: the collection name."
+              },
+              "graphArn": {
+                "type": "string",
+                "description": "neptuneAnalytics: the graph's ARN, arn:aws:neptune-graph:<region>:<account>:graph/g-<id>. Its vector search dimension must equal the embedding dimension."
+              },
+              "graphModel": {
+                "type": "string",
+                "description": "neptuneAnalytics: the Bedrock model that extracts entities to build the graph (GraphRAG), a model id or inference profile id such as us.anthropic.claude-haiku-4-5-20251001-v1:0. The Knowledge Base role is granted that model only."
+              },
+              "connectionString": {
+                "type": "string",
+                "description": "pinecone: the index's host (connection string)."
+              },
+              "namespace": {
+                "type": "string",
+                "description": "pinecone: optional namespace in the index."
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "mongodbAtlas: the database endpoint."
+              },
+              "endpointServiceName": {
+                "type": "string",
+                "description": "mongodbAtlas: optional PrivateLink endpoint service name."
+              },
+              "textIndexName": {
+                "type": "string",
+                "description": "mongodbAtlas: optional text search index, for hybrid search."
+              },
+              "credentialsSecretArn": {
+                "type": "string",
+                "description": "aurora, pinecone, mongodbAtlas: the Secrets Manager secret holding the store's credentials, by full ARN (with its 6-character suffix). The secret itself never goes in workflow.json; the Knowledge Base role gets secretsmanager:GetSecretValue on exactly this secret."
+              },
+              "vectorField": {
+                "type": "string",
+                "description": "The field (Aurora: column) holding the vectors."
+              },
+              "textField": {
+                "type": "string",
+                "description": "The field (Aurora: column) holding each chunk's text."
+              },
+              "metadataField": {
+                "type": "string",
+                "description": "The field (Aurora: column) holding Bedrock's own metadata."
+              },
+              "primaryKeyField": {
+                "type": "string",
+                "description": "aurora: the primary key column."
+              },
+              "customMetadataField": {
+                "type": "string",
+                "description": "aurora: optional jsonb column for your own metadata, so corpus filtering works without a column per attribute."
+              }
+            }
+          },
+          "chunking": {
+            "description": "How the documents are split into chunks before they are embedded. Omit it for Bedrock's default (about 300 tokens, whole sentences). fixedSize: maxTokens + overlapPercentage. hierarchical: parentMaxTokens + childMaxTokens + overlapTokens; search matches the small chunks and returns their large parent (AWS does not recommend it with S3 Vectors, the store this framework creates, because large chunks can exceed its per-vector metadata limit). semantic: maxTokens + bufferSize + breakpointPercentileThreshold; splits where the meaning changes, at an extra model cost. none: each file is one chunk. Chunking cannot be changed in place: changing it replaces the data source and re-ingests every document. Not with knowledgeBaseId.\n\nRead by: kb_ingestion.tf kb_chunking -> kb.tf data source, kb-ingestion.ts kbIngestion -> tool-plane.ts KbDataSource",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "description": "fixedSize, hierarchical, semantic or none (vocabulary.json kbChunkingStrategies)."
+              },
+              "maxTokens": {
+                "type": "integer",
+                "description": "fixedSize and semantic: the most tokens in one chunk, 1 to 8192."
+              },
+              "overlapPercentage": {
+                "type": "integer",
+                "description": "fixedSize: how much of each chunk repeats at the start of the next, 1 to 99 percent."
+              },
+              "parentMaxTokens": {
+                "type": "integer",
+                "description": "hierarchical: the most tokens in a large (parent) chunk, 1 to 8192."
+              },
+              "childMaxTokens": {
+                "type": "integer",
+                "description": "hierarchical: the most tokens in a small (child) chunk, 1 to 8192, and smaller than parentMaxTokens."
+              },
+              "overlapTokens": {
+                "type": "integer",
+                "description": "hierarchical: tokens repeated between neighbouring chunks of the same layer, 1 or more."
+              },
+              "bufferSize": {
+                "type": "integer",
+                "description": "semantic: how many sentences either side are compared with each sentence, 0 or 1."
+              },
+              "breakpointPercentileThreshold": {
+                "type": "integer",
+                "description": "semantic: how different two sentences must be to start a new chunk, 50 to 99. Higher means fewer, larger chunks."
+              }
+            }
+          },
+          "parsing": {
+            "description": "How the documents are read before they are split. Omit it for Bedrock's default parser: text only, at no charge. foundationModel sends every PDF (even text-only ones) and image to the model you name, which also reads tables, charts and figures, at that model's token price; the Knowledge Base role is granted bedrock:InvokeModel on that model only. Parsing cannot be changed in place: changing it replaces the data source and re-ingests every document. Not with knowledgeBaseId.\n\nRead by: kb_ingestion.tf kb_parsing -> kb.tf data source + KB role, kb-ingestion.ts kbIngestion -> tool-plane.ts KbDataSource + KbRole",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "description": "foundationModel (vocabulary.json kbParsingStrategies)."
+              },
+              "model": {
+                "type": "string",
+                "description": "The Bedrock model that reads the documents: a model id such as anthropic.claude-3-haiku-20240307-v1:0, or an inference profile id such as us.amazon.nova-pro-v1:0. Claude, Nova and Llama 4 vision models can parse."
+              },
+              "prompt": {
+                "type": "string",
+                "description": "Optional instructions for the model on how to read the documents, up to 10000 characters. Omit for Bedrock's own prompt."
+              }
+            }
           },
           "corpusKey": {
             "description": "The metadata attribute an agent's `corpus` is matched against. Defaults to \"doc_type\", which is what this framework's ingestion sidecars write. Set it when your documents are already tagged with something else — a customer id, a product line, a classification — so a corpus need not be a folder name.\n\nRead by: KB_CORPUS_KEY -> kb_lambda/handler.py; the generated Cedar permit\n\nDefault: \"doc_type\"",
@@ -1363,11 +2368,11 @@
             "type": "string"
           },
           "schemaS3Uri": {
-            "description": "s3:// URI of an OpenAPI schema YOU already host. The framework reads nothing and uploads nothing; it points the Gateway target at this object and grants the Gateway role GetObject on it. Exclusive with source.\n\nRead by: tools.tf, tool-plane.ts",
+            "description": "s3:// URI of an OpenAPI schema YOU already host. The framework reads nothing and uploads nothing; it points the Gateway target at this object and grants the Gateway role GetObject on it. Exclusive with source. For type=\"smithy\": the Smithy JSON model, same rules.\n\nRead by: tools.tf, tool-plane.ts",
             "type": "string"
           },
           "schema": {
-            "description": "The OpenAPI 3 document itself, inline — written in the Build view, uploaded from a file, or drafted by the AgentExpress Assistant from a description of your API. The Gateway gets it as an inline payload, so there is no bucket to host it in. Every operation needs an operationId (it becomes the tool name), and it may not declare securitySchemes: auth comes from `auth`. Exclusive with schemaS3Uri and source.\n\nRead by: tool-plane.ts openApiSchema.inlinePayload, tools.tf open_api_schema.inline_payload",
+            "description": "The OpenAPI 3 document itself, inline — written in the Build view, uploaded from a file, or drafted by the AgentExpress Assistant from a description of your API. The Gateway gets it as an inline payload, so there is no bucket to host it in. Every operation needs an operationId (it becomes the tool name), and it may not declare securitySchemes: auth comes from `auth`. Exclusive with schemaS3Uri and source. For type=\"smithy\": the Smithy 2.0 JSON AST of an AWS service ({\"smithy\": \"2.0\", \"shapes\": {...}} with one service shape using aws.protocols#restJson1); each operation becomes a tool. The Gateway takes Smithy models for AWS services only, up to 10 MB. Exclusive with schemaS3Uri.\n\nRead by: tool-plane.ts openApiSchema.inlinePayload, tools.tf open_api_schema.inline_payload, tools_smithy.tf smithy_model.inline_payload, smithy-tool.ts smithyModel.inlinePayload",
             "type": "object"
           },
           "lambdaArn": {
@@ -1402,7 +2407,7 @@
             }
           },
           "connectorVersion": {
-            "description": "Pin the managed web-search connector's version. Omit to take the current one.\n\nRead by: tools.tf, tool-plane.ts",
+            "description": "Pin the managed web-search connector's version. Terraform pins 1.2.0 when this is omitted (a target created without a version gets the connector's default, 1.1.0, and keeps it). CDK cannot pin a version, so a CDK deploy refuses this key.\n\nRead by: tools.tf, tool-plane.ts",
             "type": "string"
           },
           "listingMode": {
@@ -1447,6 +2452,18 @@
           },
           "args": {
             "description": "Fixed extra arguments sent on every call, e.g. a page size.\n\nRead by: TOOLS_JSON -> gateway/client.py",
+            "type": "object"
+          },
+          "approval": {
+            "description": "Every call of this tool waits for a person who sees the tool and its exact arguments: approve runs it, deny tells the agent it was refused and it carries on. \"person\" is decided on the run page; \"event\" is also published as an \"AgentExpress Approval Requested\" event and answerable with an \"AgentExpress Approval Decision\" event. For tools that act (send, pay, delete). Cedar applies too: a tool its policy hides is never put to a person. A run started unattended (gates \"auto\") refuses the call.\n\nRead by: app/common/asks.py approval_of -> tool_loop, context.call_tool; bff/asks.py",
+            "type": "string",
+            "enum": [
+              "person",
+              "event"
+            ]
+          },
+          "approvalTimeout": {
+            "description": "With `approval`: {\"after\": \"1h\", \"action\": \"approve\" | \"deny\"}. A call nobody decides by then takes the action, as a review gate's `timeout` does.\n\nRead by: app/common/asks.py approval_of; bff/gates.py sweep",
             "type": "object"
           },
           "rowPath": {
@@ -1496,7 +2513,7 @@
             "type": "integer"
           },
           "domains": {
-            "description": "Which domains web search may return, e.g. {\"include\": [\"docs.aws.amazon.com\"]}. Applied on the Gateway TARGET, so it is hidden from the agent and enforced on every request rather than asked for per call — a prompt-injected instruction cannot widen it.\n\nRead by: tools.tf / tool-plane.ts, as the target's domainFilter — never sent in a request",
+            "description": "Which domains web search may return, e.g. {\"include\": [\"docs.aws.amazon.com\"]}. Applied on the Gateway TARGET, so it is hidden from the agent and enforced on every request rather than asked for per call — a prompt-injected instruction cannot widen it. `include` needs connector 1.2.0, so Terraform only (a CDK deploy refuses it); `exclude` works on both.\n\nRead by: tools.tf / tool-plane.ts, as the target's domainFilter — never sent in a request",
             "type": "object",
             "additionalProperties": false,
             "properties": {
@@ -1516,12 +2533,19 @@
               }
             }
           },
+          "allowDomains": {
+            "description": "The Browser tool (source \"browser\") only: the domains it may open, e.g. [\"docs.aws.amazon.com\"]. Each entry also allows the names under it (docs.aws.amazon.com allows a.docs.aws.amazon.com). Written as a name, with no https://, path, port or *; at most 50. Checked by the tool's function for the page asked for AND the page a redirect ends on, so a model cannot widen it. Left out: any public page.\n\nRead by: tools.tf / browser-tool.ts, as the function's ALLOW_DOMAINS; app/tools/browser/handler.py",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "publishedFrom": {
-            "description": "Ignore results published before this ISO-8601 date — for a question where stale guidance is worse than no guidance.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.from",
+            "description": "Ignore results published before this ISO-8601 date — for a question where stale guidance is worse than no guidance. Needs connector 1.2.0, so Terraform only: a CDK deploy refuses it.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.from",
             "type": "string"
           },
           "publishedTo": {
-            "description": "Ignore results published after this ISO-8601 date.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.to",
+            "description": "Ignore results published after this ISO-8601 date. Needs connector 1.2.0, so Terraform only: a CDK deploy refuses it.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.to",
             "type": "string"
           },
           "auth": {
@@ -1540,6 +2564,27 @@
           "service": {
             "description": "The AWS service name to sign for when auth is \"sigv4\". Auto-detected from the endpoint; set it only when that guess is wrong.\n\nRead by: tools.tf auth_service, tool-plane.ts",
             "type": "string"
+          },
+          "allow": {
+            "description": "What a Smithy tool may call: the AWS actions and the resources they act on, granted to this build's Gateway role, which signs every call (a Smithy target always uses the Gateway's own role). {\"actions\": [\"dynamodb:GetItem\"], \"resources\": [\"arn:aws:dynamodb:us-east-1:111122223333:table/orders\"]}. Each action is one named action (no *), at most 20; each resource a full ARN with its region and account written out and no bare *, at most 20. Services that change who may do what, run code, or hold secrets (see smithyDeniedServices) are refused.\n\nRead by: tools_smithy.tf smithy_statements -> gateway.tf GatewayPolicy, smithy-tool.ts smithyStatements -> tool-plane.ts",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "IAM actions, e.g. dynamodb:GetItem. One named action each."
+              },
+              "resources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Resource ARNs the actions apply to."
+              }
+            }
           },
           "oauth": {
             "description": "With auth \"oauth2\": how to get a token with OAuth client credentials. {\"clientId\": \"...\", \"scopes\": [\"orders.read\"], and either \"discoveryUrl\" (the issuer's .well-known/openid-configuration) or \"tokenUrl\" (plus \"issuer\" when it differs from the token URL's origin)}. The client SECRET is a secret: set it in the build's secrets (the same place as an API key), never here. With auth \"user\", also \"authorizationUrl\" when you give tokenUrl rather than discoveryUrl. With auth \"obo\", optionally \"audience\": the tool's API the exchanged token is for. The framework creates an AgentCore Identity OAuth2 credential provider from these.\n\nRead by: tool-plane.ts CfnOAuth2CredentialProvider, tools.tf aws_bedrockagentcore_oauth2_credential_provider",
@@ -1654,6 +2699,35 @@
             "if": {
               "properties": {
                 "type": {
+                  "enum": [
+                    "smithy"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "required": [
+                    "schemaS3Uri"
+                  ]
+                },
+                {
+                  "required": [
+                    "schema"
+                  ]
+                }
+              ],
+              "$comment": "One of two has to say where the Smithy model is: schemaS3Uri = a JSON model you already host in S3; schema = the model itself (Smithy JSON AST), inline. None leaves the target with no operations; both is ambiguous."
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
                   "const": "kb"
                 }
               },
@@ -1663,6 +2737,45 @@
             },
             "then": {
               "properties": {
+                "chunking": {
+                  "description": "How the documents are split into chunks before they are embedded. Omit it for Bedrock's default (about 300 tokens, whole sentences). fixedSize: maxTokens + overlapPercentage. hierarchical: parentMaxTokens + childMaxTokens + overlapTokens; search matches the small chunks and returns their large parent (AWS does not recommend it with S3 Vectors, the store this framework creates, because large chunks can exceed its per-vector metadata limit). semantic: maxTokens + bufferSize + breakpointPercentileThreshold; splits where the meaning changes, at an extra model cost. none: each file is one chunk. Chunking cannot be changed in place: changing it replaces the data source and re-ingests every document. Not with knowledgeBaseId.\n\nRead by: kb_ingestion.tf kb_chunking -> kb.tf data source, kb-ingestion.ts kbIngestion -> tool-plane.ts KbDataSource",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "strategy": {
+                      "type": "string",
+                      "description": "fixedSize, hierarchical, semantic or none (vocabulary.json kbChunkingStrategies)."
+                    },
+                    "maxTokens": {
+                      "type": "integer",
+                      "description": "fixedSize and semantic: the most tokens in one chunk, 1 to 8192."
+                    },
+                    "overlapPercentage": {
+                      "type": "integer",
+                      "description": "fixedSize: how much of each chunk repeats at the start of the next, 1 to 99 percent."
+                    },
+                    "parentMaxTokens": {
+                      "type": "integer",
+                      "description": "hierarchical: the most tokens in a large (parent) chunk, 1 to 8192."
+                    },
+                    "childMaxTokens": {
+                      "type": "integer",
+                      "description": "hierarchical: the most tokens in a small (child) chunk, 1 to 8192, and smaller than parentMaxTokens."
+                    },
+                    "overlapTokens": {
+                      "type": "integer",
+                      "description": "hierarchical: tokens repeated between neighbouring chunks of the same layer, 1 or more."
+                    },
+                    "bufferSize": {
+                      "type": "integer",
+                      "description": "semantic: how many sentences either side are compared with each sentence, 0 or 1."
+                    },
+                    "breakpointPercentileThreshold": {
+                      "type": "integer",
+                      "description": "semantic: how different two sentences must be to start a new chunk, 50 to 99. Higher means fewer, larger chunks."
+                    }
+                  }
+                },
                 "corpora": {
                   "description": "The corpora an agent may retrieve from — one per top-level folder under kb_docs/. An agent scopes itself to one with its `corpus` key.\n\nRead by: tools.tf kb_corpora, kb.tf, tool-plane.ts, TOOLS_JSON",
                   "type": "array",
@@ -1685,6 +2798,88 @@
                     "stringContains"
                   ],
                   "default": "equals"
+                },
+                "dataSource": {
+                  "description": "Take the documents from a web crawl or a Confluence, SharePoint or Salesforce site instead of files in S3. Needs vectorStore.type \"opensearchServerless\": AWS supports these connectors only on OpenSearch Serverless. Re-synced on every deploy. Credentials live in a Secrets Manager secret, by ARN; the Knowledge Base role may read that secret and nothing else (Confluence with oauth2 may also write it, to refresh the token). AWS stops accepting new connectors of these types on customer-managed knowledge bases from September 30, 2026; existing ones keep syncing. Corpus filtering needs `corpusKey` to be an attribute the connector writes; otherwise give agents no `corpus`. Not with s3Uri or knowledgeBaseId.\n\nRead by: kb_data_source.tf kb_ds -> kb.tf data source + KB role, kb-data-source.ts kbConnector -> tool-plane.ts KbDataSource + KbRole",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "description": "web, confluence, sharepoint or salesforce (vocabulary.json kbDataSources)."
+                    },
+                    "seedUrls": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "web: 1 to 100 start URLs, http(s). Only crawl sites you own or may crawl; the crawler follows robots.txt."
+                    },
+                    "scope": {
+                      "type": "string",
+                      "description": "web: hostOnly (the seed's host) or subdomains (its whole domain). Omit for the seed's host AND path."
+                    },
+                    "inclusionFilters": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "web: up to 25 regular expressions; only URLs matching one are crawled."
+                    },
+                    "exclusionFilters": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "web: up to 25 regular expressions; URLs matching one are skipped (wins over inclusion)."
+                    },
+                    "rateLimit": {
+                      "type": "integer",
+                      "description": "web: most pages a minute per host, 1 to 300."
+                    },
+                    "maxPages": {
+                      "type": "integer",
+                      "description": "web: most pages crawled, 1 to 25000. A site with more fails the sync."
+                    },
+                    "userAgent": {
+                      "type": "string",
+                      "description": "web: a 15 to 40 character suffix to the crawler's user agent, to allow it through bot protection."
+                    },
+                    "hostUrl": {
+                      "type": "string",
+                      "description": "confluence: your https://<name>.atlassian.net; salesforce: your instance's https:// URL."
+                    },
+                    "authType": {
+                      "type": "string",
+                      "description": "confluence: basic (an email and API token) or oauth2 (an OAuth 2.0 app). SharePoint and Salesforce always use OAuth 2.0 client credentials."
+                    },
+                    "credentialsSecretArn": {
+                      "type": "string",
+                      "description": "confluence, sharepoint, salesforce: the Secrets Manager secret holding the connector's credentials, by full ARN, with the keys AWS documents for that connector. Never the credentials themselves."
+                    },
+                    "domain": {
+                      "type": "string",
+                      "description": "sharepoint: your SharePoint Online domain (the <name> of <name>.sharepoint.com)."
+                    },
+                    "siteUrls": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "sharepoint: 1 to 100 site URLs, https://<name>.sharepoint.com/sites/<site>."
+                    },
+                    "tenantId": {
+                      "type": "string",
+                      "description": "sharepoint: your Microsoft 365 tenant id."
+                    },
+                    "filters": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      },
+                      "description": "confluence, sharepoint, salesforce: up to 25 {objectType, include, exclude} entries, each a content type (e.g. Page, Attachment) and up to 25 regular expressions to include or exclude."
+                    }
+                  }
                 },
                 "description": {
                   "description": "Becomes the Gateway target's description. Truncated to 190 characters on deploy.\n\nRead by: tools.tf, tool-plane.ts",
@@ -1713,13 +2908,32 @@
                   "type": "string"
                 },
                 "knowledgeBaseId": {
-                  "description": "Use a Knowledge Base you already have (its 10-character id), in the deploy's account and region. The framework creates no vector store, bucket or Knowledge Base, grants the retrieval function bedrock:Retrieve on exactly this one, and never deletes it on destroy. embeddingModel, dimensions, s3Uri and kmsKeyArn do not apply. Corpora are values of `corpusKey` in its documents' metadata.\n\nRead by: tool-plane.ts kbSource, kb.tf kb_existing_id -> KB_ID",
+                  "description": "Use a Knowledge Base you already have (its 10-character id), in the deploy's account and region. The framework creates no vector store, bucket or Knowledge Base, grants the retrieval function bedrock:Retrieve on exactly this one, and never deletes it on destroy. embeddingModel, dimensions, s3Uri, kmsKeyArn, dataSource, vectorStore, chunking and parsing do not apply. Corpora are values of `corpusKey` in its documents' metadata.\n\nRead by: tool-plane.ts kbSource, kb.tf kb_existing_id -> KB_ID",
                   "type": "string"
                 },
                 "maxResults": {
                   "description": "How many results to return — retrieval depth for a kb, page size for websearch. Raising it costs tokens on every call, which is why it is config and not a constant.\n\nRead by: kb: KB_NUM_RESULTS in kb.tf / tool-plane.ts. websearch: TOOLS_JSON -> gateway/client.py\n\nDefault for type=\"kb\": 5",
                   "type": "integer",
                   "default": 5
+                },
+                "parsing": {
+                  "description": "How the documents are read before they are split. Omit it for Bedrock's default parser: text only, at no charge. foundationModel sends every PDF (even text-only ones) and image to the model you name, which also reads tables, charts and figures, at that model's token price; the Knowledge Base role is granted bedrock:InvokeModel on that model only. Parsing cannot be changed in place: changing it replaces the data source and re-ingests every document. Not with knowledgeBaseId.\n\nRead by: kb_ingestion.tf kb_parsing -> kb.tf data source + KB role, kb-ingestion.ts kbIngestion -> tool-plane.ts KbDataSource + KbRole",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "strategy": {
+                      "type": "string",
+                      "description": "foundationModel (vocabulary.json kbParsingStrategies)."
+                    },
+                    "model": {
+                      "type": "string",
+                      "description": "The Bedrock model that reads the documents: a model id such as anthropic.claude-3-haiku-20240307-v1:0, or an inference profile id such as us.amazon.nova-pro-v1:0. Claude, Nova and Llama 4 vision models can parse."
+                    },
+                    "prompt": {
+                      "type": "string",
+                      "description": "Optional instructions for the model on how to read the documents, up to 10000 characters. Omit for Bedrock's own prompt."
+                    }
+                  }
                 },
                 "policies": {
                   "description": "Policies from `policies` that govern this tool. A policy written with AgentCore::Action::\"{{tool}}\" (or \"{{tool}}___<toolName>\") is deployed once for each tool it is attached to, with {{tool}} replaced by the tool's key.\n\nRead by: policy.tf / tool-plane.ts custom policies",
@@ -1768,7 +2982,7 @@
                   "type": "string"
                 },
                 "type": {
-                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
                   "type": "string",
                   "enum": [
                     "kb",
@@ -1776,8 +2990,104 @@
                     "mcp",
                     "openapi",
                     "lambda",
-                    "apigateway"
+                    "apigateway",
+                    "smithy"
                   ]
+                },
+                "vectorStore": {
+                  "description": "Use a vector store YOU already have instead of the S3 Vectors store the framework creates: OpenSearch Serverless, OpenSearch (managed cluster), Aurora PostgreSQL with pgvector, Neptune Analytics (GraphRAG), Pinecone or MongoDB Atlas. The framework still creates the Knowledge Base, its data source (your uploads, or `s3Uri`) and the ingestion, and grants the Knowledge Base role only what AWS documents for that store, on the resource named. The store, its index (or table, or graph) and the fields named here must exist first, sized for the embedding model's dimension, and the store must let role AgentCoreKB-<agent> in (an OpenSearch Serverless data access policy, an OpenSearch domain access policy). Credentials live in Secrets Manager, by ARN. Changing it replaces the Knowledge Base. Corpus filtering needs `corpusKey` to be filterable in your store. Not with knowledgeBaseId.\n\nRead by: kb_vector_store.tf kb_vs -> kb.tf storage_configuration + KB role, kb-vector-store.ts kbVectorStore -> tool-plane.ts KnowledgeBase + KbRole",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "description": "opensearchServerless, opensearchManaged, aurora, neptuneAnalytics, pinecone or mongodbAtlas (vocabulary.json kbVectorStores)."
+                    },
+                    "collectionArn": {
+                      "type": "string",
+                      "description": "opensearchServerless: the collection's ARN, arn:aws:aoss:<region>:<account>:collection/<id>."
+                    },
+                    "domainArn": {
+                      "type": "string",
+                      "description": "opensearchManaged: the domain's ARN, arn:aws:es:<region>:<account>:domain/<name>."
+                    },
+                    "domainEndpoint": {
+                      "type": "string",
+                      "description": "opensearchManaged: the domain's https:// endpoint."
+                    },
+                    "indexName": {
+                      "type": "string",
+                      "description": "opensearchServerless, opensearchManaged, mongodbAtlas: the vector index the Knowledge Base writes to and searches. It must already exist, with a vector field of the embedding model's dimension."
+                    },
+                    "resourceArn": {
+                      "type": "string",
+                      "description": "aurora: the Aurora PostgreSQL cluster's ARN, arn:aws:rds:<region>:<account>:cluster:<id>. The Data API must be on."
+                    },
+                    "databaseName": {
+                      "type": "string",
+                      "description": "aurora, mongodbAtlas: the database name."
+                    },
+                    "tableName": {
+                      "type": "string",
+                      "description": "aurora: the table, schema included, e.g. bedrock_integration.bedrock_kb."
+                    },
+                    "collectionName": {
+                      "type": "string",
+                      "description": "mongodbAtlas: the collection name."
+                    },
+                    "graphArn": {
+                      "type": "string",
+                      "description": "neptuneAnalytics: the graph's ARN, arn:aws:neptune-graph:<region>:<account>:graph/g-<id>. Its vector search dimension must equal the embedding dimension."
+                    },
+                    "graphModel": {
+                      "type": "string",
+                      "description": "neptuneAnalytics: the Bedrock model that extracts entities to build the graph (GraphRAG), a model id or inference profile id such as us.anthropic.claude-haiku-4-5-20251001-v1:0. The Knowledge Base role is granted that model only."
+                    },
+                    "connectionString": {
+                      "type": "string",
+                      "description": "pinecone: the index's host (connection string)."
+                    },
+                    "namespace": {
+                      "type": "string",
+                      "description": "pinecone: optional namespace in the index."
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "description": "mongodbAtlas: the database endpoint."
+                    },
+                    "endpointServiceName": {
+                      "type": "string",
+                      "description": "mongodbAtlas: optional PrivateLink endpoint service name."
+                    },
+                    "textIndexName": {
+                      "type": "string",
+                      "description": "mongodbAtlas: optional text search index, for hybrid search."
+                    },
+                    "credentialsSecretArn": {
+                      "type": "string",
+                      "description": "aurora, pinecone, mongodbAtlas: the Secrets Manager secret holding the store's credentials, by full ARN (with its 6-character suffix). The secret itself never goes in workflow.json; the Knowledge Base role gets secretsmanager:GetSecretValue on exactly this secret."
+                    },
+                    "vectorField": {
+                      "type": "string",
+                      "description": "The field (Aurora: column) holding the vectors."
+                    },
+                    "textField": {
+                      "type": "string",
+                      "description": "The field (Aurora: column) holding each chunk's text."
+                    },
+                    "metadataField": {
+                      "type": "string",
+                      "description": "The field (Aurora: column) holding Bedrock's own metadata."
+                    },
+                    "primaryKeyField": {
+                      "type": "string",
+                      "description": "aurora: the primary key column."
+                    },
+                    "customMetadataField": {
+                      "type": "string",
+                      "description": "aurora: optional jsonb column for your own metadata, so corpus filtering works without a column per attribute."
+                    }
+                  }
                 }
               },
               "additionalProperties": false,
@@ -1800,7 +3110,7 @@
             "then": {
               "properties": {
                 "connectorVersion": {
-                  "description": "Pin the managed web-search connector's version. Omit to take the current one.\n\nRead by: tools.tf, tool-plane.ts",
+                  "description": "Pin the managed web-search connector's version. Terraform pins 1.2.0 when this is omitted (a target created without a version gets the connector's default, 1.1.0, and keeps it). CDK cannot pin a version, so a CDK deploy refuses this key.\n\nRead by: tools.tf, tool-plane.ts",
                   "type": "string"
                 },
                 "description": {
@@ -1808,7 +3118,7 @@
                   "type": "string"
                 },
                 "domains": {
-                  "description": "Which domains web search may return, e.g. {\"include\": [\"docs.aws.amazon.com\"]}. Applied on the Gateway TARGET, so it is hidden from the agent and enforced on every request rather than asked for per call — a prompt-injected instruction cannot widen it.\n\nRead by: tools.tf / tool-plane.ts, as the target's domainFilter — never sent in a request",
+                  "description": "Which domains web search may return, e.g. {\"include\": [\"docs.aws.amazon.com\"]}. Applied on the Gateway TARGET, so it is hidden from the agent and enforced on every request rather than asked for per call — a prompt-injected instruction cannot widen it. `include` needs connector 1.2.0, so Terraform only (a CDK deploy refuses it); `exclude` works on both.\n\nRead by: tools.tf / tool-plane.ts, as the target's domainFilter — never sent in a request",
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
@@ -1861,15 +3171,15 @@
                   }
                 },
                 "publishedFrom": {
-                  "description": "Ignore results published before this ISO-8601 date — for a question where stale guidance is worse than no guidance.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.from",
+                  "description": "Ignore results published before this ISO-8601 date — for a question where stale guidance is worse than no guidance. Needs connector 1.2.0, so Terraform only: a CDK deploy refuses it.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.from",
                   "type": "string"
                 },
                 "publishedTo": {
-                  "description": "Ignore results published after this ISO-8601 date.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.to",
+                  "description": "Ignore results published after this ISO-8601 date. Needs connector 1.2.0, so Terraform only: a CDK deploy refuses it.\n\nRead by: tools.tf, TOOLS_JSON -> gateway/client.py publishedDateFilter.to",
                   "type": "string"
                 },
                 "type": {
-                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
                   "type": "string",
                   "enum": [
                     "kb",
@@ -1877,7 +3187,8 @@
                     "mcp",
                     "openapi",
                     "lambda",
-                    "apigateway"
+                    "apigateway",
+                    "smithy"
                   ]
                 }
               },
@@ -1897,6 +3208,18 @@
             },
             "then": {
               "properties": {
+                "approval": {
+                  "description": "Every call of this tool waits for a person who sees the tool and its exact arguments: approve runs it, deny tells the agent it was refused and it carries on. \"person\" is decided on the run page; \"event\" is also published as an \"AgentExpress Approval Requested\" event and answerable with an \"AgentExpress Approval Decision\" event. For tools that act (send, pay, delete). Cedar applies too: a tool its policy hides is never put to a person. A run started unattended (gates \"auto\") refuses the call.\n\nRead by: app/common/asks.py approval_of -> tool_loop, context.call_tool; bff/asks.py",
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "event"
+                  ]
+                },
+                "approvalTimeout": {
+                  "description": "With `approval`: {\"after\": \"1h\", \"action\": \"approve\" | \"deny\"}. A call nobody decides by then takes the action, as a review gate's `timeout` does.\n\nRead by: app/common/asks.py approval_of; bff/gates.py sweep",
+                  "type": "object"
+                },
                 "arg": {
                   "description": "The parameter an agent's query goes into. Defaults to \"query\". This one key is what makes an arbitrary MCP server reachable from config, because every server names its parameters differently.\n\nRead by: TOOLS_JSON -> gateway/client.py _tool_arguments; the Cedar `context.input has <arg>` condition\n\nDefault: \"query\"",
                   "type": "string",
@@ -2023,7 +3346,7 @@
                   }
                 },
                 "type": {
-                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
                   "type": "string",
                   "enum": [
                     "kb",
@@ -2031,7 +3354,8 @@
                     "mcp",
                     "openapi",
                     "lambda",
-                    "apigateway"
+                    "apigateway",
+                    "smithy"
                   ]
                 }
               },
@@ -2054,6 +3378,18 @@
             },
             "then": {
               "properties": {
+                "approval": {
+                  "description": "Every call of this tool waits for a person who sees the tool and its exact arguments: approve runs it, deny tells the agent it was refused and it carries on. \"person\" is decided on the run page; \"event\" is also published as an \"AgentExpress Approval Requested\" event and answerable with an \"AgentExpress Approval Decision\" event. For tools that act (send, pay, delete). Cedar applies too: a tool its policy hides is never put to a person. A run started unattended (gates \"auto\") refuses the call.\n\nRead by: app/common/asks.py approval_of -> tool_loop, context.call_tool; bff/asks.py",
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "event"
+                  ]
+                },
+                "approvalTimeout": {
+                  "description": "With `approval`: {\"after\": \"1h\", \"action\": \"approve\" | \"deny\"}. A call nobody decides by then takes the action, as a review gate's `timeout` does.\n\nRead by: app/common/asks.py approval_of; bff/gates.py sweep",
+                  "type": "object"
+                },
                 "arg": {
                   "description": "The parameter an agent's query goes into. Defaults to \"query\". This one key is what makes an arbitrary MCP server reachable from config, because every server names its parameters differently.\n\nRead by: TOOLS_JSON -> gateway/client.py _tool_arguments; the Cedar `context.input has <arg>` condition\n\nDefault: \"query\"",
                   "type": "string",
@@ -2129,11 +3465,11 @@
                   "type": "string"
                 },
                 "schema": {
-                  "description": "The OpenAPI 3 document itself, inline — written in the Build view, uploaded from a file, or drafted by the AgentExpress Assistant from a description of your API. The Gateway gets it as an inline payload, so there is no bucket to host it in. Every operation needs an operationId (it becomes the tool name), and it may not declare securitySchemes: auth comes from `auth`. Exclusive with schemaS3Uri and source.\n\nRead by: tool-plane.ts openApiSchema.inlinePayload, tools.tf open_api_schema.inline_payload",
+                  "description": "The OpenAPI 3 document itself, inline — written in the Build view, uploaded from a file, or drafted by the AgentExpress Assistant from a description of your API. The Gateway gets it as an inline payload, so there is no bucket to host it in. Every operation needs an operationId (it becomes the tool name), and it may not declare securitySchemes: auth comes from `auth`. Exclusive with schemaS3Uri and source. For type=\"smithy\": the Smithy 2.0 JSON AST of an AWS service ({\"smithy\": \"2.0\", \"shapes\": {...}} with one service shape using aws.protocols#restJson1); each operation becomes a tool. The Gateway takes Smithy models for AWS services only, up to 10 MB. Exclusive with schemaS3Uri.\n\nRead by: tool-plane.ts openApiSchema.inlinePayload, tools.tf open_api_schema.inline_payload, tools_smithy.tf smithy_model.inline_payload, smithy-tool.ts smithyModel.inlinePayload",
                   "type": "object"
                 },
                 "schemaS3Uri": {
-                  "description": "s3:// URI of an OpenAPI schema YOU already host. The framework reads nothing and uploads nothing; it points the Gateway target at this object and grants the Gateway role GetObject on it. Exclusive with source.\n\nRead by: tools.tf, tool-plane.ts",
+                  "description": "s3:// URI of an OpenAPI schema YOU already host. The framework reads nothing and uploads nothing; it points the Gateway target at this object and grants the Gateway role GetObject on it. Exclusive with source. For type=\"smithy\": the Smithy JSON model, same rules.\n\nRead by: tools.tf, tool-plane.ts",
                   "type": "string"
                 },
                 "service": {
@@ -2145,7 +3481,7 @@
                   "type": "string"
                 },
                 "type": {
-                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
                   "type": "string",
                   "enum": [
                     "kb",
@@ -2153,7 +3489,8 @@
                     "mcp",
                     "openapi",
                     "lambda",
-                    "apigateway"
+                    "apigateway",
+                    "smithy"
                   ]
                 }
               },
@@ -2173,6 +3510,25 @@
             },
             "then": {
               "properties": {
+                "allowDomains": {
+                  "description": "The Browser tool (source \"browser\") only: the domains it may open, e.g. [\"docs.aws.amazon.com\"]. Each entry also allows the names under it (docs.aws.amazon.com allows a.docs.aws.amazon.com). Written as a name, with no https://, path, port or *; at most 50. Checked by the tool's function for the page asked for AND the page a redirect ends on, so a model cannot widen it. Left out: any public page.\n\nRead by: tools.tf / browser-tool.ts, as the function's ALLOW_DOMAINS; app/tools/browser/handler.py",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "approval": {
+                  "description": "Every call of this tool waits for a person who sees the tool and its exact arguments: approve runs it, deny tells the agent it was refused and it carries on. \"person\" is decided on the run page; \"event\" is also published as an \"AgentExpress Approval Requested\" event and answerable with an \"AgentExpress Approval Decision\" event. For tools that act (send, pay, delete). Cedar applies too: a tool its policy hides is never put to a person. A run started unattended (gates \"auto\") refuses the call.\n\nRead by: app/common/asks.py approval_of -> tool_loop, context.call_tool; bff/asks.py",
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "event"
+                  ]
+                },
+                "approvalTimeout": {
+                  "description": "With `approval`: {\"after\": \"1h\", \"action\": \"approve\" | \"deny\"}. A call nobody decides by then takes the action, as a review gate's `timeout` does.\n\nRead by: app/common/asks.py approval_of; bff/gates.py sweep",
+                  "type": "object"
+                },
                 "arg": {
                   "description": "The parameter an agent's query goes into. Defaults to \"query\". This one key is what makes an arbitrary MCP server reachable from config, because every server names its parameters differently.\n\nRead by: TOOLS_JSON -> gateway/client.py _tool_arguments; the Cedar `context.input has <arg>` condition\n\nDefault: \"query\"",
                   "type": "string",
@@ -2253,10 +3609,12 @@
                   "type": "string"
                 },
                 "source": {
-                  "description": "Let the framework supply this tool's artifact from orchestrator/app/tools/<source>/ instead of you hosting it, so the committed config names no ARN and no bucket and works in any account. type=\"lambda\" reads handler.py there, zips it and deploys it; type=\"openapi\" reads openapi.json there, uploads it and derives the s3:// URI. Closed to a known set for \"lambda\" only, because a framework-deployed FUNCTION runs on a role config cannot express; an uploaded SCHEMA needs no permissions, so \"openapi\" takes any folder name and is checked by whether the file is there. Exclusive with lambdaArn / schemaS3Uri.\n\nRead by: tools.tf builtin_lambda_tools + openapi_source_tools, tool-plane.ts\n\nFor type=\"lambda\" the allowed values (builtinLambdaSource in app/vocabulary.json) are: 'pricing'",
+                  "description": "Let the framework supply this tool's artifact from orchestrator/app/tools/<source>/ instead of you hosting it, so the committed config names no ARN and no bucket and works in any account. type=\"lambda\" reads handler.py there, zips it and deploys it; type=\"openapi\" reads openapi.json there, uploads it and derives the s3:// URI. Closed to a known set for \"lambda\" only, because a framework-deployed FUNCTION runs on a role config cannot express; an uploaded SCHEMA needs no permissions, so \"openapi\" takes any folder name and is checked by whether the file is there. Exclusive with lambdaArn / schemaS3Uri.\n\nRead by: tools.tf builtin_lambda_tools + openapi_source_tools, tool-plane.ts\n\nFor type=\"lambda\" the allowed values (builtinLambdaSource in app/vocabulary.json) are: 'pricing', 'codeInterpreter', 'browser'",
                   "type": "string",
                   "enum": [
-                    "pricing"
+                    "pricing",
+                    "codeInterpreter",
+                    "browser"
                   ]
                 },
                 "toolSchema": {
@@ -2267,7 +3625,7 @@
                   }
                 },
                 "type": {
-                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
                   "type": "string",
                   "enum": [
                     "kb",
@@ -2275,7 +3633,8 @@
                     "mcp",
                     "openapi",
                     "lambda",
-                    "apigateway"
+                    "apigateway",
+                    "smithy"
                   ]
                 }
               },
@@ -2298,6 +3657,18 @@
             },
             "then": {
               "properties": {
+                "approval": {
+                  "description": "Every call of this tool waits for a person who sees the tool and its exact arguments: approve runs it, deny tells the agent it was refused and it carries on. \"person\" is decided on the run page; \"event\" is also published as an \"AgentExpress Approval Requested\" event and answerable with an \"AgentExpress Approval Decision\" event. For tools that act (send, pay, delete). Cedar applies too: a tool its policy hides is never put to a person. A run started unattended (gates \"auto\") refuses the call.\n\nRead by: app/common/asks.py approval_of -> tool_loop, context.call_tool; bff/asks.py",
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "event"
+                  ]
+                },
+                "approvalTimeout": {
+                  "description": "With `approval`: {\"after\": \"1h\", \"action\": \"approve\" | \"deny\"}. A call nobody decides by then takes the action, as a review gate's `timeout` does.\n\nRead by: app/common/asks.py approval_of; bff/gates.py sweep",
+                  "type": "object"
+                },
                 "arg": {
                   "description": "The parameter an agent's query goes into. Defaults to \"query\". This one key is what makes an arbitrary MCP server reachable from config, because every server names its parameters differently.\n\nRead by: TOOLS_JSON -> gateway/client.py _tool_arguments; the Cedar `context.input has <arg>` condition\n\nDefault: \"query\"",
                   "type": "string",
@@ -2391,7 +3762,7 @@
                   }
                 },
                 "type": {
-                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway'",
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
                   "type": "string",
                   "enum": [
                     "kb",
@@ -2399,7 +3770,8 @@
                     "mcp",
                     "openapi",
                     "lambda",
-                    "apigateway"
+                    "apigateway",
+                    "smithy"
                   ]
                 }
               },
@@ -2408,6 +3780,132 @@
                 "restApiId",
                 "stage",
                 "toolFilters"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "const": "smithy"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "properties": {
+                "allow": {
+                  "description": "What a Smithy tool may call: the AWS actions and the resources they act on, granted to this build's Gateway role, which signs every call (a Smithy target always uses the Gateway's own role). {\"actions\": [\"dynamodb:GetItem\"], \"resources\": [\"arn:aws:dynamodb:us-east-1:111122223333:table/orders\"]}. Each action is one named action (no *), at most 20; each resource a full ARN with its region and account written out and no bare *, at most 20. Services that change who may do what, run code, or hold secrets (see smithyDeniedServices) are refused.\n\nRead by: tools_smithy.tf smithy_statements -> gateway.tf GatewayPolicy, smithy-tool.ts smithyStatements -> tool-plane.ts",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "IAM actions, e.g. dynamodb:GetItem. One named action each."
+                    },
+                    "resources": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Resource ARNs the actions apply to."
+                    }
+                  }
+                },
+                "approval": {
+                  "description": "Every call of this tool waits for a person who sees the tool and its exact arguments: approve runs it, deny tells the agent it was refused and it carries on. \"person\" is decided on the run page; \"event\" is also published as an \"AgentExpress Approval Requested\" event and answerable with an \"AgentExpress Approval Decision\" event. For tools that act (send, pay, delete). Cedar applies too: a tool its policy hides is never put to a person. A run started unattended (gates \"auto\") refuses the call.\n\nRead by: app/common/asks.py approval_of -> tool_loop, context.call_tool; bff/asks.py",
+                  "type": "string",
+                  "enum": [
+                    "person",
+                    "event"
+                  ]
+                },
+                "approvalTimeout": {
+                  "description": "With `approval`: {\"after\": \"1h\", \"action\": \"approve\" | \"deny\"}. A call nobody decides by then takes the action, as a review gate's `timeout` does.\n\nRead by: app/common/asks.py approval_of; bff/gates.py sweep",
+                  "type": "object"
+                },
+                "arg": {
+                  "description": "The parameter an agent's query goes into. Defaults to \"query\". This one key is what makes an arbitrary MCP server reachable from config, because every server names its parameters differently.\n\nRead by: TOOLS_JSON -> gateway/client.py _tool_arguments; the Cedar `context.input has <arg>` condition\n\nDefault: \"query\"",
+                  "type": "string",
+                  "default": "query"
+                },
+                "args": {
+                  "description": "Fixed extra arguments sent on every call, e.g. a page size.\n\nRead by: TOOLS_JSON -> gateway/client.py",
+                  "type": "object"
+                },
+                "call": {
+                  "description": "Which tool on the target to invoke. REQUIRED when the target publishes more than one — the app refuses to guess, because calling the wrong tool returns real-looking data for a question nobody asked.\n\nRead by: TOOLS_JSON -> gateway/client.py _select_tool",
+                  "type": "string"
+                },
+                "description": {
+                  "description": "Becomes the Gateway target's description. Truncated to 190 characters on deploy.\n\nRead by: tools.tf, tool-plane.ts",
+                  "type": "string"
+                },
+                "policies": {
+                  "description": "Policies from `policies` that govern this tool. A policy written with AgentCore::Action::\"{{tool}}\" (or \"{{tool}}___<toolName>\") is deployed once for each tool it is attached to, with {{tool}} replaced by the tool's key.\n\nRead by: policy.tf / tool-plane.ts custom policies",
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z][A-Za-z0-9]{0,31}$"
+                  }
+                },
+                "policy": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "tool": {
+                      "description": "Narrow the generated Cedar permit to ONE tool name. Omit for a target-level permit, which is what a remote MCP server needs, since its tool names are not known at deploy time.\n\nRead by: tools.tf policy_tool, tool-plane.ts",
+                      "type": "string"
+                    },
+                    "restrictTo": {
+                      "description": "Argument allow-lists, e.g. {\"filter\": [\"reference\"]}. Enforced AT THE GATEWAY, so a prompt-injected attempt to widen access is refused by infrastructure rather than by prompt wording.\n\nRead by: tools.tf policy_restrict -> the Cedar `when` clause, tool-plane.ts",
+                      "type": "object"
+                    },
+                    "permit": {
+                      "description": "false registers the target but deliberately does NOT permit it — useful for proving default-deny. Defaults to true.\n\nRead by: tools.tf permitted_tools, tool-plane.ts\n\nDefault: true",
+                      "type": "boolean",
+                      "default": true
+                    }
+                  }
+                },
+                "rowFields": {
+                  "description": "Maps the roles an agent needs onto the field names YOUR payload actually uses, so an agent that COMPUTES from tool output stays config-driven instead of hardcoding your schema.\n\nRead by: TOOLS_JSON -> ctx.call_tool_rows / extract_rows",
+                  "type": "object"
+                },
+                "rowPath": {
+                  "description": "Dot path to the LIST of records in this target's response, e.g. \"result.releases\". Only needed when the list is somewhere the framework does not already probe for (results, result, items, documents, content.result, content.results) - which is common for a REST API you did not design. Without it an agent that computes sees zero rows and would report \"nothing found\" for a response that was full of data.\n\nRead by: TOOLS_JSON -> gateway/client.py extract_rows",
+                  "type": "string"
+                },
+                "schema": {
+                  "description": "The OpenAPI 3 document itself, inline — written in the Build view, uploaded from a file, or drafted by the AgentExpress Assistant from a description of your API. The Gateway gets it as an inline payload, so there is no bucket to host it in. Every operation needs an operationId (it becomes the tool name), and it may not declare securitySchemes: auth comes from `auth`. Exclusive with schemaS3Uri and source. For type=\"smithy\": the Smithy 2.0 JSON AST of an AWS service ({\"smithy\": \"2.0\", \"shapes\": {...}} with one service shape using aws.protocols#restJson1); each operation becomes a tool. The Gateway takes Smithy models for AWS services only, up to 10 MB. Exclusive with schemaS3Uri.\n\nRead by: tool-plane.ts openApiSchema.inlinePayload, tools.tf open_api_schema.inline_payload, tools_smithy.tf smithy_model.inline_payload, smithy-tool.ts smithyModel.inlinePayload",
+                  "type": "object"
+                },
+                "schemaS3Uri": {
+                  "description": "s3:// URI of an OpenAPI schema YOU already host. The framework reads nothing and uploads nothing; it points the Gateway target at this object and grants the Gateway role GetObject on it. Exclusive with source. For type=\"smithy\": the Smithy JSON model, same rules.\n\nRead by: tools.tf, tool-plane.ts",
+                  "type": "string"
+                },
+                "type": {
+                  "description": "The kind of Gateway target to create. Closed by what the framework can provision — anything else goes behind a Lambda with type=\"lambda\".\n\nRead by: tools.tf, tool-plane.ts, registry.validate_tool_types, gateway/client.py, the UI chip\n\nAllowed values (toolTypes in app/vocabulary.json): 'kb', 'websearch', 'mcp', 'openapi', 'lambda', 'apigateway', 'smithy'",
+                  "type": "string",
+                  "enum": [
+                    "kb",
+                    "websearch",
+                    "mcp",
+                    "openapi",
+                    "lambda",
+                    "apigateway",
+                    "smithy"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "allow"
               ]
             }
           }
@@ -2501,6 +3999,34 @@
             "readTimeoutSeconds": 600
           }
         },
+        "limits": {
+          "description": "Limits on spend and runs, off unless set. monthlyUsd (US dollars for the whole deployment; 0 = none) refuses a new run once the app has spent that much this calendar month (Eastern time). userDailyUsd (a number of US dollars; 0 = none) refuses a new run, or a re-run, once that user has spent that much today (Eastern time). userRunsPerHour (a whole number; 0 = none) refuses the run past that many started in the current clock hour. A refusal is HTTP 429 with the reason and when it resets. A run let in under a spend limit and then crossing it is stopped at its next step (the step fails, with the limit and its reset as the reason); a step already going finishes, so the overshoot is about one step. The hour limit bounds how many runs start before spend catches up. Fails open: if the counters cannot be read the run starts. With idp none everyone shares one budget.\n\nRead by: bff/limits.py (enforced at run start and re-run); features/observability/spend.py (the running totals, and the check before each step)\n\nDefault: {\"userDailyUsd\": 0, \"userRunsPerHour\": 0, \"monthlyUsd\": 0}",
+          "type": "object",
+          "default": {
+            "userDailyUsd": 0,
+            "userRunsPerHour": 0,
+            "monthlyUsd": 0
+          }
+        },
+        "liveConfig": {
+          "description": "Change an agent's system prompt and model settings (model, temperature, topP, maxTokens, stopSequences) on the running deployment, without a redeploy: an admin saves numbered versions on the Live config page and activates one; rollback is activating an older one, or version 0 (what was deployed). A run uses the version that was active when it started, through every gate and re-run, and records it (config vN). Nothing else changes live: tools, gates, guardrails, memory, Cedar and identity are provisioned, so they need a redeploy. A model must be one the runtimes' IAM grant covers. Needs a group granted `admin` in authorization.actions. Default false: nothing is read, no IAM statement is added, no page is shown.\n\nRead by: bff/liveconfig.py (versions, the pointer, the read at run start); app/common/liveconfig.py (applies the run's version)\n\nDefault: false",
+          "type": "boolean",
+          "default": false
+        },
+        "models": {
+          "description": "Per-run model override: on Start run, a person granted the `override` action (authorization.actions; closed unless granted) picks a model from `overrides` for all agents or for chosen agents. The run records it and keeps it through every gate and re-run; its agents use that model only (no `route`, no `fallback`). Harness agents, remote agents and task steps keep their own. Each model must be one the runtimes' IAM grant covers. Unset: Start run shows no model choice and the server refuses one.\n\nRead by: bff/model_override.py (validated at run start, stored on the run); app/common/model_routing.py (applied in ctx.llm)",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "overrides": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The models a person may pick on Start run, for every agent or per agent (up to 20). Nothing outside this list is accepted."
+            }
+          }
+        },
         "a2aInvoke": {
           "description": "Calling a `runtime: \"a2a\"` agent: timeoutSeconds per request (default 30 — keep it ABOVE the remote agent's own timeout so the side that gives up first can say why), pollIntervalSeconds (2) and maxPollSeconds (300) for a task that is still working.\n\nRead by: config.py A2A_INVOKE -> a2a_agent\n\nDefault: {\"timeoutSeconds\": 30, \"pollIntervalSeconds\": 2, \"maxPollSeconds\": 300}",
           "type": "object",
@@ -2582,6 +4108,20 @@
                 "type": "string"
               },
               "description": "Buckets, or bucket/prefix folders, a run's request may name as s3://... for agents with `attachments` to read, e.g. [\"my-docs\", \"amzn-s3-demo-bucket/contracts\"]. The deployment grants read on exactly these; none by default (uploads only)."
+            }
+          }
+        },
+        "files": {
+          "description": "Keep the files runs make: setting this (even to {}) creates the assets bucket if no agent needed it yet, lets every agent save files (ctx.save_file) and keeps the code the codeInterpreter tool runs, all shown on a run's Files tab and the app's Files page. Not set: a deployment keeps only what it kept before, with no expiry.\n\nRead by: run_files.tf / orchestrator-stack.ts filesRetentionDays (bucket, lifecycle rule, grants); app/common/artifacts.py; bff/runartifacts.py\n\nDefault: {\"retentionDays\": 90}",
+          "type": "object",
+          "default": {
+            "retentionDays": 90
+          },
+          "additionalProperties": false,
+          "properties": {
+            "retentionDays": {
+              "type": "integer",
+              "description": "Days a run's files are kept, 1 to 3650 (default 90): what it was started with, the images, files and code its agents made. An S3 lifecycle rule on runs/ deletes them after that, whatever their kind."
             }
           }
         },
@@ -2720,7 +4260,7 @@
           "default": "cognito:groups"
         },
         "actions": {
-          "description": "Action -> the group names allowed to take it. Each action name is a route in bff/handler.py; one with no route would read as a restriction and gate nothing. An action you omit is UNRESTRICTED.\n\nRead by: bff/authz.py; bff/workflow.py projects it to the UI\n\nAllowed keys (authorizationActions in app/vocabulary.json): 'start', 'decision', 'rerun', 'cancel', 'evaluate', 'insights', 'delete', 'deploy', 'destroy', 'audit', 'admin'",
+          "description": "Action -> the group names allowed to take it. Each action name is a route in bff/handler.py; one with no route would read as a restriction and gate nothing. An action you omit is UNRESTRICTED.\n\nRead by: bff/authz.py; bff/workflow.py projects it to the UI\n\nAllowed keys (authorizationActions in app/vocabulary.json): 'start', 'decision', 'rerun', 'cancel', 'evaluate', 'insights', 'delete', 'deploy', 'destroy', 'audit', 'admin', 'override'",
           "type": "object",
           "propertyNames": {
             "enum": [
@@ -2734,7 +4274,8 @@
               "deploy",
               "destroy",
               "audit",
-              "admin"
+              "admin",
+              "override"
             ]
           }
         },

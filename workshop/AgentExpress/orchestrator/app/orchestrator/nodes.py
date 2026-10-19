@@ -7,6 +7,7 @@ store) uniformly for every agent.
 """
 
 from langchain_core.runnables import RunnableConfig
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import interrupt
 
 from app.common import branching, clock, gates, grounding
@@ -15,7 +16,7 @@ from app.common.config import AGENTS
 from app.common.context import AgentContext
 from app.common.sink import WorkflowCancelled, emit, is_cancelled
 from app.features.guardrails import GuardrailBlocked
-from app.features.observability import otel
+from app.features.observability import otel, spend
 
 
 def _eval_task_input(agent: Agent, ctx: AgentContext) -> str:
@@ -80,7 +81,8 @@ async def _check_grounding(ctx: AgentContext, agent: Agent, state: dict, out: st
     source: its inputs are the other assets and the request, so a figure in neither
     came from the model. No new config key expresses this because `tool` already does.
     """
-    if agent.tool:
+    if agent.tool or getattr(agent, "task", None):
+        # A task step's figures come from its tool, script or document, not from a model.
         return
     upstream = [*(state.get("outputs") or {}).values(), ctx.topic or ""]
     unsupported = grounding.ungrounded(out, upstream)
@@ -139,6 +141,12 @@ def make_agent_node(agent: Agent):
                 # substance, not a generic role paraphrase.
                 _pcap = otel.begin_prompt_capture(prompt_holder)
                 try:
+                    # Spend limit (orchestrator.limits): a run let in under the limit may have
+                    # crossed it since. Stop BEFORE this step does any work, so nothing is
+                    # half-finished and the step can simply be run again after the reset. A
+                    # no-op unless a limit is set, and it fails open. The step shows as failed,
+                    # with the limit and when it resets as the reason (BudgetReached).
+                    spend.guard(ctx.user)
                     # Guardrails + long-term memory are applied HERE, by the
                     # framework, so both are purely config-driven: flip them on
                     # for any agent in workflow.json and they take effect with no
@@ -173,6 +181,8 @@ def make_agent_node(agent: Agent):
                         await ctx.memory_store(out)
                 except WorkflowCancelled:
                     raise  # user stop — reported as "cancelled", not a failure
+                except GraphBubbleUp:
+                    raise  # the agent asked a person (app/common/asks.py): waiting, not failed
                 except GuardrailBlocked as _blocked:
                     # Content safety stopped this agent. Report it distinctly (not
                     # as a generic crash) with the guardrail's own message, then
@@ -207,7 +217,12 @@ def make_agent_node(agent: Agent):
             # to keep the span attributes a sane size.
             task_input = prompt_holder.get("prompt") or _eval_task_input(agent, ctx)
             task_output = prompt_holder.get("output") or str(out)
-            otel.set_attrs(_agent_span, **{"gen_ai.task.input": str(task_input)[:40000],
+            # Also the agentcore.invocation.* pair, which AgentCore Evaluations reads from
+            # ANY scope (the documented fallback for a custom agent's top-level turn).
+            # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/supported-frameworks-generic.html
+            otel.set_attrs(_agent_span, **{"agentcore.invocation.user_prompt": str(task_input)[:40000],
+                                           "agentcore.invocation.agent_response": str(task_output)[:12000],
+                                           "gen_ai.task.input": str(task_input)[:40000],
                                            "gen_ai.task.output": str(task_output)[:12000]})
 
         # Append this run as the next version. The comment is the reviewer

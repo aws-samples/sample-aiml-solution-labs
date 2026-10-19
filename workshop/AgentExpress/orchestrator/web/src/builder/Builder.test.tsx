@@ -73,11 +73,20 @@ describe("Builder", () => {
     const names = screen.getAllByRole("tab").map((t) => (t.textContent ?? "").replace(/\s*\(\d+\)$/, ""))
       .filter((n) => !["AgentExpress Assistant", "Build manually", "Sign-in", "Tool access"].includes(n));
     expect(names).toEqual(["Design", "Tools", "Skills", "Memory", "Guardrails", "Identity", "Policies", "Interceptors",
-      "Triggers", "Evals", "Settings", "workflow.json"]);
+      "Triggers", "Evals", "Tests", "Settings", "workflow.json"]);
     await act(async () => { fireEvent.click(screen.getByText("Policies (0)", { selector: "[role=tab] *" })); });
     expect(screen.getByTestId("tab-level-policies").textContent).toMatch(/^Gateway level\./);
     await act(async () => { fireEvent.click(screen.getByText("Skills (0)", { selector: "[role=tab] *" })); });
     expect(screen.getByTestId("tab-level-skills").textContent).toMatch(/^Agent level\./);
+  });
+  it("has a Tests tab where suites are written, and says what running them needs", async () => {
+    await act(async () => { render(<Builder notify={vi.fn()} />); });
+    await act(async () => { fireEvent.click(screen.getByText("Tests (0)", { selector: "[role=tab] *" })); });
+    expect(screen.getByTestId("tab-level-tests").textContent).toMatch(/^Build level\./);
+    // A build kept in this browser has nothing deployed to run against: authoring only.
+    expect(screen.getByTestId("tests-cannot-run").textContent).toContain("kept in your browser");
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "New suite" })); });
+    expect(screen.getByText("Tests (1)", { selector: "[role=tab] *" })).toBeTruthy();
   });
   it("adds an agent from the palette with the keyboard, and autosaves the draft", async () => {
     vi.useFakeTimers();

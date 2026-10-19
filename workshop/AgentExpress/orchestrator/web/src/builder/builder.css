@@ -2,8 +2,11 @@
    the console rather than as an embedded third-party widget. */
 
 .axb-layout {
+  /* One height for the three panes: the left pane and the inspector are never taller than
+     the canvas; what does not fit scrolls inside them. */
+  --axb-pane-h: max(480px, 72vh);
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) minmax(320px, 400px);
+  grid-template-columns: 240px minmax(0, 1fr) minmax(320px, 400px);
   gap: 16px;
   align-items: start;
 }
@@ -11,10 +14,15 @@
 .axb-palette {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   position: sticky;
   top: 16px;
+  max-height: var(--axb-pane-h);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
+.axb-palette-group-body { display: flex; flex-direction: column; gap: 6px; }
 
 .axb-palette-item {
   display: flex;
@@ -33,7 +41,7 @@
 
 .axb-canvas {
   position: relative;
-  height: 72vh;
+  height: var(--axb-pane-h, 72vh);
   min-height: 480px;
   border: 1px solid var(--awsui-color-border-divider-default, #c6c6cd);
   border-radius: 12px;
@@ -49,7 +57,7 @@
   color: var(--awsui-color-text-body-secondary, #5f6b7a);
 }
 
-.axb-inspector { max-height: 76vh; overflow: auto; }
+.axb-inspector { max-height: var(--axb-pane-h, 76vh); overflow: auto; overscroll-behavior: contain; }
 
 .axb-stage {
   border: 1px dashed var(--awsui-color-border-input-default, #8c8c94);
@@ -111,6 +119,8 @@
   font-size: 13px;
 }
 .axb-icon.axb-remote { background: #7d2ad6; }
+/* A task step (no model): its kind's glyph on a square, so it reads apart from an agent. */
+.axb-icon.axb-task { background: #037f0c; border-radius: 4px; font-size: 11px; }
 .axb-text { display: flex; flex-direction: column; min-width: 0; }
 .axb-name, .axb-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .axb-name { font-weight: 700; font-size: 14px; }
@@ -325,3 +335,131 @@
 
 /* A table cell that must not wrap mid-word (the deployment history's short columns). */
 .axb-nowrap { white-space: nowrap; }
+/* --- Canvas layers: the "Show" menu and an agent's badges. Off until chosen. --- */
+.axb-agent { position: relative; }
+.axb-layer-strip { position: absolute; right: 8px; bottom: 4px; display: flex; gap: 3px; }
+.axb-agent.axb-has-layers .axb-sub { padding-right: var(--axb-layers-w, 0); }
+.axb-layer {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  background: var(--awsui-color-text-body-secondary, #5f6b7a);
+}
+.axb-layer-guardrails  { background: #037f0c; }
+.axb-layer-memory      { background: #0972d3; }
+.axb-layer-policy      { background: #7d2ad6; }
+.axb-layer-skills      { background: #8d6605; }
+.axb-layer-evaluations { background: #b0306f; }
+.axb-layer-identity    { background: #006ce0; }
+.axb-layer-menu {
+  background: var(--awsui-color-background-container-content, #fff);
+  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 13px;
+}
+.axb-layer-menu summary { cursor: pointer; }
+.axb-layer-menu summary:focus-visible { outline: 2px solid var(--awsui-color-border-item-focused, #0972d3); outline-offset: 2px; }
+.axb-layer-menu fieldset { border: 0; margin: 6px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.axb-layer-menu legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.axb-layer-menu label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
+.axb-layer-n { color: var(--awsui-color-text-body-secondary, #5f6b7a); }
+
+/* Attaching primitives (attach.ts): while one is dragged, only where it may land is marked. */
+.axb-agent.axb-drop-ok, .axb-stage.axb-drop-ok, .axb-chip.axb-drop-ok {
+  outline: 2px dashed #037f0c;
+  outline-offset: 2px;
+}
+.axb-primitive-group { display: flex; flex-direction: column; gap: 6px; }
+
+/* The AgentCore rail (Rail.tsx): narrow, collapsed to a letter and a count per piece. */
+.axb-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--awsui-color-border-divider-default, #c6c6cd);
+  border-radius: 8px;
+  background: var(--awsui-color-background-container-content, #fff);
+  font-size: 12px;
+}
+.axb-rail ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.axb-rail-toggle, .axb-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  padding: 2px 4px;
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+.axb-rail-toggle:focus-visible, .axb-rail-item:focus-visible { outline: 2px solid var(--awsui-color-border-item-focused, #0972d3); }
+.axb-rail-item.axb-rail-marked { border-color: #037f0c; }
+.axb-rail-item.axb-selected { border-color: var(--awsui-color-border-item-focused, #0972d3); }
+.axb-rail-letter { font-weight: 700; min-width: 18px; text-align: center; }
+.axb-rail-label { flex: 1; text-align: left; white-space: nowrap; }
+.axb-rail-n { color: var(--awsui-color-text-body-secondary, #5f6b7a); }
+.axb-core-list { margin: 0; padding-left: 18px; }
+/* --- An agent card's components (components.ts): one labelled row each, always shown. --- */
+.axb-comps { list-style: none; margin: 4px 0 0; padding: 4px 0 0; display: flex; flex-direction: column; gap: 2px;
+  border-top: 1px solid var(--awsui-color-border-divider-default, #e9ebed); cursor: default; }
+.axb-comp { display: flex; align-items: center; gap: 6px; height: 20px; min-width: 0; font-size: 12px; border-radius: 6px; }
+.axb-comp-tag {
+  flex: 0 0 auto; min-width: 58px; padding: 0 5px; border-radius: 4px; text-align: center;
+  font-size: 10px; font-weight: 700; line-height: 16px; letter-spacing: 0.02em; color: #fff;
+  background: var(--awsui-color-text-body-secondary, #5f6b7a);
+}
+.axb-comp-tool       { background: #0972d3; }
+.axb-comp-guardrail  { background: #037f0c; }
+.axb-comp-memory     { background: #006ce0; }
+.axb-comp-policy     { background: #7d2ad6; }
+.axb-comp-skill      { background: #8d6605; }
+.axb-comp-evaluation { background: #b0306f; }
+.axb-comp-identity   { background: #00757f; }
+.axb-comp-human      { background: #c33d00; }
+.axb-comp-name { flex: 0 1 auto; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axb-comp-link { border: 0; background: none; padding: 0; color: #0972d3; cursor: pointer; font: inherit; font-weight: 600; text-align: left; }
+.axb-comp-link:hover { text-decoration: underline; }
+.axb-comp-link:focus-visible { outline: 2px solid var(--awsui-color-border-item-focused, #0972d3); outline-offset: 1px; }
+.axb-comp-detail { flex: 1 1 auto; min-width: 0; color: var(--awsui-color-text-body-secondary, #5f6b7a);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axb-comp .axb-chip-x { margin-left: auto; }
+.axb-comp.axb-drop-ok { outline: 2px dashed #037f0c; outline-offset: 1px; }
+.axb-layer-menu .axb-comp-tag { min-width: 52px; margin-right: 2px; }
+/* Agent-card rows are things you act on: hover shows it, a selected row is marked, the ×
+   shows on hover or focus, and a row can be dragged off its agent. */
+.axb-comp { padding: 0 2px; }
+.axb-comp[draggable="true"] { cursor: grab; }
+.axb-comp[draggable="true"]:active { cursor: grabbing; }
+.axb-comp:hover { background: var(--awsui-color-background-dropdown-item-hover, #f0fbff); }
+.axb-comp.axb-comp-selected { background: #d1f1ff; box-shadow: inset 2px 0 0 #0972d3; }
+.axb-comp .axb-chip-x { opacity: 0; font-size: 14px; line-height: 1; }
+.axb-comp:hover .axb-chip-x, .axb-comp .axb-chip-x:focus-visible, .axb-comp.axb-comp-selected .axb-chip-x { opacity: 1; }
+.axb-comp .axb-chip-x:hover { color: #d91515; }
+.axb-comp-addrow:hover { background: none; }
+.axb-comp-add { width: 100%; font-size: 12px; height: 20px; border: 1px dashed #5f6b7a; border-radius: 6px;
+  background: #fff; color: #0972d3; cursor: pointer; padding: 0 4px; }
+.axb-comp-add:hover { border-color: #0972d3; }
+.axb-drag-hint { background: #232f3e; color: #fff; border-radius: 6px; padding: 6px 12px; font-size: 13px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25); max-width: 560px; }
+/* The agent panel's list of what is attached to it. */
+.axb-attached { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.axb-attached li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.axb-attached .axb-comp-tag { min-width: 56px; }
+.axb-attached .axb-comp-detail { flex: 1 1 auto; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A row's name wins over its detail: "strict" must not shrink to "st…" for "checks input and output". */
+.axb-comp .axb-comp-name { flex: 0 0 auto; max-width: 60%; }
+.axb-comp .axb-comp-detail { flex: 1 1 0; }
+
+/* A palette item's emoji (lib/emoji.ts): decoration, one width so the names line up. */
+.axb-emoji { display: inline-block; width: 1.5em; font-weight: 400; }

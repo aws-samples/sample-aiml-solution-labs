@@ -339,7 +339,9 @@ def test_the_spec_and_the_registry_agree_on_what_a_remote_agent_may_not_have():
               "image": {"aspectRatio": "16:9"}, "vision": {"from": ["intake"]}, "attachments": True,
               "tool": "kb",
               "corpus": "reference", "access": ["Session input"], "toolMode": "model",
-              "maxToolCalls": 3, "skills": ["triage"]}
+              "maxToolCalls": 3, "skills": ["triage"], "askPerson": True,
+              "task": {"kind": "code", "code": "print(1)"},
+              "instructions": "Write.", "harness": {"shell": True}, "models": {"fallback": ["m2"]}}
     assert set(sample) == set(local_only), (
         f"this test does not know how to set {sorted(set(local_only) - set(sample))}; add a "
         f"value so the new key is actually exercised")

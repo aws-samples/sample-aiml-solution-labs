@@ -13,7 +13,7 @@ framework to supply that tool's artifact):
 | Your account: region, login, model, Gateway on/off (gitignored) | `orchestrator/terraform/terraform.tfvars` |
 
 No Terraform, CDK, Cedar or UI edits. Both IaC paths read `workflow.json`, so declaring a tool or
-agent provisions it, and the tests derive their expectations from your file. Every key is in
+agent provisions it. Every key is in
 [orchestrator/docs/WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md).
 
 ## 1. Deploy the sample
@@ -24,6 +24,7 @@ Get the reference workflow running first as a known-good baseline (about 20 minu
 cd orchestrator/terraform
 cp terraform.tfvars.example terraform.tfvars      # defaults are fine to start
 ./bootstrap-state.sh                              # S3 remote state, once per account
+terraform apply -target=null_resource.ui_build    # first apply of a new stack only
 terraform apply                                   # builds the image, provisions everything
 ```
 
@@ -175,13 +176,22 @@ unless the code parses and defines the handler, requirements are `name==version`
 is hard-coded; lint and security findings are warnings. **Check and run in the sandbox** runs each
 test event in an AgentCore Code Interpreter; after deploy, **Test tool** calls the real function.
 
+### More tool kinds
+
+| Kind | Entry | Details |
+|---|---|---|
+| AWS API | `"type": "smithy"` with the service's Smithy model and an `allow` list of actions on ARNs | [DEPLOYMENT](DEPLOYMENT.md#tools-that-call-an-aws-api-smithy) |
+| Code Interpreter | `"type": "lambda", "source": "codeInterpreter"` (Builder: **Add a tool → Type → Code Interpreter**) | [DEPLOYMENT](DEPLOYMENT.md#running-code-in-a-sandbox) |
+| Browser | `"type": "lambda", "source": "browser"`, optional `allowDomains` (**Add a tool → Type → Browser**) | [DEPLOYMENT](DEPLOYMENT.md#opening-web-pages-with-a-browser) |
+| Connector | **Tools → Add a connector**: an `openapi` tool for Salesforce, Slack, Jira, GitHub and others | [DEPLOYMENT](DEPLOYMENT.md#connectors) |
+
 ## 3. Add your own agent
 
 **Fast path: the Kiro skill.** Open the repository in Kiro and say *"Use the agentexpress-author
 skill to build \<your use case\>"*. It scores your description against a checklist, asks for the
 gaps, confirms the topology, then does everything below. Paste-ready briefs are in
 [SAMPLE-PROMPTS.md](.kiro/skills/agentexpress-author/SAMPLE-PROMPTS.md). A `PreToolUse` hook blocks
-writes outside the surfaces you own, and `pytest` catches anything else.
+writes outside the files you own.
 
 **`scaffold.py`.** `agent` writes the `workflow.json` entry and a complete folder whose `run()`
 really calls the model; placing it in `steps` is left to you.
@@ -221,7 +231,7 @@ agent = ContractReviewAgent()
 `ctx.input(other_agent_id)`, `ctx.heartbeat(pct)` and `ctx.log(msg)`. You can drive another
 framework per agent (`web_search` uses Strands, `knowledge_research` a nested LangGraph; see
 `think=` on `research.synthesize`). Keep model calls on `ctx.llm`: that is where guardrails, cost
-telemetry, memory and truncation detection live. Caveats are in [README.md](README.md).
+telemetry, memory and truncation detection live.
 
 Declare it and place it in the topology:
 
@@ -253,6 +263,11 @@ in `TF_VAR_a2a_tokens` / `A2A_TOKENS`), `oauth2` or `sigv4`; `model`, `maxTokens
 calls are outside your Cedar policy. The sample's `analysis` and `recommendation` are A2A agents
 backed by a shipped Lambda (`"source": "a2a_lambda"` plus `skill`).
 
+**Agents with no folder.** `"runtime": "harness"` with `instructions` is run by an AgentCore
+Harness (or `harness.arn` for one you already have); `"runtime": "task"` with a `task` block is a
+step with no model. See [harness](DEPLOYMENT.md#agents-run-by-agentcore-harness) and
+[task steps](DEPLOYMENT.md#steps-with-no-model-task-steps).
+
 ## 4. The console and the Builder
 
 Open **Build** (marked *Preview*) in the side navigation. Builds save to your account as you type
@@ -262,27 +277,23 @@ whom.
 
 ### AgentExpress Assistant
 
-A build opens on the **AgentExpress Assistant** tab. Describe what you want. If the brief gives at least three
-of input, output, sources and steps or sign-off, the designer drafts a complete workflow at once.
-If it gives fewer (`I want a trip planner`), it first asks up to three questions, each with the
-answer it would assume, and `go` builds with those. "Just build it" or "ask me first" overrides
-that. After the first draft it asks a few questions at a time. The default model
-is Claude Sonnet 5.5 at medium reasoning effort (Claude Sonnet 5 if the account may not use 5.5), through the console region's inference profile (change
-them with `-c designerModel` / `-c designerEffort`, Terraform `designer_model` / `designer_effort`); the chat doesn't
-show the model. Replies stream with what it is doing (Enter sends, Shift+Enter adds a line). The conversation is
-saved with the build; it reads the latest 24 messages verbatim plus a running summary of older
-ones. It edits the build as you talk, highlights changed agents on the preview, writes prompts,
-and cannot deploy. **Defaults used** lists what it filled in; **Needs your input** lists values
-only you can give (endpoint, ARN, key), and the deploy waits for them. Secrets go in the
-**Secrets** card, never the chat. **Undo** / **Redo** cover its changes, canvas edits and uploads.
-It reaches what the tabs reach: agents, steps, tools and their code, skills, interceptors (it
-checks templates and the server writes the code, as the tab does), triggers and the named blocks.
-It sees your library (your items and those shared with you) and reuses an item rather than writing a
-new one; a library item in the build is used as it is, never edited or re-created, and every edit is
-checked with the build's library items loaded, as the deploy checks it.
-Ask for something *from the registry* and it searches your AWS Agent Registry, asks which match
-and whether to keep it in sync, and imports it; it also brings registry items up to date. It
-cannot publish: that is an admin's **Publish to registry** button.
+A build opens on the **AgentExpress Assistant** tab. Describe what you want.
+
+- **Questions first, or not.** A brief with at least three of input, output, sources and steps or
+  sign-off is drafted at once. A thinner one (`I want a trip planner`) gets up to three questions,
+  each with the answer it would assume; `go` builds with those. "Just build it" or "ask me first"
+  overrides that.
+- **What it edits.** Agents, steps, tools and their code, skills, interceptors (from the templates),
+  triggers and the named blocks. It reuses your library items as they are, and imports from your
+  AWS Agent Registry when asked. It cannot deploy or publish; you do that from the Deployment
+  panel.
+- **What you see.** Replies stream (Enter sends, Shift+Enter adds a line); changed agents are
+  highlighted. **Defaults used** lists what it filled in; **Needs your input** lists what only you
+  can give (endpoint, ARN, key), and the deploy waits for them. Secrets go in the **Secrets** card,
+  never the chat. **Undo** / **Redo** cover its changes, canvas edits and uploads.
+- **Model.** Claude Sonnet 5.5 at medium effort (Claude Sonnet 5 if the account may not use 5.5);
+  change with `-c designerModel` / `-c designerEffort` (Terraform `designer_model` /
+  `designer_effort`). It reads the latest 24 messages plus a running summary of older ones.
 
 ### Build manually
 
@@ -302,8 +313,14 @@ problems are named as you make them, in the deploy's own words.
   mismatch shows in Problems. **Agent framework** (none, Strands or LangGraph) decides how
   `apply` writes `agent.py`. New agents start with the shared guardrail on. Every agent is told
   today's date.
-- The header has **Project** (New / Import a file… / Delete), **Export**, **Share**, and the
-  status (*Valid*, or the error and warning count), which opens the problems list.
+- The header has **Project** (New build, Import a file…, Delete this build, Move to team…),
+  **Export**, **Share**, and the status (*Valid*, or the error and warning count), which opens the
+  problems list.
+- The palette has **+ New generic step** (a [task step](DEPLOYMENT.md#steps-with-no-model-task-steps):
+  tool, code, extract or output, picked in its panel) and **Tools → Add a connector**
+  ([Connectors](DEPLOYMENT.md#connectors)). Each agent card lists its tools, guardrails, memory,
+  Cedar policies, skills, evaluations, identity and HITL; **Show** hides kinds and turns on the
+  AgentCore rail ([canvas](DEPLOYMENT.md#the-builder-canvas)).
 
 **Tabs and named blocks.** A build keeps named `guardrails`, `memories`, `evaluators`,
 `identities` (an OAuth client or API key), `policies` (Cedar) and `skills`, each on its own tab. Agents pick
@@ -320,18 +337,11 @@ use it), instructions (the SKILL.md body) and up to 20 text reference files (200
 tools and `toolMode: "model"` opens a skill, and any of its files, itself (`use_skill`); otherwise
 its skills are added to its instructions in full. Skills never run code.
 
-**AWS Agent Registry.** With a registry in the console's account and region, **Add from registry**
-(Tools tab, Skills tab and the Agents palette) lists what your organization approved: an MCP
-server becomes an `mcp` tool (its endpoint and tools; you choose how it signs in), an A2A agent
-card a remote agent (place it in a stage before deploying), a SKILL.md a skill. A published
-AgentExpress workflow is listed but cannot be added as an agent: it is a catalog entry for a
-workflow that runs as its own app, not an A2A server. Choose **Keep in
-sync** to take each newer approved version when the build opens and before each deploy, or
-import it once and press **Update** when the Builder says a newer one is out. Admins publish with
-**Publish to registry**: on the Deployment panel for the deployed build (its workflow, and its
-Gateway's tools as an MCP server), on the Skills tab for a skill. Records are submitted for
-approval and a curator approves them in the registry; destroying the build deprecates its
-records. Setup and IAM: [DEPLOYMENT.md](DEPLOYMENT.md#aws-agent-registry).
+**AWS Agent Registry.** **Add from registry** (Tools tab, Skills tab, Agents palette) lists what
+your organization approved: an MCP server becomes an `mcp` tool, an A2A agent card a remote agent,
+a SKILL.md a skill. **Keep in sync** takes each newer approved version when the build opens and
+before each deploy; otherwise press **Update**. Admins **Publish to registry** a deployed build or
+its skills for a curator to approve. Details: [DEPLOYMENT.md](DEPLOYMENT.md#aws-agent-registry).
 
 ### Library and sharing
 
@@ -377,10 +387,12 @@ runs, observability, the Run Assistant and its own Activity, but no Build view, 
 library or Admin page, and is titled "🧭 AgentExpress - <ui.title>". Each run records the workflow
 it ran with, so old runs keep their own graph. A run that ends early or fails says why at the top:
 the branch rule (or the branch's default) that sent it to END, the gate a reviewer denied it at
-(with their note), the guardrail rule that blocked it, or the agent that failed and how. Its
-**Timeline** is the whole run, up to 1,000 events; each gate decision there carries the reviewer's
-note. On
-**Observability**, the Run Assistant's *this run* is the run shown in Run detail.
+(with their note), the guardrail rule that blocked it, or the agent that failed and how. A run page
+has the **Graph** (numbered steps, each component's outcome and deployed name), **Flow** (**Story**
+step by step, or **Summary**, with replay), **Timeline** (**Chart**, a Gantt, or **Log**, up to 1,000
+events with each reviewer's note), **Outputs** and **Files**; see
+[DEPLOYMENT.md](DEPLOYMENT.md#the-flow-tab-on-a-run). On **Observability**, the Run Assistant's
+*this run* is the run shown in Run detail.
 
 ### Activity and admins
 
@@ -411,10 +423,8 @@ or replacing this one. To work in your own repo:
 cd orchestrator
 python3 scaffold.py apply ~/Downloads/my-workflow.agentexpress.json   # --dry-run to preview
 ```
-Then deploy it with CDK or Terraform as in [DEPLOYMENT.md](DEPLOYMENT.md). `pytest` also checks the
-shipped sample's own conventions (`$schema`, key order and the sample's agents), so a bundle drafted
-with the Assistant fails some of those tests while it deploys fine; `cdk synth` or `terraform
-validate` is the check that matters for a deploy. A coding agent can edit a bundle too (Kiro,
+Then deploy it with CDK or Terraform as in [DEPLOYMENT.md](DEPLOYMENT.md); `cdk synth` or
+`terraform validate` checks the workflow before a deploy. A coding agent can edit a bundle too (Kiro,
 Claude Code, with the `agentexpress-author` skill in `.kiro/`) before you import it back.
 
 `apply` writes `workflow.json` and a folder per new agent, never overwriting code you edited: an
@@ -586,9 +596,9 @@ preference strategy picks up what the request asked for ("tone casual, short sen
 later run recalls it. It extracts what it judges a preference, which can include the run's own
 details; say in a custom strategy's instructions if only style should be kept.
 
-**Evaluations.** Pick from the 13 built-in evaluators (GoalSuccessRate, ToolSelectionAccuracy and
-ToolParameterAccuracy are listed but not offered yet), or write your own judge with a name and
-instructions. The deploy creates it as an AgentCore evaluator and deletes it on destroy.
+**Evaluations.** Pick from the built-in evaluators (Coherence, Conciseness, Correctness,
+Faithfulness, Harmfulness, Helpfulness, InstructionFollowing, Refusal, ResponseRelevance,
+Stereotyping), or write your own judge with a name and instructions. The deploy creates it as an AgentCore evaluator and deletes it on destroy.
 
 **Policy (Cedar).** Declaring a tool permits it; anything undeclared is denied, including a tool
 name an injected prompt invents. `orchestrator.policy` takes `enabled` and `mode` (`ENFORCE`, or
@@ -621,19 +631,18 @@ is on unless `orchestrator.chatbot.enabled` is `false`, so a Builder build gets 
 answers questions about runs and acts on them within your `authorization` rules; replies render
 Markdown.
 
-## 11. Tests and redeploy
+## 11. Check your changes and redeploy
+
+Both IaC paths check `workflow.json` at plan or synth, so a typo fails `terraform plan` or
+`cdk synth` with a message naming the entry, before anything deploys. After editing agents or
+tools, the project's checks confirm the workflow and agent folders fit together; they need no AWS
+account:
 
 ```bash
-cd orchestrator     && pytest      # runtime side: 1535 tests
-cd orchestrator/cdk && npm test    # IaC + Terraform/CDK parity + cdk-nag: 315 tests in 7 files
-cd orchestrator/web && npm test    # UI and Builder: 424 tests in 44 files
+cd orchestrator     && pytest
+cd orchestrator/cdk && npm test
+cd orchestrator/web && npm test
 ```
-
-None needs AWS credentials, a model or a container builder. They test the config plane
-(topology, tool-call arguments, citations, Cedar permits, RBAC, Terraform/CDK parity), not prompt
-quality. Both IaC paths also validate `workflow.json` at plan/synth, so a typo fails `terraform
-plan` or `cdk synth`, not the deployment. See [orchestrator/tests/README.md](orchestrator/tests/README.md)
-and [orchestrator/cdk/test/README.md](orchestrator/cdk/test/README.md).
 
 Run locally (needs AWS credentials and Bedrock access):
 
@@ -651,5 +660,5 @@ without a Gateway, drop the `tool` binding from agents you aren't exercising. Re
 `terraform apply` (rebuilds the image, updates runtimes); editing `kb_docs/` re-ingests only that
 corpus.
 
-Before anything beyond a sandbox, read the security, cost and scalability notes in
-[README.md](README.md). Internals are in [ARCHITECTURE.md](ARCHITECTURE.md).
+Before anything beyond a sandbox, read the security and cost notes in
+[README.md](README.md#security-summary). Internals are in [ARCHITECTURE.md](ARCHITECTURE.md).

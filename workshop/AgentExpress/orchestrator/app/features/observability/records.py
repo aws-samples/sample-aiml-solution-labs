@@ -12,6 +12,7 @@ GSI powers the aggregation views (by date / model / user).
   guardrail  - a Bedrock Guardrails check on agent input/output
   policy     - a Cedar policy decision on a Gateway tool call
   eval       - one AgentCore Evaluations (LLM-as-judge) result
+  person     - an agent asked a person mid-step: a question, or a tool call to approve
 """
 
 from __future__ import annotations
@@ -77,6 +78,9 @@ class CallRecord:
     # Agent-run version this event belongs to (1 = initial, 2+ = re-run with
     # reviewer feedback). 0 = unknown/legacy. Lets the UI label "Version N".
     version: int = 0
+    # For kind="llm" rows: why `label` is the model that was called (app/common/
+    # model_routing.py): "override", "route N", "fallback N", or "" for the agent's own.
+    chosen_by: str = ""
     # For kind="eval" rows: the evaluator's numeric score (0.0-1.0). `label`
     # holds the evaluator name and `output_text` the judge's explanation.
     value: Decimal = Decimal(0)

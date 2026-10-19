@@ -53,12 +53,15 @@ export const FORM_LAYOUT: Partial<Record<BlockName, FormLayout>> = {
     ],
   },
   tool: {
-    main: ["type", "description", "corpora", "endpoint", "lambdaArn", "source", "code", "schemaS3Uri", "schema",
+    main: ["type", "description", "corpora", "endpoint", "lambdaArn", "source", "allowDomains", "code", "schemaS3Uri", "schema",
       "restApiId", "stage", "knowledgeBaseId", "s3Uri", "toolSchema"],
     advanced: [
       { title: "Calling", keys: ["call", "arg", "args", "rowPath", "rowFields", "toolFilters", "toolOverrides", "listingMode", "connectorVersion"] },
       { title: "Search and filters", keys: ["maxResults", "domains", "publishedFrom", "publishedTo", "corpusKey", "corpusOperator",
         "filter", "rerank", "embeddingModel", "dimensions", "kmsKeyArn"] },
+      { title: "Document processing", keys: ["chunking", "parsing"] },
+      { title: "Where documents come from", keys: ["dataSource"] },
+      { title: "Vector store", keys: ["vectorStore"] },
       { title: "Auth", keys: ["auth", "service", "oauth", "identity"] },
       { title: "Policy", keys: ["policy.tool", "policy.restrictTo", "policy.permit", "policies"] },
     ],

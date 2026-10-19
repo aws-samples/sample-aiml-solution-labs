@@ -33,18 +33,26 @@ import {
 import { NAV_DIVIDER, NavPane, type NavEntry, type NavGroup } from "./views/NavPane";
 import type { BuildRequest } from "./builder/Builder";
 import type {
-  Action, Me, SessionSnapshot, SessionSummary, Workflow,
+  Action, LimitsUsage, Me, ModelOverride, SessionSnapshot, SessionSummary, Workflow,
 } from "./types";
 import { AboutPanel } from "./views/AboutPanel";
 import { Activity } from "./views/Activity";
+import { Analytics } from "./views/Analytics";
 import { Assistant } from "./views/Assistant";
+import { FilesPage } from "./views/FilesPage";
 import { HitlGate, type Decision, type GroupDecision } from "./views/HitlGate";
 import { Observability } from "./views/Observability";
 import { RunDetail } from "./views/RunDetail";
+import { ShareRun } from "./views/ShareRun";
+import { SharedRun } from "./views/SharedRun";
 import { TriggersPage } from "./views/TriggersPage";
+import { MemoryPage } from "./views/MemoryPage";
+import { LiveConfigPage } from "./views/LiveConfigPage";
 import { RunsTable } from "./views/RunsTable";
 import { StartRunModal, type RunTarget } from "./views/StartRunModal";
 import { StepPanel } from "./views/StepPanel";
+import { FEATURE_EMOJI } from "./lib/emoji";
+
 
 /** The product name, and the mark it is shown with, on every build's own app. */
 const BRAND = "AgentExpress";
@@ -56,6 +64,8 @@ const Builder = lazy(() => import("./builder/Builder").then((m) => ({ default: m
 const Accounts = lazy(() => import("./builder/Accounts").then((m) => ({ default: m.Accounts })));
 const Admin = lazy(() => import("./builder/Admin").then((m) => ({ default: m.Admin })));
 const LibraryPage = lazy(() => import("./builder/Library").then((m) => ({ default: m.LibraryPage })));
+const TeamsPage = lazy(() => import("./builder/Teams").then((m) => ({ default: m.TeamsPage })));
+const WorkspaceSelect = lazy(() => import("./builder/Teams").then((m) => ({ default: m.WorkspaceSelect })));
 /** The library kinds, in the order the navigation lists them (builder/Library.tsx KINDS). */
 /** In the order of the Builder's tabs (builder/Builder.tsx TAB_ORDER). */
 /** The library, in the Builder's tab order (builder/Builder.tsx TAB_ORDER), grouped by
@@ -72,7 +82,7 @@ type LibKind = (typeof LIBRARY_KINDS)[number][0];
 /** Where this deployment runs, from auth-config.js (both IaC paths write it). A build
  *  deployed into another region showed "us-east-1" here when this was a constant. */
 const REGION = authConfig().region || "us-east-1";
-type View = "runs" | "observability" | "build" | "activity" | "accounts" | "admin" | "library" | "triggers";
+type View = "runs" | "observability" | "build" | "activity" | "accounts" | "admin" | "library" | "triggers" | "analytics" | "memory" | "shared" | "liveconfig" | "files" | "teams";
 
 const EMPTY_WORKFLOW: Workflow = { agents: {}, steps: [] };
 const BROWSER_STORE = localStore();
@@ -95,10 +105,14 @@ export default function App() {
   const [runs, setRuns] = useState<SessionSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  /** The link a shared run was opened with (#shared:<id>, views/SharedRun.tsx). */
+  const [sharedId, setSharedId] = useState<string | null>(null);
   const [snap, setSnap] = useState<SessionSnapshot | null>(null);
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
   const [tab, setTab] = useState("graph");
   const [startOpen, setStartOpen] = useState(false);
+  // The caller's use of orchestrator.limits, read each time Start run opens.
+  const [limitsUsage, setLimitsUsage] = useState<LimitsUsage | null>(null);
   /** The side navigation lists every build and every run, twice: once under Runs to
    *  open it, once under Observability to inspect it. Builds come from the console's
    *  builds store when it has one (`me.builder`), else from this browser. */
@@ -115,6 +129,15 @@ export default function App() {
   /** The run Observability's Run detail shows now (picked there, or opened from the
    *  side navigation): what the Run Assistant means by "this run" on that page. */
   const [obsShown, setObsShown] = useState<string | null>(null);
+  // Read the caller's use of orchestrator.limits whenever Start run opens, so the figures are
+  // current when they decide to start. A failure shows nothing: the server enforces either way.
+  useEffect(() => {
+    if (!startOpen) return;
+    let live = true;
+    api.get<LimitsUsage>("/api/limits").then((u) => { if (live) setLimitsUsage(u); },
+      () => { if (live) setLimitsUsage(null); });
+    return () => { live = false; };
+  }, [startOpen]);
   useEffect(() => {
     const on = (e: Event) => setObsShown(String((e as CustomEvent).detail || "") || null);
     window.addEventListener("obs:session", on);
@@ -330,15 +353,26 @@ export default function App() {
   const settled = isSettled(String(snap?.overall ?? ""));
   /** A run is drawn from the workflow IT ran with (stored when it started), so an old
    *  run keeps its own graph after the workflow changes. Older runs have none. */
-  const runWorkflow = snap?.workflow ?? targetWorkflow;
+  // The workflow the run ran with. A run recorded before agents' components were stored
+  // has none, so its graph borrows each agent's current ones, marked as such.
+  const runWorkflow = useMemo(() => {
+    const wf = snap?.workflow ?? targetWorkflow;
+    if (!snap?.workflow || !targetWorkflow?.agents) return wf;
+    const agents = Object.fromEntries(Object.entries(wf.agents ?? {}).map(([id, a]) =>
+      [id, a.components || !targetWorkflow.agents[id]?.components ? a
+        : { ...a, components: targetWorkflow.agents[id].components, componentsNow: true }]));
+    return { ...wf, agents };
+  }, [snap?.workflow, targetWorkflow]);
 
   // --- actions ------------------------------------------------------------
-  async function startRun(topic: string, subject: string, files: { key: string; name: string }[] = []) {
+  async function startRun(topic: string, subject: string, files: { key: string; name: string }[] = [],
+    modelOverride?: ModelOverride) {
     try {
       const body: Record<string, unknown> = { topic };
       if (subject) body.subjectId = subject;
       if (target) body.build = target;
       if (files.length) body.attachments = files;
+      if (modelOverride) body.modelOverride = modelOverride;
       const r = await api.post<{ session_id: string }>("/api/sessions", body);
       setStartOpen(false);
       // The + beside Runs can be pressed from any view, so land on the run itself.
@@ -434,8 +468,20 @@ export default function App() {
       items.push({ text: "Activity", href: "#activity" });
     } else if (view === "accounts") {
       items.push({ text: "AWS accounts", href: "#accounts" });
+    } else if (view === "teams") {
+      items.push({ text: "Teams", href: "#teams" });
     } else if (view === "admin") {
       items.push({ text: "Admin", href: "#admin" });
+    } else if (view === "analytics") {
+      items.push({ text: "Analytics", href: "#analytics" });
+    } else if (view === "memory") {
+      items.push({ text: "Memory records", href: "#memory" });
+    } else if (view === "shared") {
+      items.push({ text: "Shared run", href: "#runs" });
+    } else if (view === "liveconfig") {
+      items.push({ text: "Live config", href: "#liveconfig" });
+    } else if (view === "files") {
+      items.push({ text: "Files", href: "#files" });
     } else if (view === "library") {
       items.push({ text: LIBRARY_KINDS.find(([k]) => k === libKind)?.[1] ?? "Library", href: `#library:${libKind}` });
     } else {
@@ -512,16 +558,28 @@ export default function App() {
       setView("runs"); setOpenRun(null);
     } else if (what === "run" && id) {
       setView("runs"); setOpenRun(id); setSelectedStep(null); setTab("graph");
+    } else if (what === "shared" && id) {
+      setView("shared"); setSharedId(id); setOpenRun(null);
     } else if (what === "obs") {
       setView("observability"); setObsSession(id ?? null);
     } else if (what === "activity") {
       setView("activity");
     } else if (what === "accounts") {
       setView("accounts");
+    } else if (what === "teams") {
+      setView("teams");
     } else if (what === "admin") {
       setView("admin");
     } else if (what === "triggers") {
       setView("triggers");
+    } else if (what === "analytics") {
+      setView("analytics");
+    } else if (what === "memory") {
+      setView("memory");
+    } else if (what === "liveconfig") {
+      setView("liveconfig");
+    } else if (what === "files") {
+      setView("files");
     } else if (what === "library" || what === "policies") {
       setView("library");
       setLibKind(((LIBRARY_KINDS.find(([k]) => k === id)?.[0]) ?? (what === "policies" ? "policy" : "tool")) as LibKind);
@@ -559,6 +617,8 @@ export default function App() {
     ...(!me.builder ? [] : [{
       id: "build", text: "Build", href: "#build", badge: "Preview",
       onAdd: () => navigate("#build:new"), addLabel: "New build",
+      // "My builds" or a team's workspace (bff/teams.py); nothing for someone in no team.
+      extra: <Suspense fallback={null}><WorkspaceSelect /></Suspense>,
       entries: builds.map((b) => ({
         href: `#build:${b.id}`, text: `${b.name || "Untitled"}${b.shared ? " · shared" : ""}`,
         ...(b.shared ? { title: `${b.name} — shared with you by ${b.ownerEmail ?? "its owner"}` } : {}),
@@ -599,14 +659,25 @@ export default function App() {
     }] as NavGroup[]),
   ];
 
-  const activeHref = view === "triggers" ? "#triggers" : view === "activity" ? "#activity" : view === "accounts" ? "#accounts"
-    : view === "admin" ? "#admin" : view === "library" ? `#library:${libKind}`
+  const activeHref = view === "files" ? "#files" : view === "liveconfig" ? "#liveconfig" : view === "analytics" ? "#analytics" : view === "triggers" ? "#triggers" : view === "memory" ? "#memory" : view === "activity" ? "#activity" : view === "accounts" ? "#accounts"
+    : view === "admin" ? "#admin" : view === "teams" ? "#teams" : view === "library" ? `#library:${libKind}`
     : view === "build" ? (currentBuild ? `#build:${currentBuild}` : "#build")
     : view === "observability" ? (obsSession ? `#obs:${obsSession}` : "#obs")
       : openRun ? `#run:${openRun}` : "#runs";
 
-  const content = view === "triggers" && me.admin && !controlPlane
+  const content = view === "shared" && sharedId && !controlPlane
+    ? <SharedRun shareId={sharedId} workflow={workflow} />
+    : view === "files" && !controlPlane
+    ? <FilesPage workflow={workflow} canSeeEveryone={Boolean(me.admin)}
+        onOpenRun={(id) => { setView("runs"); setOpenRun(id); setSelectedStep(null); setTab("files"); }} />
+    : view === "analytics" && me.admin && !controlPlane
+    ? <Analytics build={target} />
+    : view === "liveconfig" && me.admin && !controlPlane && workflow.liveConfig
+    ? <LiveConfigPage />
+    : view === "triggers" && me.admin && !controlPlane
     ? <TriggersPage onOpenRun={(id) => { setView("runs"); setOpenRun(id); setSelectedStep(null); setTab("graph"); }} />
+    : view === "memory" && me.admin && !controlPlane
+    ? <MemoryPage notify={notify} />
     : view === "activity"
     ? <Activity canSeeEveryone={Boolean(me.permittedActions?.includes("audit"))} />
     : view === "accounts"
@@ -619,6 +690,12 @@ export default function App() {
     ? (
       <Suspense fallback={<Spinner size="large" />}>
         <LibraryPage key={libKind} kind={libKind} notify={notify} />
+      </Suspense>
+    )
+    : view === "teams" && me.builder
+    ? (
+      <Suspense fallback={<Spinner size="large" />}>
+        <TeamsPage admin={Boolean(me.admin)} notify={notify} />
       </Suspense>
     )
     : view === "admin" && me.admin
@@ -654,6 +731,7 @@ export default function App() {
             snap={snap} workflow={runWorkflow} selected={selectedStep}
             onSelect={setSelectedStep} can={canOnRun} onCancel={cancel}
             activeTab={tab} onTabChange={setTab} onRerun={rerun}
+            actions={!othersRun && authEnabled() ? <ShareRun sessionId={snap.session_id} /> : undefined}
           />
         </>
       )
@@ -718,8 +796,13 @@ export default function App() {
               if (href === "#build" && me.builder) setView("build");
               if (href === "#activity") setView("activity");
               if (href === "#accounts") setView("accounts");
+              if (href === "#teams") setView("teams");
               if (href === "#admin") setView("admin");
               if (href === "#triggers") setView("triggers");
+              if (href === "#analytics") setView("analytics");
+              if (href === "#memory") setView("memory");
+              if (href === "#liveconfig") setView("liveconfig");
+              if (href === "#files") setView("files");
               if (href.startsWith("#library")) navigate(href);
             }}
           />
@@ -727,21 +810,29 @@ export default function App() {
         navigation={
           <NavPane
             groups={navGroups} active={activeHref}
-            onFollow={navigate}
+            onFollow={navigate} fill={!controlPlane && !me.builder}
             links={[
               // The audit log lives with the Builder's store, so only a Builder console has it.
               // Where builds deploy; then what any build can use (the library); then
               // the log, administration and this page's own help.
-              ...(me.builder ? [{ text: "AWS accounts", href: "#accounts" }, NAV_DIVIDER,
+              ...(me.builder ? [{ text: "AWS accounts", href: "#accounts", emoji: FEATURE_EMOJI.accounts }, { text: "Teams", href: "#teams", emoji: FEATURE_EMOJI.teams }, NAV_DIVIDER,
                 ...LIBRARY_GROUPS.flatMap(([heading, kinds]) => [{ heading },
-                  ...LIBRARY_KINDS.filter(([k]) => kinds.includes(k)).map(([k, text]) => ({ text, href: `#library:${k}`, indent: true }))]),
+                  ...LIBRARY_KINDS.filter(([k]) => kinds.includes(k)).map(([k, text]) => ({ text, href: `#library:${k}`, indent: true, emoji: FEATURE_EMOJI[k] }))]),
                 NAV_DIVIDER] : []),
+              // Every file the caller's runs brought or made (bff/runartifacts.py).
+              ...(!controlPlane ? [{ text: "Files", href: "#files", emoji: "📁" }] : []),
               // A console's log, or a build app's own (bff/audit.py).
-              ...((me.audit ?? me.builder) ? [{ text: "Activity", href: "#activity" }] : []),
-              ...(me.builder && me.admin ? [{ text: "Admin", href: "#admin" }] : []),
+              ...((me.audit ?? me.builder) ? [{ text: "Activity", href: "#activity", emoji: "📝" }] : []),
+              ...(me.builder && me.admin ? [{ text: "Admin", href: "#admin", emoji: "🔧" }] : []),
               // A build's app with triggers: their URLs, secrets and tests (bff/triggers.py).
-              ...(!controlPlane && me.admin && workflow.triggers?.length ? [{ text: "Triggers", href: "#triggers" }] : []),
-              { text: "About this application", href: "#about" },
+              ...(!controlPlane && me.admin && workflow.triggers?.length ? [{ text: "Triggers", href: "#triggers", emoji: FEATURE_EMOJI.trigger }] : []),
+              // Every user's error, denial and latency figures (bff/analytics.py): admin only.
+              ...(!controlPlane && me.admin ? [{ text: "Analytics", href: "#analytics", emoji: "📈" }] : []),
+              // What agents remembered across runs, for admins (bff/memories.py).
+              ...(!controlPlane && me.admin ? [{ text: "Memory records", href: "#memory", emoji: FEATURE_EMOJI.memory }] : []),
+              // Agents' prompts and model settings, changed without a redeploy (bff/liveconfig.py).
+              ...(!controlPlane && me.admin && workflow.liveConfig ? [{ text: "Live config", href: "#liveconfig", emoji: "🎛️" }] : []),
+              { text: "About this application", href: "#about", emoji: "ℹ️" },
             ]}
           />
         }
@@ -798,9 +889,16 @@ export default function App() {
               <StartRunModal
                 visible={startOpen} ui={targetWorkflow.ui ?? ui}
                 attach={target ? null : (targetWorkflow.attachments ?? workflow.attachments ?? null)}
+                usage={target ? null : limitsUsage}
                 onDismiss={() => setStartOpen(false)}
                 onStart={startRun}
                 targets={targets} target={target} onTarget={setTarget}
+                // Picking the run's models: `override` is closed unless granted, so only an
+                // explicit grant shows it, and never for a build (bff/model_override.py).
+                overrideModels={!target && me.permittedActions?.includes("override") ? workflow.modelOverrides ?? [] : []}
+                overrideAgents={Object.entries(workflow.agents ?? {})
+                  .filter(([, a]) => ["main", "dedicated"].includes(String(a.runtime ?? "main")))
+                  .map(([id, a]) => ({ id, name: String(a.name ?? id) }))}
               />
             )}
             {booted && !controlPlane ? (

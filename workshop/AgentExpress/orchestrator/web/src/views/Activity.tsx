@@ -52,10 +52,16 @@ const LABELS: Record<string, [string, StatusIndicatorProps.Type]> = {
   "run.failed": ["Run failed", "error"],
   "run.denied": ["Run ended (denied)", "stopped"],
   "run.decided": ["Gate decided", "success"],
+  "run.answered": ["Question answered", "success"],
+  "run.tool_decided": ["Tool call decided", "success"],
   "run.rerun": ["Re-ran agents", "in-progress"],
   "run.evaluated": ["Evaluation requested", "info"],
   "run.cancelled": ["Run cancelled", "stopped"],
   "run.deleted": ["Run deleted", "stopped"],
+  // Read-only links to a run (bff/runshares.py), in the run owner's log.
+  "run.shared": ["Run link created", "info"],
+  "run.share.opened": ["Run link opened", "info"],
+  "run.share.revoked": ["Run link revoked", "stopped"],
   "policy.generated": ["Drafted a policy", "info"],
   "policy.created": ["Policy saved", "success"],
   "policy.updated": ["Policy edited", "info"],
@@ -69,6 +75,11 @@ const LABELS: Record<string, [string, StatusIndicatorProps.Type]> = {
   "library.shared": ["Library item shared", "info"],
   "group.saved": ["Group saved", "success"],
   "group.deleted": ["Group deleted", "stopped"],
+  // Teams and their workspaces (bff/teams.py).
+  "team.created": ["Team created", "success"],
+  "team.updated": ["Team changed", "info"],
+  "team.deleted": ["Team deleted", "stopped"],
+  "build.moved": ["Build moved", "info"],
   "admin.viewed": ["Admin viewed", "info"],
 };
 /** The kinds the filter offers, each a prefix set of actions. */
@@ -80,7 +91,7 @@ export const KINDS: { value: string; label: string; match: (a: string) => boolea
   { value: "run", label: "Runs", match: (a) => a.startsWith("run.") },
   { value: "account", label: "AWS accounts", match: (a) => a.startsWith("account.") },
   { value: "policy", label: "Policies", match: (a) => a.startsWith("policy.") },
-  { value: "library", label: "Library, tools and groups", match: (a) => a.startsWith("library.") || a.startsWith("group.") || a.startsWith("tool.") || a.startsWith("lambda.") },
+  { value: "library", label: "Library, tools and groups", match: (a) => a.startsWith("library.") || a.startsWith("group.") || a.startsWith("team.") || a.startsWith("tool.") || a.startsWith("lambda.") },
   { value: "failed", label: "Failures", match: (a) => a.endsWith(".failed") },
 ];
 const PAGE = 50;
@@ -120,6 +131,13 @@ export function detailsOf(e: AuditEvent): string {
   if (e.action.startsWith("policy.") && d.name) parts.push(`policy ${String(d.name)}`);
   if (e.action.startsWith("library.") && (d.kind || d.name)) parts.push([d.kind, d.name].filter(Boolean).map(String).join(" "));
   if (e.action === "tool.tested" && d.ok === false) parts.push("failed");
+  if (d.teamName) parts.push(`team ${String(d.teamName)}`);
+  if (e.action === "build.moved") parts.push(d.team ? `to team ${String(d.team)}` : "to its creator's own builds");
+  for (const k of ["added", "removed", "roleChanged"] as const) {
+    if (Array.isArray(d[k]) && (d[k] as unknown[]).length) {
+      parts.push(`${k === "roleChanged" ? "new role for" : k} ${(d[k] as unknown[]).map(String).join(", ")}`);
+    }
+  }
   if (d.group) parts.push(`group ${String(d.group)}${typeof d.members === "number" ? `, ${d.members} members` : ""}`);
   if (d.shares && typeof d.shares === "object") {
     const s = d.shares as { everyone?: boolean; emails?: string[]; groups?: string[] };

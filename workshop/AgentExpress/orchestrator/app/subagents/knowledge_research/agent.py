@@ -124,19 +124,8 @@ class KnowledgeResearchAgent(Agent):
     system_prompt = SYSTEM_PROMPT
 
     async def run(self, ctx: AgentContext) -> str:
-        # Optional, app-level Cedar check — the ONE place this sample shows the
-        # secondary policy path. It is NOT what protects the Knowledge Base: the
-        # retrieval inside synthesize() goes through the Gateway, and the attached
-        # policy engine authorizes that call server-side (app/features/policy/,
-        # terraform/policy.tf). Keep this pattern for gating an in-process action
-        # that never crosses the Gateway. Fail-open, and a no-op when policy is
-        # disabled for this agent in workflow.json.
-        if not await ctx.policy_check("retrieve_knowledge"):
-            await ctx.log("Policy denied retrieve_knowledge for this agent")
-            # Reason over upstream inputs only, with no retrieval. BOTH names: the
-            # evidence gatherer reads `tools`, and `tool` is its first entry.
-            ctx.tools = []
-            ctx.tool = None
+        # The Knowledge Base retrieval inside synthesize() goes through the Gateway, where
+        # the attached Cedar policy engine authorizes it (app/features/policy/).
         return await research.synthesize(ctx, system_prompt=SYSTEM_PROMPT,
                                          think=langgraph_thinker(ctx))
 

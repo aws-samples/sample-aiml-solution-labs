@@ -18,6 +18,7 @@ app/common/errors.py. The framework never substitutes placeholder evidence.
 from __future__ import annotations
 
 from app.common.config import TOOLS
+from app.common.errors import ToolDenied
 
 #: How each tool type is introduced to the model. Named by type, not by the customer's
 #: key, so a tool called `claimsDb` still reads as what it is.
@@ -33,6 +34,8 @@ LABELS = {
     "lambda": "TOOL FUNCTION",
     # An API Gateway REST API stage: the customer's own API, like openapi.
     "apigateway": "REST API",
+    # An AWS service's API, from its Smithy model.
+    "smithy": "AWS API",
 }
 
 
@@ -57,9 +60,12 @@ async def gather(ctx, query: str | None = None) -> tuple[str, list[str]]:
     limitations: list[str] = []
     if query is None:
         query = ctx._retrieval_query()
-    if getattr(ctx, "tool_mode", "direct") == "model" and tools_of(ctx):
+    from app.common import asks
+    asks_person = asks.ask_spec(getattr(ctx, "agent_id", "")) is not None
+    if getattr(ctx, "tool_mode", "direct") == "model" and (tools_of(ctx) or asks_person):
         # The model chooses which tools to call and with what (app/common/tool_loop.py);
-        # what they returned comes back in the same labelled shape as below.
+        # what they returned comes back in the same labelled shape as below. With
+        # askPerson it may also ask a person (app/common/asks.py), even with no tool.
         from app.common import tool_loop
         return await tool_loop.gather(ctx, query, tools=tools_of(ctx), labels=LABELS)
     for tool_key in tools_of(ctx):
@@ -70,7 +76,15 @@ async def gather(ctx, query: str | None = None) -> tuple[str, list[str]]:
             text, mode = await ctx.retrieve(query, doc_type=corpus)
             scope = f", corpus={corpus}" if corpus else ""
         else:
-            text, mode = await ctx.call_tool(tool_key, query)
+            try:
+                text, mode = await ctx.call_tool(tool_key, query)
+            except ToolDenied as e:
+                if getattr(e, "by", "") != "person":
+                    raise
+                # A person refused this call (the tool's `approval`): the agent carries on
+                # without it, and says so.
+                limitations.append(f"'{tool_key}' was not called: {e}")
+                continue
             scope = ""
         # A failed call raises, so reaching here means the tool answered.
         if text:

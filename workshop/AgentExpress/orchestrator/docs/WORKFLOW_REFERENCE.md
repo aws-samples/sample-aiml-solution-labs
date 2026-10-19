@@ -3,10 +3,8 @@
 Every key, what reads it, and what happens if you change it. This file holds the
 explanation so `workflow.json` can stay short enough to read as configuration.
 
-**Rule of the file:** if a key isn't listed here, nothing reads it — and
-`tests/test_config_keys.py` will fail. That guard exists because the config had
-accumulated keys that looked like switches and did nothing, which is worse than no
-key at all, since a reader believes them.
+**Rule of the file:** if a key isn't listed here, nothing reads it. An unknown key is
+named at `terraform plan` / `cdk synth`, before anything deploys.
 
 ## Before you read any of this: your editor already knows
 
@@ -60,13 +58,8 @@ completion. Where one key legitimately defaults differently per variant it says 
 variant: `maxResults` shows **5** on a `type: "kb"` tool (retrieval depth) and **10** on a
 `type: "websearch"` one (page size).
 
-That single home is enforced, not just intended. No plane may restate a declared default
-as a literal — `tests/test_config_keys.py` fails on any fallback in Python, HCL or
-TypeScript whose right-hand side is a hardcoded value instead of the accessor
-(`app/common/defaults.py`, `cdk/lib/defaults.ts`, `local.key_defaults`). The values reach
-the running code through `app/defaults.json`, which `python3 build_schema.py` projects out
-of `keys.json`; `keys.json` itself is 45 KB of prose and deliberately does not ship in the
-container image.
+Every plane reads that one home: the values reach the running code through
+`app/defaults.json`, which `python3 build_schema.py` generates from `keys.json`.
 
 The reason for the rule: a drifted default is quieter than a drifted value. A value this
 framework does not allow is rejected at plan or synth with a message naming it, whereas a
@@ -76,8 +69,8 @@ behaves differently — indistinguishable from the feature working.
 ## Two commands
 
 ```bash
-python3 format_workflow.py    # canonical key order + readable formatting (--check in CI)
-python3 build_schema.py       # regenerate the schema after a framework upgrade (--check in CI)
+python3 format_workflow.py    # canonical key order + readable formatting (--check to verify)
+python3 build_schema.py       # regenerate the schema after a framework upgrade
 ```
 
 **Every agent, tool and step is written in the same key order**, and the formatter is
@@ -86,7 +79,7 @@ what guarantees it rather than your discipline. An agent reads: who it is (`name
 *or*, for `runtime: "a2a"`, where it lives (`source`/`agentCard`, `skill`, `auth`) →
 what it may read (`tool`, `corpus`, `access`) → `agentcore`. A tool reads: `type`,
 `description` → where it lives → how it is called → filters → `auth` → `policy`. Hand
-edits are re-ordered on the next format, and `--check` fails CI if one drifts, so the
+edits are re-ordered on the next format, so the
 shape is learned once instead of re-read per entry.
 
 An unrecognised key is **kept**, not silently dropped — it has to survive to the
@@ -102,11 +95,12 @@ validator that can name it.
 | `orchestrator` | Engine-wide settings. Not an agent — it has no model or prompt of its own. |
 | `ui` | Presentation strings, so re-branding is a config edit rather than a UI code change. |
 | `guardrail` | The Bedrock Guardrail *policy* — what is enforced. Agents opt in per agent. |
-| `authorization` | Which JWT groups may approve, re-run, cancel, evaluate, run insights, delete, deploy, destroy, see every user's activity (`audit`), and read every user's builds and runs and destroy any build (`admin`). `audit` and `admin` are closed unless a group is named; `insights` is too whenever anything is restricted. Grant all three to a group filled from the backend only (the sample's `admins`) — a deploy refuses a self-sign-up group holding any of them. |
+| `authorization` | Which JWT groups may approve, re-run, cancel, evaluate, run insights, delete, deploy, destroy, see every user's activity (`audit`), and read every user's builds and runs and destroy any build (`admin`), and pick a run's models on Start run (`override`, from `orchestrator.models.overrides`). `audit`, `admin` and `override` are closed unless a group is named; `insights` is too whenever anything is restricted. Grant all three to a group filled from the backend only (the sample's `admins`) — a deploy refuses a self-sign-up group holding any of them. |
 | `tools` | Every data source an agent may call. |
 | `skills` | Know-how an agent opens when a task needs it: a SKILL.md with optional reference files. Optional. See [`skills`](#skills). |
 | `agents` | One entry per folder under `app/subagents/<id>/`. |
 | `steps` | The topology and the human-review gates. |
+| `guardrails`, `memories`, `evaluators`, `identities`, `policies` | Optional named blocks, defined once and used by name. See [named blocks](#named-blocks-guardrails-memories-evaluators-identities-policies). |
 
 Account-level values — region, IdP, whether the Gateway is on — live in
 `terraform.tfvars` or CDK context, **not** here, so this file stays portable
@@ -138,13 +132,15 @@ does not turn tests red.
 | Key | Read by | Notes |
 |---|---|---|
 | `defaultModel` | `config.py` | Model for any agent that doesn't name its own. `-c modelId` (CDK) / `model_id` (Terraform) override it; empty uses this, else the framework default in `defaults.json`. A cross-region profile prefix (`us.`, `eu.`, `apac.`) is moved to the deployment region's geography (`vocabulary.json` `inferenceProfileGeos`), as is each agent's `model`: a `us.` id deployed in eu-west-1 calls `eu.`. `global.` and bare model ids are left alone. |
-| `runtimeInvoke.maxAttempts` | `config.py` → `agentcore_agent._agentcore` | **Total** attempts per call to a `dedicated` agent's runtime, not retries-after-the-first. Default **1, i.e. no retrying**, which is deliberate: `InvokeAgentRuntime` is synchronous, slow and **not idempotent**, so a retry does not replace the attempt it followed — the remote container is already working and cannot tell the caller stopped listening. boto3's own default (`legacy` mode, up to 5 attempts) therefore lets one transient blip run a research agent twice, bill both model calls, and return whichever answered last, with nothing in the timeline to show it: the node logs "Invoking dedicated AgentCore Runtime" once, before any retry exists. Observed on a live run — two invocations of the `web_search` runtime with different `requestId`s, 13s apart, for one node execution, $0.0158 spent on a discarded answer. For a call this long the failure that matters is a lost response to work that already succeeded, and retrying that is strictly worse than failing: an error reaches the reviewer, a duplicate just inflates the bill. Raise it only if you have made the call idempotent. |
+| `runtimeInvoke.maxAttempts` | `config.py` → `agentcore_agent._agentcore` | **Total** attempts per call to a `dedicated` agent's runtime, not retries-after-the-first. Default **1, i.e. no retrying**, which is deliberate: `InvokeAgentRuntime` is synchronous, slow and **not idempotent**, so a retry does not replace the attempt it followed — the remote container is already working and cannot tell the caller stopped listening. boto3's own default (`legacy` mode, up to 5 attempts) therefore lets one transient blip run a research agent twice, bill both model calls, and return whichever answered last, with nothing in the timeline to show it: the node logs "Invoking dedicated AgentCore Runtime" once, before any retry exists. For a call this long the failure that matters is a lost response to work that already succeeded, and retrying that is strictly worse than failing: an error reaches the reviewer, a duplicate just inflates the bill. Raise it only if you have made the call idempotent. |
 | `runtimeInvoke.readTimeoutSeconds` | same | How long to wait for a dedicated agent's response. Default **600**: a dedicated agent that makes several tool calls and writes a long answer takes minutes (120 timed out such an agent mid-answer). With retrying off this timeout is fatal to the run, so keep it comfortably above your slowest agent — otherwise you trade a duplicate for a truncated run, which is not the trade being made here. |
 | `a2aInvoke.timeoutSeconds` | `config.py` → `a2a_agent` | Per HTTP request to a `runtime: "a2a"` agent (the card fetch, each RPC call). Default **30**; the shipped sample sets **150**, because two of its remote agents synthesize a full asset rather than answering a short question. Keep it **above** the remote agent's own timeout (the shipped stand-in's Lambda is 120s) so the side that gives up first is the side that can say why — a client that abandons the request leaves no diagnosis and cannot tell a slow agent from a dead one. |
 | `a2aInvoke.pollIntervalSeconds` | same | Gap between `tasks/get` calls while a remote task is still working. Default **2**. Their rate limit is unknown to you; a busy loop is rude and may be throttled, which then looks like their agent failing. |
 | `a2aInvoke.maxPollSeconds` | same | Total wall-clock before giving up on a remote task, failing the run with the last state seen. Default **300**. Separate from `runtimeInvoke` on purpose: a dedicated runtime is yours and you know how slow it is, whereas A2A models work as a *Task* precisely so it can take minutes — so the budget that matters is not one request timeout but how long you are willing to wait overall. Bounded rather than open-ended, because a task that never leaves `working` would otherwise hold the workflow until the runtime's own 8-hour ceiling. |
 | `policy.enabled` | `policy.tf`, `tool-plane.ts` | Creates the Cedar policy engine and attaches it to the Gateway. |
 | `policy.mode` | same | `ENFORCE` obeys a DENY and blocks the call; `LOG_ONLY` evaluates and logs without blocking — the safe way to roll out. |
+| `policy.custom` | same (one AgentCore policy each) | Your own Cedar statements beside the generated permits: `[{"name", "description", "statement"}]`. Actions are `<toolKey>___<toolName>` (one tool) or `<toolKey>` with `in`; the resource is always `AgentCore::Gateway::"{{gateway}}"`. A `forbid` always wins. To replace a tool's generated permit, set its `policy.permit` to `false`. |
+| `gatewayIdentity` | `cognito.tf` / `orchestrator-stack.ts`; `gateway/client.py` | `shared` (default: one machine client for all agents) or `perAgent` (one each, so the Gateway knows which agent called). `perAgent` needs the Cognito pool the deployment creates. |
 | `modelRates` | `config.py:MODEL_RATES` → `observability/pricing.py` | OPTIONAL per-model token rates, keyed by a substring of the model id: `{"nova-pro": {"input": 0.80, "output": 3.20}}` (USD per 1M tokens). First of four price sources: `modelRates`, then the AWS Price List for the deployment's region (`priceList`), then a built-in snapshot, then a fallback guess (row marked `rates_known=false`, shown as `~$`). Each llm row records which one priced it (`rates_source`), shown in the rate tooltip and the CSV/JSON export. A longer key wins over a shorter one. |
 | `priceList` | `config.py:PRICE_LIST` → `observability/pricelist.py` | Default **true**: price models from the AWS Price List API (`pricing:GetProducts`, granted by both IaC paths) for this region — standard on-demand text-token rates, regional vs `global.` profile told apart, cached for a day. `false` keeps pricing offline on the built-in snapshot. |
 | `imageRates` | `config.py:IMAGE_RATES` → `observability/pricing.py` | OPTIONAL per-image prices for image models, keyed by a substring of the model id: `{"sd3-5-large": 0.08}`. Wins over the AWS Price List and the `imageModels.pricePerImageUsd` snapshot in `vocabulary.json`. |
@@ -157,6 +153,12 @@ does not turn tests red.
 | `chatbot.greeting` / `chatbot.placeholder` | UI | The assistant's opening message and input placeholder. Shipped in the BFF projection (`orchestrator/bff/workflow.py`); the page keeps a short generic fallback if you omit them. |
 | `chatbot.tools.<name>` | `bff/chatbot.py` | One flag per assistant capability: `status`, `sessions`, `outputs`, `costs`, `latency`, `guardrails`, `evals`, `runEval`, `rerun`, `review`. Anything unlisted defaults to **on**. |
 | `attachments.s3` | `bff/runfiles.py`; `images.tf` / `orchestrator-stack.ts` | Buckets, or `bucket/folder` locations, a run's request may name as `s3://...` for agents with `attachments`, e.g. `["customer-docs/contracts"]`. The deployment grants **the BFF** read (and list) on exactly these; it copies each file into the run, so the runtimes only read the run's own copies. None by default: uploads only. A framework bucket (`agentcore-*`) is refused. |
+| `files.retentionDays` | `run_files.tf` / `lib/run-files.ts`; `app/common/artifacts.py`; `bff/runartifacts.py` | OPTIONAL, off unless `orchestrator.files` is set (even `{}`). Keeps the files runs make: agents save them with `ctx.save_file(name, data, content_type)` (to `runs/<session>/outputs/<name>`, at most 25 MB each), and the code the `codeInterpreter` tool runs is kept with what it printed (`runs/<session>/code/<agent>-<n>.<ext>` and `.log`). Setting it creates the assets bucket if no agent needed it, grants each dedicated runtime write on those two folders only, and deletes everything under `runs/` (inputs and images too) after **retentionDays**: 1 to 3650, default **90**. A run's files show on its **Files** tab and on the app's **Files** page. Not set: nothing new is created and nothing expires, as before. The same name saved twice in a run replaces the first. |
+| `limits.userDailyUsd` | `bff/limits.py`; `features/observability/spend.py` | OPTIONAL, off unless set. The most one user may spend in a day (US dollars, Eastern time; `0` = no limit). Once a user has spent that much, starting a run **or re-running one** is refused with HTTP 429 and a message that says what was used and when it resets. "Spent" is the same cost figure the observability views add up, kept as a running total per user per day (one small row in the telemetry table, written by the runtime as each call is metered) so a start does not have to read whole telemetry rows. It also stops a run that was let in under the limit and has since crossed it, at its next step: the runtime checks the same total before each agent starts, and that step fails with the limit and its reset time (`BudgetReached`) having done no work, so it can simply be run again after the reset. A step already going finishes, so a user can overshoot by about one step's cost. It **fails open**: if the counters cannot be read the run starts, and the log says so. With `idp: "none"` nobody is identified and everyone shares one budget. Turning it on starts that day's total from that moment. |
+| `limits.userRunsPerHour` | `bff/limits.py` | OPTIONAL, off unless set. The most runs one user may start in a clock hour (Eastern time; `0` = no limit). The run past it is refused with HTTP 429 and the time to come back. Counted with one conditional write, so two requests cannot both take the last slot. A re-run is not a new run and is not counted. It is a fixed hour, not a sliding window, so a user can start the limit's worth either side of the hour boundary. This is what bounds how many runs start before spend catches up with `userDailyUsd`. Triggers count too, as whoever they run as: `runAs: "service"` is the trigger's own user, `runAs: "owner"` spends from the build owner's budget. This is on top of the trigger's own `maxRunsPerHour`. |
+| `liveConfig` | `bff/liveconfig.py`; `app/common/liveconfig.py`; `liveconfig.tf` / `orchestrator-stack.ts` | OPTIONAL, default `false`. Lets an admin change each agent's system prompt and model settings (`model`, `temperature`, `topP`, `maxTokens`, `stopSequences`) on the running deployment, without a redeploy, on the **Live config** page: edits are saved as numbered versions, and activating one points new runs at it (activating an older one, or version 0, is the rollback). A run uses the version that was active when it started for every step, through gate resumes, re-runs and dedicated runtimes, and shows it as `config vN`. Nothing else can change live: tools, gates, guardrails, memory, Cedar, identity and topology are provisioned by the deploy. A model must be one the runtimes' IAM grant covers (foundation models, and inference profiles in this region and account). Needs a group granted `admin`. When `false`, nothing is read, no IAM statement is added and no page is shown. Versions are reserved rows in the telemetry table that only the BFF may touch (`_liveconfig#`). |
+| `models.overrides` | `bff/model_override.py`; `app/common/model_routing.py` | OPTIONAL. Up to 20 model ids a person may pick on **Start run** (Advanced), for every agent or per agent, for that run only. Needs a group granted `override` in `authorization.actions` (closed unless granted); the server refuses a pick from anyone else, and any model not on this list. The run stores its pick (`modelOverride`, shown as "Model override" on the run page), keeps it through every gate and re-run, and sends a dedicated agent only its own model. An overridden agent uses that model only: no `route`, no `fallback`. Harness agents, remote agents and task steps keep their own models. Not for a Builder build started from the console. |
+| `limits.monthlyUsd` | `bff/limits.py`; `features/observability/spend.py` | OPTIONAL, off unless set. The most this **deployment** may spend in a calendar month, for everyone together (US dollars, Eastern time; `0` = no limit). Once reached, every new run is refused with HTTP 429 until the 1st, and a run in progress stops at its next step, as with `userDailyUsd`. It is one running total for the app, kept like the daily one, and it is cut by the date each cost was incurred. It is a brake on a runaway app or trigger, not a bill: it counts what this app's own observability meters, which is as exact as the model prices behind it. |
 | `interceptors.request` / `interceptors.response` | `tool-plane.ts` / `interceptors.tf`; `app/tools/_code/interceptor-<point>/` | A Lambda the Gateway calls before each MCP request and/or after each answer (at most one each). Exactly one of `code` (written in the build, generated from `templates`: request `audit`, `blockTools`, `argumentGuard`, `injectContext`, `custom`; response `audit`, `redactPii`, `hideTools`, `capResult`, `custom`) or `lambdaArn`. `passRequestHeaders` (default false) hands it the headers, with `x-ax-session` / `x-ax-agent` / `x-ax-user`. A refusal is `Refused by interceptor: <reason>` on the timeline. Needs the Gateway. |
 | `triggers.<name>` | `bff/triggers.py`; `triggers.tf` / `orchestrator-stack.ts` | What starts a run without anyone typing it: `type` `webhook` (`signature`), `schedule` (`expression`, `timezone`), `eventbridge` (`pattern`, `bus`), `s3` (`bucket`, `prefix`) or `sqs` (`queueArn`, or none for a created queue with a dead-letter queue). `prompt` with `{{placeholders}}` from the delivery; `enabled`, `runAs` (`owner` or `service`), `approvers`, `gates` (`inherit` or `auto`), `maxRunsPerHour` (60), `attachPayload`, `idempotencyKey`. Webhooks arrive at `POST /api/hooks/<name>`, the one route without a JWT, proven by the signature. |
 
@@ -167,11 +169,7 @@ default-deny, including a tool name a prompt-injected instruction invents.
 ## `ui`
 
 Every user-facing string in the shell, so re-branding is a config edit rather than a
-change to the UI's source. All optional — the page has a neutral fallback for each — and
-all guarded: `tests/test_config_keys.py` scans `web/src/**` and fails on a `ui` key
-nothing renders, because a
-presentation key that does nothing is worse than an absent one (you edit it and see
-no change, with nothing to tell you why).
+change to the UI's source. All optional — the page has a neutral fallback for each.
 
 | Key | Where it shows |
 |---|---|
@@ -193,21 +191,34 @@ the id becomes part of an AgentCore Runtime name.
 | Key | Read by | Notes |
 |---|---|---|
 | `name` | `registry.py`, UI | Display name. |
-| `runtime` | `registry.py`, `subagent_runtimes.tf` | `main` \| `dedicated` \| `a2a`. See below — the first two are placements of *your* code, the third is an agent you don't operate. |
-| `model` | `registry.py` | **Optional.** Omit to use `orchestrator.defaultModel`. No shipped agent sets it; the mechanism is there when you want a bigger model for one step. |
+| `runtime` | `registry.py`, `subagent_runtimes.tf` | `main` \| `dedicated` \| `a2a` \| `task` \| `harness`. See below — the first two are placements of *your* code, the third is an agent you don't operate, `task` is a step with no model ([task steps](#runtime-task--a-step-with-no-model)), and `harness` is an agent with no code, run by a managed AgentCore Harness ([harness agents](#runtime-harness--an-agent-run-by-agentcore-harness)). |
+| `task` | `registry.py` → `app/common/task_agent.py`; `bff/task_check.py`, `taskCheck.ts`; `tasks.tf` / `cdk/lib/tasks.ts` | **`runtime: "task"` only, and required there.** What the step does: `{"kind": "tool" \| "code" \| "extract" \| "output", ...}`. See [task steps](#runtime-task--a-step-with-no-model). |
+| `model` | `registry.py` | **Optional.** Omit to use `orchestrator.defaultModel`. No shipped agent sets it; the mechanism is there when you want a bigger model for one step. `litellm/<name>` (e.g. `litellm/gpt-4o`) is a non-Bedrock model served by the deployment's LiteLLM proxy (`litellm_base_url` / `-c litellmBaseUrl`; DEPLOYMENT.md "Using non-Bedrock models through LiteLLM"). Not for `orchestrator.defaultModel` or an evaluator's judge `model`. |
+| `models` | `app/common/model_routing.py` (from `ctx.llm` and the tool-calling turn); `bff/model_routing_check.py`, `modelRoutingCheck.ts` | **Optional; `main` and `dedicated` only.** `{"route": [...], "fallback": [...]}`. `route`: up to 10 rules, first match wins, else the agent's model: `{"model": m, "inputTokensOver": N}` (the call's system + user text, estimated at 4 characters per token, is over N, 1-1000000) or `{"model": m, "matches": "invoice\|refund"}` (a case-insensitive regular expression, 1-200 characters, searched in the run's request and its subject). `fallback`: up to 3 models tried in order when the call fails with Bedrock `ThrottlingException`, `ServiceUnavailableException` or `ModelNotReadyException` (or HTTP 429/503 from a LiteLLM proxy); never on any other error (validation, access, timeout, guardrail). A run with a model override uses neither. Each call's telemetry row records the model and `chosen_by` (`route N`, `fallback N`, `override`). No IAM change: the runtimes may already call any foundation model and any inference profile in this region and account. |
+| `instructions` | `harness.tf` / `cdk/lib/harness.ts` → the harness's system prompt; `harness_agent.py` | **`runtime: "harness"` only, and required there (except with `harness.arn`).** The harness agent's system prompt. Set on the harness at deploy time, so a change needs a deploy (live config does not change it). |
+| `harness` | `harness.tf` / `cdk/lib/harness.ts`; `harness_agent.py`; `bff/harness_check.py`, `harnessCheck.ts` | **`runtime: "harness"` only.** `{"maxIterations": 1-100, "timeoutSeconds": 1-900, "shell": false, "provider", "apiKey", "apiBase", "browser", "codeInterpreter", "mcp", "skills", "memory", "container", "mounts", "network", "endpoint"}`, or `{"arn": "<harness ARN>", "endpoint", "maxIterations", "timeoutSeconds"}` to use a harness made elsewhere. A harness agent's `tool` is the Gateway tools its harness calls. See [harness agents](#runtime-harness--an-agent-run-by-agentcore-harness). |
 | `maxTokens` | `registry.py` → `agent.max_tokens` | Output budget in tokens for this agent's model calls. A call may take up to 300 s to answer (`BEDROCK_READ_TIMEOUT_SECONDS` on the runtime; boto3's own 60 s cut off an 8000-token report), with one retry. |
 | `temperature` | `registry.py` | **Optional**, defaults to 0. |
-| `tool` | `registry.py` | A key in the `tools` block, or a list of keys (`["policyDocs", "claimsDb"]`). Each tool is queried before the agent reasons and its results reach the model as labelled evidence (`_shared/evidence.gather`). Validated — a name that doesn't resolve fails at plan/synth. Omit and the agent reasons purely over upstream outputs. |
+| `tool` | `registry.py` | A key in the `tools` block, or a list of keys (`["policyDocs", "claimsDb"]`). Each tool is queried before the agent reasons and its results reach the model as labelled evidence (`_shared/evidence.gather`). Validated — a name that doesn't resolve fails at plan/synth. Omit and the agent reasons purely over upstream outputs. On a `runtime: "harness"` agent: the Gateway tools its harness calls itself ([harness agents](#runtime-harness--an-agent-run-by-agentcore-harness)). |
 | `corpus` | `registry.py` | For a `type: "kb"` tool: which corpus to retrieve from. Must be one of that tool's declared `corpora`. |
 | `produces` | `nodes.py` | The deliverable name, injected into the agent's task prompt. |
 | `access` | UI chip | A short human label for the data source. **Only read when the agent has no `tool`** — with a tool, the chip is derived from the tool's type. Don't set both. |
-| `attachments` | `context.py` → `app/common/attachments.py`; `bff/runfiles.py` | **`main` / `dedicated` only.** `true`: this agent's model reads the files a run is started with — uploaded on **Start run**, or named in the request as `s3://bucket/key` (or `s3://bucket/folder/`) inside a location `orchestrator.attachments.s3` allows. Every model call of the agent gets them as Converse document or image content (at most 5 files; documents 4.5 MB, images 3.75 MB; PDF, Word, Excel, CSV, HTML, text, Markdown, JSON, code, PNG, JPEG, GIF, WebP). They are checked and copied into the run's own folder when it starts, so a re-run reads the same files. The model must accept documents (Claude, Amazon Nova). Default `false`; the Start run form offers no files unless some agent reads them. |
+| `attachments` | `context.py` → `app/common/attachments.py`; `bff/runfiles.py` | **`main` / `dedicated` / `task`.** On a task step: a code step's script gets the run's files in `in/`, and an extract step needs it. `true`: this agent's model reads the files a run is started with — uploaded on **Start run**, or named in the request as `s3://bucket/key` (or `s3://bucket/folder/`) inside a location `orchestrator.attachments.s3` allows. Every model call of the agent gets them as Converse document or image content (at most 5 files; documents 4.5 MB, images 3.75 MB; PDF, Word, Excel, CSV, HTML, text, Markdown, JSON, code, PNG, JPEG, GIF, WebP). They are checked and copied into the run's own folder when it starts, so a re-run reads the same files. The model must accept documents (Claude, Amazon Nova). Default `false`; the Start run form offers no files unless some agent reads them. |
 | `agentCard` | `a2a_agent.py` | **`runtime: "a2a"` only.** The remote agent's base URL or Agent Card URL. Must be `https://`. |
 | `auth` | `a2a_agent.py` | **`runtime: "a2a"` only.** `none` \| `bearer` \| `oauth2` \| `sigv4`. Defaults to `none`. Required to be `sigv4` with `source` — see the stand-in, below. |
 | `source` | `a2a.tf`, `orchestrator-stack.ts` | **`runtime: "a2a"` only.** The framework-deployed stand-in to reach instead of a committed URL. `a2a_lambda` is the only value. Mutually exclusive with `agentCard`. |
 | `skill` | `a2a_agent.py` (endpoint path), IaC | **With `source` only.** Which of the stand-in's published skills this agent is. An external agent advertises its skills in its own Agent Card, so this means nothing without `source` and is rejected there. |
 | `skills` | `context.py` → `app/common/skills.py` | Names in the top-level [`skills`](#skills) map this agent may use. With `toolMode: "model"` and tools it opens them itself (`use_skill`); otherwise they are added to its instructions in full. |
 | `registry` | Console only | Where an agent card came from in an AWS Agent Registry (`runtime: "a2a"`). Set by the console, never by hand; see [`skills`](#skills) for its fields. |
+| `askPerson` | `app/common/asks.py` → `tool_loop.py`; `bff/asks.py` | **`main` only, with `toolMode: "model"`.** `true`, or `{"maxQuestions": 3, "timeout": "24h"}`. The agent's model is offered an `ask_person(question)` tool: the run waits, the question is shown on the run page with a text box, and the answer comes back to the model as the tool's result, labelled as the person's own (untrusted) words. At most `maxQuestions` (1–10, default 3) per step; a question is cut to 500 characters and an answer to 4,000. With `timeout`, an unanswered question goes unanswered after that long (the five-minute sweep, as for a gate). A run started unattended (`gates: "auto"`) gets "no person is available". Model and tool calls made before the question are replayed from the checkpoint on resume, not made again. |
+| `kind` | `registry.py`, UI | `sync` (default) or long-running. Presentation only: the UI shows a chip when it is not `sync`. |
+| `framework` | `scaffold.py apply` → `agent.py` | `plain` (default), `strands` or `langgraph`: how the generated `agent.py` reasons. All call the model through `ctx.llm`. An `agent.py` you wrote is kept. |
+| `toolMode` | `registry._configure` → `evidence.gather` / `tool_loop.py` | `direct` (default): every bound tool is queried once before the model reasons. `model`: the model picks tools and arguments, reading each result, up to `maxToolCalls`. Every call goes through the Gateway either way. |
+| `maxToolCalls` | `tool_loop.py` | With `toolMode: "model"`: the most tool calls before the model must answer. Default **6**. |
+| `topP`, `stopSequences` | `registry.py` → `ctx.llm` | Optional sampling settings. Several Claude models take `temperature` or `topP`, not both. Up to 4 stop sequences; one that occurs inside a JSON asset cuts it off. |
+| `output` | `scaffold.py apply`; `registry.py` | `text` (default, a JSON asset) or `image`: the model writes an image brief and an image model renders it; the reviewer sees the images at the gate. |
+| `image` | `registry.py` → `ctx.image` | With `output: "image"`: `model` (default Stable Diffusion 3.5 Large), `aspectRatio` (`1:1`), `outputFormat` (`png` or `jpeg`), `seed`, `negativePrompt`, `allowCrossRegion` (needed when the model is not served in this geography; a US deployment renders in us-west-2 without it). |
+| `vision` | `registry.py` → `ctx.llm` | `{"from": ["<agent>"], "maxImages": 4}`: this agent's model reads images earlier agents made in this run (max 20). The model must accept images. |
 
 ### `runtime` — where the agent actually runs
 
@@ -224,16 +235,16 @@ is a different thing entirely.
 agent to its own container and its own scaling is a one-word edit.
 
 `a2a` is not a placement, it is a **trust boundary.** The agent is somebody else's
-service: a partner's, another team's, or a managed one. Nothing of it lives in this
+service: a third party's, another team's, or a managed one. Nothing of it lives in this
 repo, which is the point — it turns a multi-agent workflow into a multi-*organisation*
 one. That is also why it is a `runtime` value and not a `tool`: a tool returns data
 for one of *your* agents to reason over, whereas this replaces the agent.
 
 ```json
 "credit_check": {
-  "name": "Partner Credit Check",
+  "name": "Vendor Credit Check",
   "runtime": "a2a",
-  "agentCard": "https://agents.partner.example/credit",
+  "agentCard": "https://agents.vendor.example/credit",
   "auth": "bearer",
   "produces": "credit-assessment"
 }
@@ -378,9 +389,9 @@ first leaves no diagnosis and cannot tell a slow agent from a dead one.
 It requires `auth: "sigv4"`, and that is validated rather than defaulted: the endpoint is
 an `AWS_IAM` Function URL, so an unsigned request is a guaranteed 403 that surfaces as
 "could not read the Agent Card … HTTP 403" — which reads like a missing agent instead of
-like wrong config. Observed on a live run, because `auth` defaults to `none`.
+like wrong config.
 
-Point an agent at a real partner's `agentCard` instead and none of that infrastructure
+Point an agent at a real third party's `agentCard` instead and none of that infrastructure
 is provisioned.
 
 > **There is no `repair` key.** An earlier output-rules engine that re-asked an agent to
@@ -388,6 +399,123 @@ is provisioned.
 > `record`, `evidence`, `transcript` treated as artifact nouns) that misfires in a legal or
 > medical domain, and a framework has no business holding that opinion. If you want output
 > checks, put them in your own agent under `app/subagents/<id>/`.
+
+### `runtime: "task"` — a step with no model
+
+A task step sits in `steps` like an agent (alone, in a `parallel` group or a `sequence`,
+gated, re-run from a gate, a `branch` decider) and runs in the orchestrator's own runtime.
+It makes no model call, has no folder under `app/subagents/` and no prompt, and its output
+is JSON that a later agent reads with `ctx.input("<id>")`. Only `name`, `kind`, `runtime`,
+`produces`, `attachments`, `task` and `agentcore.guardrails` apply.
+
+```json
+"price_lookup": {
+  "name": "Look up the price",
+  "runtime": "task",
+  "task": {"kind": "tool", "tool": "pricing",
+           "arguments": {"service": "{{outputs.intake.service}}", "query": "{{request}}"}}
+},
+"crunch": {
+  "name": "Crunch the sales file",
+  "runtime": "task",
+  "attachments": true,
+  "task": {"kind": "code", "language": "python",
+           "code": "import json, csv\nrows = list(csv.DictReader(open('in/sales.csv')))\nprint(json.dumps({'rows': len(rows)}))"}
+},
+"read_invoice": {"name": "Read the invoice", "runtime": "task", "attachments": true,
+                 "task": {"kind": "extract", "features": ["TABLES", "FORMS"]}},
+"export": {"name": "Export", "runtime": "task",
+           "task": {"kind": "output", "format": "csv", "from": ["price_lookup.result"], "name": "prices-{{session}}"}}
+```
+
+| `task.kind` | Keys | What it does |
+|---|---|---|
+| `tool` | `tool` (required), `arguments` | Calls the tool through the Gateway with `arguments`, as one call. The Cedar policy, interceptors and the tool's `approval` apply as for an agent's call; the tool's fixed `args` win over `arguments`. A target that publishes several tools needs `call` on the tool. Output: `{"result": <the tool's answer as data>, "text": ...}`. |
+| `code` | `code` (required, ≤ 50,000 bytes), `language` (`python` default, `javascript`, `typescript`) | Runs the script once in the AWS-managed AgentCore Code Interpreter (`aws.codeinterpreter.v1`), a fresh session that is always stopped. The script reads `in/request.txt`, `in/outputs.json` (earlier outputs, parsed when they are JSON) and, with `attachments`, the run's files as `in/<name>`. What it prints is the output (`output`, parsed when it is JSON); files it writes to `out/` are kept as run files (up to 20); the script and its log go to `runs/<session>/code/` when the deployment keeps files. A non-zero exit fails the step with the end of stderr. Up to 120 s. |
+| `extract` | `file`, `features` (`TABLES`, `FORMS`; default both) | Reads the run's PDF, PNG and JPEG files (or the one named `file`) with Amazon Textract: an image with `AnalyzeDocument`, a PDF with the asynchronous `StartDocumentAnalysis` (the synchronous call reads one page only), polled for up to 300 s. Output per file: `pages`, `text` (cut at 50,000 characters), `tables` (rows of cell text) and `forms` (`key`/`value`). Needs `attachments: true`. |
+| `output` | `format` (required: `csv`, `json`, `markdown`, `txt`), `name`, `from` | Writes a file from earlier outputs and keeps it with the run (`runs/<session>/outputs/`, on the run's Files tab). `from` lists step ids or `<step>.<field>` (default: every earlier output); a CSV takes the rows of a list of objects. Needs `orchestrator.files`. No Excel or PDF writer: that is a code step's job. |
+
+**Placeholders** in `arguments` and an output's `name`: `{{request}}`, `{{session}}`,
+`{{outputs.<step>}}` and `{{outputs.<step>.<field>}}` (`.<n>` for a list item). A string that
+is only one placeholder takes the value as it is (a number stays a number); inside other text
+it becomes text. Each `<step>` must run before this one; the validators say so before a deploy.
+
+Good to know: add task steps from the palette (**+ New generic step**). Renaming a step does not
+rewrite placeholders that name it; the validator flags them. A run does not accept TIFF files, so
+Textract reads PDFs, PNG and JPEG.
+
+### `runtime: "harness"` — an agent run by AgentCore Harness
+
+A harness agent has no folder under `app/subagents/` and no code: the deploy creates one
+[AgentCore Harness](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/harness.html)
+for it, and the orchestrator calls `InvokeHarness` when the step runs. It sits in `steps` like
+any agent (gated, re-run with a reviewer's note, in a `parallel` group or a `sequence`). It is
+given the same inputs an A2A agent is (the request, earlier outputs, the reviewer's note,
+recalled insights) as one message, and the last thing it says is the step's output; a JSON
+answer gets the asset envelope of its `produces`.
+
+```json
+"writer": {
+  "name": "Writer",
+  "runtime": "harness",
+  "produces": "draft",
+  "instructions": "You write the customer summary from the earlier steps' outputs. Return JSON: {\"summary\": ...}.",
+  "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+  "maxTokens": 2000,
+  "harness": {"maxIterations": 10, "timeoutSeconds": 300, "shell": true}
+}
+```
+
+A fuller one, with tools, skills, memory and an endpoint:
+
+```json
+"researcher": {
+  "name": "Researcher",
+  "runtime": "harness",
+  "instructions": "Research the request with your tools and return JSON: {\"findings\": [...]}",
+  "model": "gemini/gemini-2.5-pro",
+  "tool": ["docs", "pricing"],
+  "harness": {
+    "provider": "litellm", "apiKey": "geminiKey",
+    "browser": true, "codeInterpreter": true,
+    "mcp": [{"name": "wiki", "url": "https://wiki.example.com/mcp"}],
+    "skills": [{"aws": ["core-skills/*"]}, {"git": "https://github.com/anthropics/skills", "path": "skills/docx"}],
+    "memory": "research",
+    "mounts": [{"session": "/mnt/work"}],
+    "endpoint": "live"
+  }
+}
+```
+
+| Key | What it sets on the harness |
+|---|---|
+| `instructions` | The system prompt. Required (except with `harness.arn`). |
+| `model`, `temperature`, `topP`, `maxTokens` | The model and its settings. Bedrock by default (`orchestrator.defaultModel` if omitted, moved to the region's inference-profile geography; with `topP` and no `temperature`, no temperature is sent). Another provider's model is its own id, sent as given, with only the settings you write. Not `litellm/<name>`: that is this deployment's LiteLLM proxy, which a harness does not call. |
+| `harness.provider` | `"bedrock"` (default), `"openai"`, `"gemini"` or `"litellm"` (any LiteLLM provider; ids like `gemini/gemini-2.5-pro`, `anthropic/claude-sonnet-4-6`). Anything but Bedrock needs `model`. |
+| `harness.apiKey` | The provider's key for `openai` and `gemini` (optional for `litellm`): the name of an `identities` entry of type `apikey` (its key in the build's secrets; the deploy makes an AgentCore API key credential provider `bedrock-agentcore-<agent>-hk-<name>` from it) or the ARN of an API key credential provider you already have. Never the key. |
+| `harness.apiBase` | `litellm` only: an OpenAI-compatible endpoint (a proxy, a gateway), `https://` on a public host. The key is sent to it. |
+| `tool` | The build's tools (keys of `tools`) the harness may call through the Gateway. The harness gets one `agentcore_gateway` tool named `gateway`, signed in through an OAuth2 credential provider (`bedrock-agentcore-<agent>-hgw-<id>`) that holds the agent's Gateway machine client: the shared one, or its own with `orchestrator.gatewayIdentity: "perAgent"`. So Cedar policy and the interceptors apply to it as to every agent. Only the named tools are allowed (`@gateway/<tool>___*`). Needs the Gateway, signed in with Cognito's client-credentials token (the pool this deployment makes, or `idp: "cognito"` with your own); not tools with `auth` `"user"` or `"obo"`, which act as the person. Interceptors with `passRequestHeaders` see no `x-ax-*` headers from a harness. |
+| `harness.mcp` | Remote MCP servers, up to 10: `[{"name": "wiki", "url": "https://..."}]`, `https://` on a public host (not localhost, a private address, `.local` or `.internal`). No headers: nothing secret goes in workflow.json. |
+| `harness.browser`, `harness.codeInterpreter` | `true` for the managed AgentCore Browser / Code Interpreter, or a custom one's ARN. The role gets the session actions on exactly that resource. |
+| `harness.shell` | `true` lets the agent use the built-in `shell` and `file_operations` tools in its own isolated session, which can reach the internet. Without it, and with no other tool, `allowedTools` is set so that it can use no tool at all, on the harness and again on every call. With tools or an API key, shell commands run in the session that holds their credentials: the check warns. |
+| `harness.skills` | Up to 20, each one of `{"aws": ["core-skills/*"]}` (the AWS skills catalog, `[]` for all), `{"git": "https://...", "path": "folder", "credential": "<apikey identity or ARN>"}` (a private repository's token), `{"s3": "s3://bucket/prefix/"}` (the role may read that prefix and list that bucket). The skill tool (`skills`) is allowed when there are skills. The build's own `skills` are not uploaded for a harness. |
+| `harness.memory` | One of the build's `memories`: the harness keeps its conversation there (`agentCoreMemoryConfiguration`) and recalls long-term records itself, as `actorId` the same partition the framework uses (the memory's `scope`, default per user). Default: memory **off** on the harness (the service would otherwise create a billed managed memory). Not with `agentcore.memory`, which would store the same turns again: use one. |
+| `harness.container` | Your image for the session, `linux/arm64`: `<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>` (the role may pull that repository only) or `public.ecr.aws/...`. |
+| `harness.mounts` | Up to 5 under `/mnt`: `{"session": "/mnt/data"}` (per-session storage, kept across stop and resume, no VPC), `{"efs": "<access point ARN>", "path": "/mnt/efs"}`, `{"s3Files": "<access point ARN>", "path": "/mnt/s3"}`. The role may mount through exactly those access points. EFS and S3 Files need `network`. |
+| `harness.network` | `{"subnetIds": [...], "securityGroupIds": [...]}`: the session runs in your VPC. The VPC needs interface endpoints for `ecr.api`, `ecr.dkr` (and `bedrock-runtime` for a Bedrock model) and a gateway endpoint for S3; the role may pull the managed image from the region's `harness-*` repository. |
+| `harness.endpoint` | A named endpoint (letters, digits, `_`; not `DEFAULT`) the orchestrator calls with `qualifier`. CDK points it at the harness's `Version`, so a deploy that changes the harness moves it in place; Terraform re-creates it when the harness changes (the provider reports no version), so a step calling it during that apply fails. |
+| `harness.arn` | A harness made elsewhere, in this account and region: the deploy creates no harness, role or credential provider for the agent, and the orchestrator's role may invoke exactly that ARN (and `harness.endpoint` on it). With it, `instructions`, `model`, `temperature`, `topP`, `maxTokens`, `tool` and every other `harness` key are refused: they are set on that harness. `maxIterations` and `timeoutSeconds` are sent on each call. Its own tools are kept (no `allowedTools` is sent). Its model is not known here, so its tokens are recorded with `rates_known: false`. |
+| `harness.maxIterations`, `harness.timeoutSeconds` | How many model turns and how many seconds one step may take. Omitted: the harness's own defaults. |
+
+A model of another provider is recorded with its tokens and `rates_known: false` (no price
+table here covers it). `agentcore.memory` works as for an A2A agent: the orchestrator recalls before the step,
+sends the insights with their caveat, and stores the answer. `agentcore.guardrails` and
+`agentcore.evaluations` work as for any agent, in the orchestrator. `agentcore.identity` is refused.
+
+Good to know: a harness agent's prompt and model are set on the harness at deploy, so live
+config does not change them. For memory, set `harness.memory` or `agentcore.memory`, not
+both. Each tool call the harness makes is a timeline line; its own spans are in
+AgentCore observability under the harness.
 
 ### `maxTokens` — why it is per agent
 
@@ -429,14 +557,19 @@ or off is a config change. Omit a block to leave the capability off.
 | Key | Read by | Notes |
 |---|---|---|
 | `memory.longTerm` | `context.py` | List of strategies: `semantic` extracts discrete insights into `insights/{actor}` (cross-run), `summary` maintains a running summary in `summary/{actor}/{session}` (session-scoped), `userPreference` learns the requester's stated preferences into `preferences/{actor}`, and `episodic` records each run in `episodes/{actor}/{session}` with cross-run reflections in `episodes/{actor}` (what recall reads). `true` is shorthand for `["semantic"]`. Before `run()` the framework recalls past insights into the system prompt; after, it stores new ones. The actor is the agent plus `memory.scope` (default `user`: a digest of the user, and the subject when the run has one), so insights don't leak between users or subjects. `semantic` and `summary` are always provisioned; `userPreference` and `episodic` only when some agent names them (each strategy is a model call per stored event). Any other name fails the schema (`workflow.schema.json`) and is rejected at container start (`app/orchestrator/registry.py`) rather than silently searched as a namespace nothing writes to. **Where the recall/store runs depends on the placement:** for `main` it is the orchestrator; for `dedicated` it is inside that agent's own container, because that is where `ctx.llm` injects the insights; for `a2a` it is the orchestrator, which carries the recalled insights to the remote agent inside the A2A task (`recalledContext`, with the caveat attached) and stores its reply afterwards. |
+| `memory.scope` | `context.py` | Whose memories: `user` (default, each user's own), `subject` (shared per `subject_id`), `agent` (everyone who runs the agent) or `run`. |
+| `memory.custom` | IaC custom strategy; `context.py` | `{"base": "semantic" \| "summary" \| "userPreference", "instructions": "...", "model": "..."}`: a built-in strategy that follows your extraction instructions. |
+| `memory.use` | `context.py`; IaC named memories | Use a memory from [`memories`](#named-blocks-guardrails-memories-evaluators-identities-policies) instead of setting strategies here. Agents naming the same memory share it, within its scope. |
 | `identity.outbound` | `context.py` | Credential providers this agent may fetch an OAuth token from, to call an external API **directly** via `ctx.get_identity_token`. Not needed for anything reached through the Gateway. |
 | `guardrails.input` | `context.py` | Run the Bedrock guardrail on the agent's input, before the model sees it. |
 | `guardrails.output` | `context.py` | Run it on the agent's output. Use this on any agent handling untrusted text. |
 | `guardrails.guardrailId` | `context.py` → the `GuardrailIdentifier` on the Bedrock call | Use a **different** guardrail for this one agent instead of the deployment's own — for a step whose content policy genuinely differs, such as a medical or legal stage inside a general pipeline. Omit and the deployment guardrail applies. |
+| `guardrails.use` | `context.py`; IaC named guardrails | Apply a guardrail from [`guardrails`](#named-blocks-guardrails-memories-evaluators-identities-policies) instead of the deployment's own; `input` and/or `output` say where. |
 | `evaluations.enabled` | `evaluations/service.py` | Enables AgentCore Evaluations (LLM-as-judge) and shows the Evaluate button. |
 | `evaluations.auto` | same | `true` scores the agent automatically at run completion; `false` means on demand only. Each evaluator is a billed model call, so `false` is the cheaper default. |
-| `evaluations.evaluators` | same | Built-ins, `Builtin.<Name>`: `Coherence`, `Conciseness`, `Correctness`, `Faithfulness`, `GoalSuccessRate`, `Harmfulness`, `Helpfulness`, `InstructionFollowing`, `Refusal`, `ResponseRelevance`, `Stereotyping`, `ToolParameterAccuracy`, `ToolSelectionAccuracy`. Validated on SHAPE (`Builtin.<Name>` or `Custom.<Name>`) rather than against this list, so an evaluator AWS adds later needs no framework edit, while a typo like `Faithfullness` is still caught at container start rather than as an API error mid-run. |
-| `policy.enabled` | `context.py` | An **app-level** Cedar check via `ctx.policy_check`. Secondary: tool calls through the Gateway are already authorized server-side by the attached engine. |
+| `evaluations.evaluators` | same | Built-ins, `Builtin.<Name>`: `Coherence`, `Conciseness`, `Correctness`, `Faithfulness`, `GoalSuccessRate`, `Harmfulness`, `Helpfulness`, `InstructionFollowing`, `Refusal`, `ResponseRelevance`, `SkillInstructionFollowing`, `SkillSelectionAccuracy`, `Stereotyping`, `ToolParameterAccuracy`, `ToolSelectionAccuracy`, `TrajectoryAnyOrderMatch`, `TrajectoryExactOrderMatch`, `TrajectoryInOrderMatch` (scored by this framework: Coherence, Conciseness, Correctness, Faithfulness, Harmfulness, Helpfulness, InstructionFollowing, Refusal, ResponseRelevance, Stereotyping). Validated on SHAPE (`Builtin.<Name>` or `Custom.<Name>`) rather than against this list, so an evaluator AWS adds later needs no framework edit, while a typo like `Faithfullness` is still caught at container start rather than as an API error mid-run. |
+| `evaluations.custom` | IaC evaluator; `evaluations/service.py` | Your own LLM judges for this agent: `[{"name", "instructions", "model", "scale"}]`. Each becomes an AgentCore evaluator, scored like a built-in and deleted on destroy. Or list `Custom.<name>` from [`evaluators`](#named-blocks-guardrails-memories-evaluators-identities-policies) in `evaluators`. |
+| `policy.enabled` | nothing | **Has no effect** (a validation warning says so); kept only so older files still load. AgentCore Policy evaluates Cedar at the Gateway, on every tool call of every agent: set `orchestrator.policy`. AgentCore has no API for a Cedar decision from agent code, so `ctx.policy_check` always returns true. |
 
 **Deliberately not per-agent**, though it might look like it should be:
 
@@ -465,7 +598,7 @@ The key is **both** the Gateway target name **and** the label an agent binds to 
 > this file (`maxTokens`, `agentCard`, `gateId`). All four planes reject a bad key up
 > front, rather than letting CloudFormation refuse the change set after a clean synth.
 
-Six types:
+Seven types:
 
 | `type` | Backend | Required keys |
 |---|---|---|
@@ -475,6 +608,7 @@ Six types:
 | `openapi` | Any REST API, from an OpenAPI 3 document: in S3, in `app/tools/`, or inline | `schemaS3Uri` **or** `source` **or** `schema` |
 | `apigateway` | A stage of an API Gateway REST API in the deploy's account and region | `restApiId`, `stage`, `toolFilters` |
 | `lambda` | A Lambda — yours, or one the framework deploys | `lambdaArn` **or** `source`, plus `toolSchema` |
+| `smithy` | An AWS service's API, from its Smithy JSON model: in S3 or inline | `schemaS3Uri` **or** `schema`, plus `allow` |
 
 Outbound `auth` for `mcp`, `openapi` and `apigateway`: `apikey` (vaulted, sent as X-API-Key),
 `sigv4` (signed with the Gateway's role; for `apigateway`, `execute-api:Invoke` on exactly
@@ -489,7 +623,7 @@ they need a sign-in provider: not `idp=none`):
 | `auth` | In the Builder | What happens |
 |---|---|---|
 | `user` | User login (3LO) | OAuth authorization code. The first call for a person fails the step with a **Connect** button; they sign in at the tool's provider once, come back to the app (which binds the grant to them, `POST /api/connect`), and run the step again. AgentCore Identity keeps one grant per person. |
-| `obo` | On behalf of user (OBO) | The person's sign-in token is exchanged on their behalf (RFC 8693 token exchange) for a token to the tool. `oauth.audience` names the tool's API, if its provider needs one. **Not with Entra ID sign-in yet**: Entra's exchange needs an access token for the app, which sign-in does not request. |
+| `obo` | On behalf of user (OBO) | The person's sign-in token is exchanged on their behalf (RFC 8693 token exchange) for a token to the tool. `oauth.audience` names the tool's API, if its provider needs one. **Not with Entra ID sign-in**: Entra's exchange needs an access token for the app, which sign-in does not request. |
 
 Both use `oauth` like `oauth2` (`clientId`, `scopes`, `discoveryUrl` or `tokenUrl`, the client
 secret in `tool_api_keys`). With `user` and a `tokenUrl`, also give `oauth.authorizationUrl`
@@ -512,12 +646,17 @@ Shared keys:
 | `call` | Which tool on the target to invoke. **Required** when the target publishes more than one — the app refuses to guess, because calling the wrong tool returns real-looking data for a question nobody asked. |
 | `arg` | The parameter the agent's query goes into. Default `query`. This is what makes an arbitrary MCP server reachable from config: every server names its parameters differently. |
 | `args` | Fixed extra arguments sent on every call. |
+| `approval` | `mcp`, `openapi`, `lambda`, `apigateway`, `smithy`. `"person"` or `"event"`: every call of this tool waits for a person, who sees the tool and the exact arguments it will be sent (the fixed `args` included) and approves or denies. Approve makes the call; deny tells the agent it was refused, and it carries on (in `direct` mode the refusal becomes one of its limitations). `"event"` also publishes an "AgentExpress Approval Requested" event, answerable with an "AgentExpress Approval Decision" event, as a gate's `approval: "event"` is. A tool its Cedar policy hides is never put to a person; a **conditional** Cedar rule is evaluated by the Gateway when the call is made, after the approval. Refused at a `dedicated` agent, which cannot wait. An unattended run refuses the call. |
+| `approvalTimeout` | With `approval`: `{"after": "1h", "action": "approve" \| "deny"}`. A call nobody decides by then takes the action. |
 | `rowFields` | Maps the roles an agent needs to the field names your payload actually uses, so an agent that *computes* from tool output stays config-driven. See [`rowFields`](#rowfields--for-an-agent-that-computes-rather-than-narrates) below. |
 | `rowPath` | Dot path to the **list** of records in the response, e.g. `result.releases`. Needed only when the list is somewhere the framework does not already probe for (`results`, `result`, `items`, `documents`, `content.result`, `content.results`) — common for a REST API you did not design. Pairs with `rowFields`: this says *where* the rows are, that says what they are called. Without it an agent that computes sees **zero** rows and reports "nothing found" for a response that was full of data, which is exactly how it was first found. |
 | `auth` | Outbound auth to the endpoint: `none`, `apikey` (vaulted, sent as `X-API-Key`), `sigv4` (the Gateway signs with its own role — no secret), `oauth2`, `user` or `obo` (above). |
 | `policy.tool` | Narrow the Cedar permit to one tool name. Omit for a target-level permit, which is what a remote MCP server needs since its tool names aren't known at deploy time. |
 | `policy.restrictTo` | Argument allow-lists, e.g. `{ "filter": ["reference"] }`. Enforced at the Gateway, so a prompt-injected attempt to widen access is refused by infrastructure rather than by prompt wording. |
 | `policy.permit` | `false` registers the target but deliberately does not permit it — useful for demonstrating default-deny. |
+| `policies` | Names in [`policies`](#named-blocks-guardrails-memories-evaluators-identities-policies) that govern this tool. A statement written with `AgentCore::Action::"{{tool}}"` is deployed once per tool it is attached to. |
+| `identity` | A name in `identities`, instead of `auth` + `oauth`: an `oauth2` identity makes the tool `auth: "oauth2"` (`mcp`, `openapi`), an `apikey` one `auth: "apikey"`. The secret is the identity's. |
+| `toolFilters`, `toolOverrides` | `apigateway` only. `toolFilters` is the allow list of operations (`[{"path": "/orders/*", "methods": ["GET"]}]`; a path is explicit or a prefix ending `/*`). `toolOverrides` renames or describes a selected operation (`[{"path", "method", "name", "description"}]`), required for one with no `operationId`. |
 | `registry` | Where an `mcp` tool came from in an AWS Agent Registry. Set by the console, never by hand; with `sync: true` its `description`, `endpoint` and `toolSchema` follow the newest approved version. The runtime ignores it. |
 
 **Secrets never live here.** An API key goes in `tool_api_keys` in
@@ -552,6 +691,82 @@ Changing either key **replaces** the vector index and the Knowledge Base, becaus
 property can be altered in place. Both IaC paths derive those resource names from a digest
 of the pair, which is what turns the replacement into a working deploy instead of
 CloudFormation refusing to replace a custom-named resource.
+
+**Your own vector store: `vectorStore`.** Optional; leave it out and the deploy creates an S3
+Vectors bucket and index, as before. With it, the Knowledge Base uses your store. Every setting
+listed is required unless marked optional; the store and its index must exist first.
+
+```json
+"kb": {
+  "type": "kb",
+  "corpora": ["reference"],
+  "vectorStore": {
+    "type": "opensearchServerless",
+    "collectionArn": "arn:aws:aoss:us-east-1:111122223333:collection/abc123",
+    "indexName": "kb-index",
+    "vectorField": "embedding", "textField": "text", "metadataField": "metadata"
+  }
+}
+```
+
+| `type` | Settings |
+|---|---|
+| `opensearchServerless` | `collectionArn`, `indexName`, `vectorField`, `textField`, `metadataField` |
+| `opensearchManaged` | `domainArn`, `domainEndpoint`, `indexName`, `vectorField`, `textField`, `metadataField` |
+| `aurora` | `resourceArn` (cluster), `credentialsSecretArn`, `databaseName`, `tableName`, `primaryKeyField`, `vectorField`, `textField`, `metadataField`, optional `customMetadataField` |
+| `neptuneAnalytics` | `graphArn`, `graphModel` (builds the graph; a model or inference profile id), `textField`, `metadataField` |
+| `pinecone` | `connectionString`, `credentialsSecretArn`, `textField`, `metadataField`, optional `namespace` |
+| `mongodbAtlas` | `endpoint`, `credentialsSecretArn`, `databaseName`, `collectionName`, `indexName`, `vectorField`, `textField`, `metadataField`, optional `endpointServiceName`, `textIndexName` |
+
+ARNs must be full, with their account (they go into the Knowledge Base role's grants), and the
+shapes are Bedrock's. Not with `knowledgeBaseId`. What each store grants, and what
+you set up first, is in `DEPLOYMENT.md`, "Knowledge Base on your own vector store".
+
+**Documents from a connector: `dataSource`.** Optional; leave it out and the documents are
+your uploads or `s3Uri`. Needs `vectorStore.type: "opensearchServerless"` (AWS supports these
+connectors only there). Not with `s3Uri` or `knowledgeBaseId`.
+
+```json
+"dataSource": { "type": "web", "seedUrls": ["https://docs.example.com/"], "scope": "hostOnly", "maxPages": 500 }
+```
+
+| `type` | Settings |
+|---|---|
+| `web` | `seedUrls` (1–100 http(s) URLs); optional `scope` (`hostOnly` or `subdomains`; default: the seed's host and path), `inclusionFilters`, `exclusionFilters` (up to 25 regexes each), `rateLimit` (1–300 pages a minute per host), `maxPages` (1–25000), `userAgent` (a 15–40 character suffix) |
+| `confluence` | `hostUrl`, `authType` (`basic` or `oauth2`), `credentialsSecretArn`; optional `filters` |
+| `sharepoint` | `domain`, `siteUrls` (1–100), `credentialsSecretArn`; optional `tenantId`, `filters` |
+| `salesforce` | `hostUrl`, `credentialsSecretArn`; optional `filters` |
+
+`filters` is up to 25 `{ "objectType": "Page", "include": [...], "exclude": [...] }` entries,
+each a content type and up to 25 regexes. The limits are Bedrock's.
+
+**How documents are split and read: `chunking` and `parsing`.** Both optional; leave them out
+and the data source is exactly what it was (Bedrock's default ~300-token chunks, its default
+text parser). Not with `knowledgeBaseId`: that Knowledge Base already has its own.
+
+```json
+"kb": {
+  "type": "kb",
+  "corpora": ["reference"],
+  "chunking": { "strategy": "fixedSize", "maxTokens": 500, "overlapPercentage": 15 },
+  "parsing": { "strategy": "foundationModel", "model": "us.amazon.nova-pro-v1:0" }
+}
+```
+
+| Key | Settings | What it does |
+|---|---|---|
+| `chunking.strategy: "fixedSize"` | `maxTokens` (1–8192), `overlapPercentage` (1–99) | Chunks of at most `maxTokens`, each repeating that share of the one before. |
+| `chunking.strategy: "hierarchical"` | `parentMaxTokens`, `childMaxTokens` (1–8192, child smaller), `overlapTokens` (≥ 1) | Search matches the small chunks and returns the large one around them. AWS does not recommend it with S3 Vectors, the store this framework creates: large chunks can exceed its per-vector metadata limit (the Build view warns). |
+| `chunking.strategy: "semantic"` | `maxTokens` (1–8192), `bufferSize` (0–1), `breakpointPercentileThreshold` (50–99) | Splits where the meaning changes. Costs model calls at ingestion. |
+| `chunking.strategy: "none"` | — | Each file is one chunk. No page numbers in citations. |
+| `parsing.strategy: "foundationModel"` | `model` (a model id or a system inference profile id), optional `prompt` (1–10000 characters) | The model reads every PDF and image, including tables and figures, at its token price. The Knowledge Base role gets `bedrock:InvokeModel` on that model only (for a profile: the profile, and that model in any region). |
+
+Every setting a strategy lists is required, and the ranges are Bedrock's. Changing either key **replaces the
+data source** (neither can be changed in place) and re-ingests every document: the data source
+is named `docs-<digest>` of the settings on both IaC paths, so the replacement is clean. Not
+offered: Bedrock Data Automation parsing (AWS lists it as a preview in US West (Oregon) only),
+custom transformation Lambdas, context enrichment, and multimodal storage (so parsed images are
+read as text, not stored as files).
 
 **Retrieval is config, with one deliberate exception.**
 
@@ -662,7 +877,7 @@ page one.
 ### `type: "openapi"`
 
 For a service that already speaks HTTP and already has a contract: an internal
-microservice, a partner API, a vendor's catalogue. The Gateway loads the schema,
+microservice, a third-party API, a vendor's catalogue. The Gateway loads the schema,
 publishes **each `operationId` in it** as an MCP tool, and translates the call into an
 HTTP request. There is no function to write and no server to run — the API is reached
 as it already is.
@@ -686,7 +901,7 @@ yours to choose, because you wrote the schema — which also means you can avoid
 **Supply the schema one of two ways.** The Gateway can only load one from S3, so one of
 these has to say which object:
 
-- `schemaS3Uri` — an object **you** host, e.g. `s3://my-schemas/orders/v2.json`. The
+- `schemaS3Uri` — an object **you** host, e.g. `s3://amzn-s3-demo-bucket/schemas/orders/v2.json`. The
   framework uploads nothing; it points the target at that key and grants the Gateway
   role `GetObject` on exactly it.
 - `source` — a folder under `orchestrator/app/tools/` holding `openapi.json`, which the
@@ -714,6 +929,39 @@ output should expect individual calls to fail and say which ones did, rather tha
 failing the run. See `app/subagents/lifecycle_research/agent.py`, which collects the
 identifiers that did not resolve and names them in the asset's limitations.
 
+### `type: "smithy"`
+
+For an AWS service the agent should call directly, described by its Smithy model. The
+Gateway publishes **each operation in the model** as a tool (`<key>___<Operation>`) and
+makes the call itself, signed with SigV4 by this build's Gateway role
+(`AgentCoreGateway-<agentName>`). There is no function to write.
+
+```json
+"places": {
+  "type": "smithy",
+  "description": "Find a store by name or address.",
+  "schemaS3Uri": "s3://amzn-s3-demo-bucket/models/location.json",
+  "allow": {
+    "actions": ["geo:SearchPlaceIndexForText"],
+    "resources": ["arn:aws:geo:us-east-1:111122223333:place-index/stores"]
+  },
+  "call": "SearchPlaceIndexForText",
+  "arg": "Text"
+}
+```
+
+| Key | Notes |
+|---|---|
+| `schema` / `schemaS3Uri` | Exactly one. `schema` is the Smithy 2.0 JSON AST itself (`{"smithy": "2.0", "shapes": {...}}`, one `service` shape, at least one `operation`), sent inline. `schemaS3Uri` is a JSON model you host; the Gateway role gets `s3:GetObject` on exactly that object. AWS publishes the models of its services at [aws/api-models-aws](https://github.com/aws/api-models-aws). |
+| `allow` | **Required.** What the Gateway role may call for this tool: `{"actions": [...], "resources": [...]}`, 1 to 20 of each. Each action is one named action (`dynamodb:GetItem`, no `*`); each resource a full ARN with its region and account written out (or empty where the service has none, as in `arn:aws:s3:::bucket/key`), never a bare `*`. Actions of `iam`, `sts`, `organizations`, `account`, `sso`, `identitystore`, `kms`, `secretsmanager`, `bedrock-agentcore`, `lambda` and `cloudformation` are refused (`smithyDeniedServices` in `app/vocabulary.json`): the role is shared by every tool of the build, so those would let a model change who may do what, run code, or read secrets. The grant is a statement `SmithyCalls<key>` on the Gateway role, present only while the tool is. |
+| `auth` | Not set: a Smithy target always uses the Gateway role (AWS documents no IAM signing options for it, and OAuth is for non-AWS APIs, which a Smithy target does not take). |
+
+Limits from AWS: custom Smithy models are for **AWS services only**, the RestJson protocol only (a model with no `aws.protocols#restJson1` service is a
+warning in the Build view), and up to 10 MB. Streaming operations are not supported. Each
+`allow` adds to the Gateway role's inline policy, which IAM caps at 10,240 characters for
+the role, so a build with many large grants can fail to deploy on that limit.
+See [Smithy model targets](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-building-smithy-targets.html).
+
 ### `type: "lambda"`
 
 The escape hatch: a Lambda reaches what the Gateway cannot — a warehouse (Redshift,
@@ -729,11 +977,14 @@ Supply the function **one** of two ways:
 - `source` — a function the **framework** packages and deploys, which keeps this file
   account-neutral (a real ARN would pin it to one AWS account). The value names a
   **folder under `orchestrator/app/tools/`** holding a `handler.py`; both IaC paths zip
-  that folder and deploy it. The only accepted value is `pricing`, the demo at
-  `orchestrator/app/tools/pricing/`. It is not a general "deploy any directory"
-  feature: a framework-deployed function runs on a role the framework writes, and that
-  role is fixed at logs plus `pricing:GetProducts` / `pricing:DescribeServices` —
-  public list prices, no resource-level permissions available and none needed. Your own
+  that folder and deploy it. The accepted values are `pricing`, the demo at
+  `orchestrator/app/tools/pricing/`, `codeInterpreter` (see
+  [below](#source-codeinterpreter--run-code-in-a-sandbox)) and `browser` (see
+  [below](#source-browser--open-a-web-page)). It is not a general "deploy
+  any directory" feature: a framework-deployed function runs on a role the framework
+  writes, one per value. The `pricing` role is fixed at logs plus
+  `pricing:GetProducts` / `pricing:DescribeServices` — public list prices, no
+  resource-level permissions available and none needed. Your own
   connector will usually need something else (a VPC, a secret, a table grant), which
   config cannot express, so deploy it yourself and use `lambdaArn`. Its source may live
   beside `app/tools/pricing/` if you like the symmetry — nothing reads it there unless
@@ -788,6 +1039,123 @@ name a property of the called tool. Both are checked at plan/synth time, along w
 the ARN format, an empty schema, a tool with no properties, and an unsupported
 property type. All of those would otherwise be accepted by the API and then publish
 a tool the agent cannot call — which shows up as an empty answer, not an error.
+
+### `source: "codeInterpreter"` — run code in a sandbox
+
+An agent can write a program and run it, instead of only calling tools you prepared.
+The framework deploys `orchestrator/app/tools/codeInterpreter/` as a Gateway Lambda
+target, so Cedar policy and the interceptors apply to it like any other tool. Nothing
+is created unless a tool names this `source`, and the shipped `workflow.json` does not.
+
+```json
+"sandbox": {
+  "type": "lambda",
+  "description": "Run a short program and return what it printed.",
+  "source": "codeInterpreter",
+  "call": "execute_code",
+  "arg": "code",
+  "toolSchema": [{
+    "name": "execute_code",
+    "description": "Run code in a sandbox. Returns stdout, stderr and the exit status.",
+    "properties": {
+      "language": { "type": "string", "required": true, "description": "python, javascript or typescript." },
+      "code":     { "type": "string", "required": true, "description": "The program to run." }
+    }
+  }]
+}
+```
+
+The `toolSchema` is the one above: the function reads `language` and `code`. It returns
+`stdout`, `stderr`, `exitCode`, `language` and `seconds`. A program that fails (an
+exception, a non-zero exit) comes back as an `error` result with the traceback in
+`stderr`, so the model can read it and try again.
+
+**What it executes, and where.** Code a model wrote, or that a person pasted into a
+prompt. It runs in the AWS-managed AgentCore Code Interpreter `aws.codeinterpreter.v1`,
+an isolated sandbox that AWS operates. It has no access to this deployment's tables,
+buckets, secrets or credentials, and neither does the function that calls it: its role
+may start, use and stop a session on that one interpreter, write to its own log group,
+and do nothing else. **The sandbox's network access is the interpreter's default.** The
+framework neither restricts nor widens it, and this repository did not test what that
+default allows in your Region; check the AgentCore documentation before giving the
+tool to an agent that reads untrusted text.
+
+**Limits, held in the function's code** (`handler.py`): 50,000 bytes of code, 30 seconds
+of run time, and 10,000 characters each of stdout and stderr. Longer output is cut and
+the result says so (`truncated`, `note`). A call that runs out of time is stopped and
+returns what it had printed. A call that is refused (no `code`, a language the
+interpreter does not run, too much code) starts no session.
+
+**Good to know.** Every call starts a fresh session, runs once and stops, so a second call
+cannot read the first's variables or files. Use your Cedar policy to limit which agents call it.
+Each call is billed as an AgentCore Code Interpreter session.
+
+In the Builder, **Add a tool → Type → Code Interpreter** writes the entry above, with the
+name you give as its description.
+The form then shows only what you choose (the description, `approval`, policies); the
+function, its schema and its call belong to the framework and are hidden.
+
+### `source: "browser"` — open a web page
+
+An agent can open a web page and read it: its title, its visible text and its links. The
+framework deploys `orchestrator/app/tools/browser/` as a Gateway Lambda target, so Cedar
+policy, the interceptors and `approval` apply to it like any other tool. Nothing is created
+unless a tool names this `source`, and the shipped `workflow.json` does not. In the Builder:
+**Add a tool → Type → Browser**.
+
+```json
+"web": {
+  "type": "lambda",
+  "description": "Open a web page and read it.",
+  "source": "browser",
+  "call": "open_page",
+  "arg": "url",
+  "allowDomains": ["docs.aws.amazon.com"],
+  "toolSchema": [{
+    "name": "open_page",
+    "description": "Open a web page. Returns its title, visible text and links.",
+    "properties": {
+      "url": { "type": "string", "required": true, "description": "The page to open, https:// or http://." }
+    }
+  }]
+}
+```
+
+The function publishes one tool, `open_page(url)`, and the checks refuse any other name in
+`toolSchema`. It returns `url` (where the page ended up), `title`, `text`, `links` (up to 50,
+each `text` and `href`) and `seconds`. A page that did not open, or was refused, comes back
+as an `error` result.
+
+| Key | Notes |
+|---|---|
+| `allowDomains` | Optional. The domains it may open, e.g. `["docs.aws.amazon.com"]`; each also allows the names under it. A name only: no `https://`, path, port or `*`; at most 50. Checked by the function for the page asked for **and** the page a redirect ends on, so a model cannot widen it. Left out: any public page. Only the Browser tool reads it. |
+
+**How it drives the browser.** Each call starts a session on the AWS-managed AgentCore
+Browser `aws.browser.v1`, connects to the session's automation stream (the Chrome DevTools
+Protocol over a WebSocket signed with SigV4), opens the page in a new tab, waits for its load
+event, reads it, and **always** stops the session. `InvokeBrowser` (mouse, keyboard and
+screenshots at the operating-system level) cannot open or read a page, so it is not used.
+The function's role may start and stop sessions on that one browser, connect to an
+automation stream, and write its own log group; `ConnectBrowserAutomationStream` has no
+resource type in IAM, so that one statement is on `*`.
+
+**What it refuses, in its code.** Anything but `http://` and `https://`, a URL with
+`user:password@`, a URL over 2,048 characters, and a host that is, or resolves to, a
+loopback, link-local (the metadata address), private, CGNAT or other non-public address.
+The same check runs again on the page the browser ended on, after any redirect; if that page
+is refused nothing from it is returned. A refused URL starts no session.
+
+**Limits, held in the function's code** (`handler.py`): 20 seconds for the page to load (a
+page still loading is read as it is, and the result says so), 40 seconds for the whole call,
+20,000 characters of text (longer is cut, with `truncated` and a `note`), 50 links.
+
+**Good to know.** The page's text is untrusted: an agent that reads it can be told things by
+the page, so give this tool to an agent whose other tools cannot do harm, or put `approval`
+on those. The address and domain checks apply to the page opened, not to what the page loads.
+The browser runs in AWS's network, so it reaches public pages, not your private services or
+pages behind a sign-in. It reads pages: no clicking, typing, screenshots or downloads, and each
+call is a fresh, billed AgentCore Browser session. It has run on a deployed CDK build and a
+deployed Terraform build.
 
 ### `rowFields` — for an agent that computes rather than narrates
 
@@ -844,12 +1212,31 @@ How an agent gets them (`app/common/skills.py`):
 Scripts are never run. In the Builder: the Skills tab (write one, or import a SKILL.md), each
 agent's Skills setting, and the library (publish, share, add from library), like other parts.
 
+## Named blocks: `guardrails`, `memories`, `evaluators`, `identities`, `policies`
+
+Optional. Each is a map of name (letters and digits, starting with a letter, up to 32) to an
+entry, defined once and used by name. The Builder shows each on its own tab and in the library.
+
+| Block | Entry keys | Becomes | Used by |
+|---|---|---|---|
+| `guardrails.<name>` | the keys of [`guardrail`](#guardrail) | its own Bedrock Guardrail | `agentcore.guardrails.use` |
+| `memories.<name>` | `description`, `strategies` (`semantic`, `summary`, `userPreference`, `episodic`), `expiryDays` (3–365), `scope` | its own AgentCore Memory | `agentcore.memory.use` |
+| `evaluators.<name>` | `description`, `instructions` (may use `{context}` and `{assistant_turn}`), `model` (judge; default the workflow's), `scale` (2–20 `{value, label, definition}` points; default five from 0 to 1) | an AgentCore evaluator | `Custom.<name>` in `agentcore.evaluations.evaluators` |
+| `identities.<name>` | `type` (`oauth2` client credentials or `apikey`), `description`, `clientId`, `scopes`, `discoveryUrl` or `tokenUrl`, `issuer` | an AgentCore Identity credential provider | a tool's `identity`; `agentcore.identity.outbound`; `harness.apiKey` |
+| `policies.<name>` | `description`, `statement` (one `permit(...)` or `forbid(...)`) | one Cedar policy per tool it is attached to (with `{{tool}}`), or one as written | a tool's `policies` |
+
+Secrets (an OAuth client secret, an API key) are never here: they go in the build's secrets or
+`IDENTITY_SECRETS` / `TF_VAR_identity_secrets`. A Cedar statement's resource is always
+`AgentCore::Gateway::"{{gateway}}"`, and conditions read `context.input.<argument>` only.
+
 ## `authorization`
 
-Answers "may *this user* do this?", which the JWT authorizer does not. Seven actions:
-`start` (begin a run), `decision` (approve / revise / deny a gate), `rerun`,
-`cancel`, `evaluate`,
-`insights`, `delete`.
+Answers "may *this user* do this?", which the JWT authorizer does not. Twelve actions:
+`start` (begin a run), `decision` (approve / revise / deny a gate, answer an agent's question or a
+tool approval), `rerun`, `cancel`, `evaluate`, `insights`, `delete`; on a Builder console `deploy`
+and `destroy`; `audit` (everyone's activity), `admin` (read every build and run, Analytics, Memory
+records, Live config, Triggers page, registry publish) and `override` (pick a run's models). `audit`,
+`admin` and `override` are closed unless granted, and `insights` whenever anything is restricted.
 
 - An action **not listed** is unrestricted, so deleting the block restores the
   pre-RBAC behaviour where any authenticated user could do anything.

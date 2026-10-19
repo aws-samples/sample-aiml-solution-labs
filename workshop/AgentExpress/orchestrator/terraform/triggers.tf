@@ -111,6 +111,9 @@ resource "aws_iam_role" "trigger_scheduler" {
       Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "trigger_scheduler" {

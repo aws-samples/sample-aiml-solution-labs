@@ -1,0 +1,269 @@
+/* The Timeline tab's chart (RunGantt.tsx). Colours are Cloudscape design tokens with
+   fallbacks, as in graph.css and flow.css. Positions are percentages of the track, and the
+   track is `--gantt-zoom` times the visible width, so zooming needs no re-layout. */
+.gantt {
+  --gantt-label-w: 220px;
+  --gantt-row-h: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gantt-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.gantt-muted {
+  font-size: 12px;
+  color: var(--awsui-color-text-status-inactive, #656871);
+}
+.gantt-slowest { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.gantt-chip {
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--awsui-color-border-input-default, #8c8c94);
+  background: var(--awsui-color-background-container-content, #fff);
+  color: var(--awsui-color-text-body-default, #0f141a);
+}
+.gantt-chip:hover { border-color: var(--awsui-color-text-link-default, #0972d3); }
+.gantt-chip:focus-visible,
+.gantt [tabindex="0"]:focus-visible {
+  outline: 2px solid var(--awsui-color-text-link-default, #0972d3);
+  outline-offset: 1px;
+}
+.gantt-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--awsui-color-text-body-secondary, #424650);
+}
+.gantt-legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.gantt-swatch { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+.gantt-swatch-critical {
+  background: transparent;
+  border: 2px solid var(--awsui-color-text-body-default, #0f141a);
+}
+
+.gantt-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+  border-radius: 8px;
+  cursor: grab;
+}
+.gantt-dragging { cursor: grabbing; user-select: none; }
+.gantt-inner {
+  position: relative;
+  min-width: 100%;
+  width: calc(var(--gantt-label-w) + (100% - var(--gantt-label-w)) * var(--gantt-zoom, 1));
+}
+.gantt-row {
+  display: flex;
+  min-height: var(--gantt-row-h);
+  border-top: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+}
+.gantt-axis { border-top: 0; min-height: 26px; }
+.gantt-label {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  flex: 0 0 var(--gantt-label-w);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  background: var(--awsui-color-background-container-content, #fff);
+  border-right: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+}
+.gantt-name { overflow: hidden; text-overflow: ellipsis; }
+.gantt-glyph { margin-left: auto; font-size: 12px; }
+.gantt-s-done { color: var(--awsui-color-text-status-success, #00802f); }
+.gantt-s-running { color: var(--awsui-color-text-status-info, #0972d3); }
+.gantt-s-failed, .gantt-s-denied { color: var(--awsui-color-text-status-error, #db0000); }
+.gantt-s-waiting_human { color: var(--awsui-color-text-status-warning, #8d6605); }
+.gantt-track { position: relative; flex: 1 1 auto; }
+.gantt-stage { min-height: 24px; }
+.gantt-stage .gantt-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--awsui-color-text-body-secondary, #424650);
+  background: var(--awsui-color-background-layout-main, #f8f8f8);
+}
+.gantt-stage .gantt-track { background: var(--awsui-color-background-layout-main, #f8f8f8); }
+.gantt-total .gantt-total-text {
+  display: flex;
+  align-items: center;
+  padding-left: 10px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The axis. */
+.gantt-tick {
+  position: absolute;
+  top: 6px;
+  transform: translateX(-50%);
+  font-size: 11px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--awsui-color-text-status-inactive, #656871);
+}
+.gantt-break-label { font-weight: 700; color: var(--awsui-color-text-body-secondary, #424650); }
+.gantt-now-label { top: 12px; font-weight: 700; color: var(--awsui-color-text-status-info, #0972d3); }
+
+/* Grid lines, breaks, HITL waits and the now line sit under the bars. */
+.gantt-body { position: relative; }
+.gantt-overlay {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--gantt-label-w);
+  right: 0;
+  pointer-events: none;
+}
+.gantt-grid {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--awsui-color-border-divider-default, #e9ebed);
+}
+.gantt-break {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-left: 3px double var(--awsui-color-border-control-default, #8c8c94);
+  border-right: 3px double var(--awsui-color-border-control-default, #8c8c94);
+  box-sizing: border-box;
+}
+.gantt-gate,
+.gantt-swatch-hitl {
+  background: repeating-linear-gradient(135deg,
+    rgba(141, 102, 6, 0.22) 0 6px, rgba(141, 102, 6, 0.06) 6px 12px);
+}
+.gantt-gate {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 3px;
+  pointer-events: auto;
+  border-left: 1px dashed var(--awsui-color-text-status-warning, #8d6605);
+  border-right: 1px dashed var(--awsui-color-text-status-warning, #8d6605);
+}
+.gantt-gate-label {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--awsui-color-text-status-warning, #8d6605);
+  background: var(--awsui-color-background-container-content, #fff);
+}
+.gantt-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--awsui-color-text-status-info, #0972d3);
+}
+
+/* An agent's run: a pale bar with a strong edge; the calls are solid marks inside it. */
+.gantt-bar {
+  position: absolute;
+  z-index: 1;
+  top: 6px;
+  height: 22px;
+  min-width: 3px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  border: 1px solid;
+}
+.gantt-b-done    { border-color: var(--awsui-color-text-status-success, #00802f); background: rgba(0, 128, 47, 0.14); }
+.gantt-b-running { border-color: var(--awsui-color-text-status-info, #0972d3); background: rgba(9, 114, 211, 0.14); }
+.gantt-b-failed  { border-color: var(--awsui-color-text-status-error, #db0000); background: rgba(219, 0, 0, 0.14); }
+.gantt-b-waiting { border-color: var(--awsui-color-text-status-warning, #8d6605); background: rgba(141, 102, 6, 0.16); }
+.gantt-b-stopped { border-color: var(--awsui-color-text-status-inactive, #656871); background: rgba(101, 104, 113, 0.12); }
+.gantt-critical { border-width: 2px; box-shadow: 0 0 0 1px var(--awsui-color-text-body-default, #0f141a); }
+/* A running bar's moving edge: it grows with the now line. */
+.gantt-b-running::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  right: -2px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--awsui-color-text-status-info, #0972d3);
+  animation: gantt-edge 1.2s ease-in-out infinite;
+}
+@keyframes gantt-edge { 50% { opacity: 0.25; } }
+.gantt-v {
+  position: absolute;
+  right: 4px;
+  top: -16px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--awsui-color-text-body-secondary, #424650);
+}
+.gantt-call {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  height: 10px;
+  min-width: 3px;
+  border-radius: 2px;
+}
+.gantt-call.gantt-t-bad  { outline: 2px solid var(--awsui-color-text-status-error, #db0000); }
+.gantt-call.gantt-t-stop { outline: 2px dashed var(--awsui-color-text-status-error, #db0000); }
+.gantt-k-model     { background: #8456ce; }
+.gantt-k-tool      { background: #0f7ea6; }
+.gantt-k-guardrail { background: #d45b07; }
+.gantt-k-memory    { background: #b5338b; }
+.gantt-k-policy    { background: #4a5a6e; }
+.gantt-k-eval      { background: #5c8a00; }
+.gantt-k-hitl      { background: #8d6605; }
+.gantt-k-other     { background: #8c8c94; }
+.gantt-tip {
+  position: absolute;
+  z-index: 10;
+  top: calc(100% + 4px);
+  left: 0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--awsui-color-text-body-default, #0f141a);
+  background: var(--awsui-color-background-container-content, #fff);
+  border: 1px solid var(--awsui-color-border-input-default, #8c8c94);
+  box-shadow: 0 2px 6px rgba(0, 7, 22, 0.15);
+}
+
+/* The same data as a table, for a screen reader only. */
+.gantt-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gantt-b-running::after { animation: none; }
+}
+.gantt-still .gantt-b-running::after { animation: none; }

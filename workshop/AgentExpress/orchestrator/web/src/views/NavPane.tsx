@@ -45,6 +45,8 @@ export interface NavLink {
   external?: boolean;
   /** Under a NavHeading: indented beneath it. */
   indent?: boolean;
+  /** Shown before the text (decoration, hidden from screen readers; lib/emoji.ts). */
+  emoji?: string;
 }
 /** A line between two sections of links. */
 export const NAV_DIVIDER = { divider: true } as const;
@@ -64,7 +66,7 @@ function Group({ group, active, onFollow }: {
   const follow = (href: string) => (e: MouseEvent) => { e.preventDefault(); onFollow(href); };
   const listId = `nav-${group.id}`;
   return (
-    <li className="axn-group">
+    <li className={`axn-group${open ? "" : " axn-closed"}`}>
       <div className={`axn-head${active === group.href ? " axn-active" : ""}`}>
         <button
           type="button" className="axn-caret" aria-expanded={open} aria-controls={listId}
@@ -115,14 +117,19 @@ function Group({ group, active, onFollow }: {
   );
 }
 
-export function NavPane({ groups, links, active, onFollow }: {
+export function NavPane({ groups, links, active, onFollow, fill = false }: {
   groups: NavGroup[];
   links: NavItem[];
   active: string;
   onFollow: (href: string) => void;
+  /** The groups share the pane's height equally, each scrolling its own list, and the
+   *  links below never give way (nav.css `.axn-fill`). A build's own app sets it: its Runs
+   *  and Observability lists are the same runs, so neither should crowd out the other or
+   *  push Files, Activity and Analytics out of sight. */
+  fill?: boolean;
 }) {
   return (
-    <nav className="axn" aria-label="Navigation">
+    <nav className={`axn${fill ? " axn-fill" : ""}`} aria-label="Navigation">
       {/* No app name here: the top navigation already carries it, and repeating it stacked
           below was the same word twice over the same link. The pane starts with its
           groups, padded clear of the AppLayout collapse button (nav.css). */}
@@ -140,6 +147,7 @@ export function NavPane({ groups, links, active, onFollow }: {
             <a href={item.href}
               {...(item.external ? { target: "_blank", rel: "noopener noreferrer" }
                 : { onClick: (e: MouseEvent) => { e.preventDefault(); onFollow(item.href); } })}>
+              {item.emoji ? <span className="axn-emoji" aria-hidden="true">{item.emoji}</span> : null}
               {item.text}
               {item.external ? <span className="axn-ext"><Icon name="external" ariaLabel="Opens in a new tab" /></span> : null}
             </a>

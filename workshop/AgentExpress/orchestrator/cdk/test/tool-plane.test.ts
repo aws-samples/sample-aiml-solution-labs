@@ -334,6 +334,137 @@ describe("the built-in demo function (source: pricing)", () => {
   });
 });
 
+describe("the built-in code interpreter function (source: codeInterpreter)", () => {
+  // Runs model-written code in the AWS-managed sandbox, so the thing worth pinning is
+  // the role: three actions on one interpreter, a log group of its own, and no
+  // managed policy that would widen it. Mirrors tests/test_code_interpreter_tool.py,
+  // which pins the same facts in terraform/tools.tf.
+  const SANDBOX: ToolSpec = {
+    type: "lambda",
+    source: "codeInterpreter",
+    description: "Run code in a sandbox.",
+    call: "execute_code",
+    arg: "code",
+    toolSchema: [
+      {
+        name: "execute_code",
+        description: "Run code and return stdout, stderr and the exit status.",
+        properties: {
+          language: { type: "string", required: true, description: "python, javascript or typescript." },
+          code: { type: "string", required: true, description: "The program to run." },
+        },
+      },
+    ],
+  };
+  const FN_NAME = "ToolLambda-test_orch-sandbox";
+  const template = plane({ sandbox: SANDBOX });
+  const INTERPRETER_ARN = "arn:aws:bedrock-agentcore:us-east-1:aws:code-interpreter/aws.codeinterpreter.v1";
+
+  function fn(t: Template = template): any {
+    return Object.values<any>(t.findResources("AWS::Lambda::Function")).find(
+      (f) => f.Properties.FunctionName === FN_NAME
+    );
+  }
+  /** The inline policy documents attached to the function's own role. */
+  function ownStatements(t: Template = template): any[] {
+    const roleId = fn(t).Properties.Role["Fn::GetAtt"][0];
+    return Object.values<any>(t.findResources("AWS::IAM::Policy"))
+      .filter((p) => (p.Properties.Roles ?? []).some((r: any) => r.Ref === roleId))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement);
+  }
+
+  it("deploys the function from orchestrator/app/tools/codeInterpreter/ with room for a 30 s run", () => {
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      FunctionName: FN_NAME,
+      Handler: "handler.lambda_handler",
+      Runtime: "python3.12",
+      Timeout: 60,
+    });
+  });
+
+  it("passes the function no environment: the interpreter is a constant in its code", () => {
+    expect(fn().Properties.Environment).toBeUndefined();
+  });
+
+  it("may do exactly three actions on exactly one interpreter", () => {
+    const run = ownStatements().find((s) => s.Sid === "RunCodeInSystemInterpreter");
+    expect(run).toBeDefined();
+    expect(asList(run.Action).sort()).toEqual([
+      "bedrock-agentcore:InvokeCodeInterpreter",
+      "bedrock-agentcore:StartCodeInterpreterSession",
+      "bedrock-agentcore:StopCodeInterpreterSession",
+    ]);
+    expect(asList(run.Resource)).toEqual([INTERPRETER_ARN]);
+  });
+
+  it("holds nothing else but log writes to its own group", () => {
+    const all = ownStatements();
+    const actions = all.flatMap((s) => asList(s.Action)).map(String);
+    expect(actions.filter((a) => !a.startsWith("bedrock-agentcore:")).sort()).toEqual([
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]);
+    expect(actions.some((a) => a.includes("*"))).toBe(false);
+    // No statement of this function's has a bare wildcard resource.
+    for (const s of all) expect(asList(s.Resource).map(String)).not.toContain("*");
+    const logs = all.find((s) => asList(s.Action).includes("logs:PutLogEvents"));
+    expect(JSON.stringify(logs.Resource)).toContain("ToolLambdaLogGroupsandbox");
+  });
+
+  it("has no managed policy, because the default one can create log groups anywhere", () => {
+    const roleId = fn().Properties.Role["Fn::GetAtt"][0];
+    expect(template.toJSON().Resources[roleId].Properties.ManagedPolicyArns).toBeUndefined();
+  });
+
+  it("registers the target against the function it deployed and grants the Gateway invoke", () => {
+    expect(lambdaTarget(template).LambdaArn["Fn::GetAtt"][0]).toMatch(/ToolLambdasandbox/);
+    const invoke = statements(template).find((s) => s.Sid === "InvokeToolLambdas");
+    expect(asList(invoke.Resource)).toHaveLength(1);
+  });
+
+  it("is reachable only through a Cedar permit for its tool", () => {
+    const statement = Object.values<any>(template.findResources("AWS::BedrockAgentCore::Policy"))[0]
+      .Properties.Definition.Cedar.Statement;
+    const text = (statement["Fn::Join"][1] as any[]).map((p) => (typeof p === "string" ? p : "")).join("");
+    expect(text).toContain('action in AgentCore::Action::"sandbox"');
+  });
+
+  it("can be narrowed to one tool, like any lambda target", () => {
+    const t = plane({ sandbox: { ...SANDBOX, policy: { tool: "execute_code" } } });
+    const statement = Object.values<any>(t.findResources("AWS::BedrockAgentCore::Policy"))[0]
+      .Properties.Definition.Cedar.Statement;
+    const text = (statement["Fn::Join"][1] as any[]).map((p) => (typeof p === "string" ? p : "")).join("");
+    expect(text).toContain('action == AgentCore::Action::"sandbox___execute_code"');
+  });
+
+  it("changes nothing for the pricing function when both are declared", () => {
+    const both = plane({
+      pricing: {
+        type: "lambda", source: "pricing", call: "aws_prices", arg: "services",
+        toolSchema: [{ name: "aws_prices", properties: { services: { type: "string", required: true } } }],
+      },
+      sandbox: SANDBOX,
+    });
+    const pricing = Object.values<any>(both.findResources("AWS::Lambda::Function")).find(
+      (f) => f.Properties.FunctionName === "ToolLambda-test_orch-pricing"
+    );
+    expect(Object.keys(pricing.Properties.Environment.Variables)).toEqual(["PRICING_API_REGION"]);
+    expect(pricing.Properties.Timeout).toBe(30);
+    const actions = statements(both).flatMap((s) => asList(s.Action)).map(String);
+    expect(actions).toContain("pricing:GetProducts");
+    // the sandbox grant exists exactly once, and only for the sandbox function
+    expect(actions.filter((a) => a === "bedrock-agentcore:InvokeCodeInterpreter")).toHaveLength(1);
+  });
+
+  it("adds nothing at all when no tool asks for it", () => {
+    const none = plane({ claims: LAMBDA_TOOL });
+    const text = JSON.stringify(none.toJSON());
+    expect(text).not.toContain("InterpreterSession");
+    expect(text).not.toContain("codeinterpreter");
+    expect(text).not.toContain("ToolLambda-test_orch-sandbox");
+  });
+});
+
 describe("a cross-account lambda tool", () => {
   const CROSS = "arn:aws:lambda:us-east-1:999999999999:function:shared-tool";
   const template = plane({ shared: { ...LAMBDA_TOOL, lambdaArn: CROSS } });

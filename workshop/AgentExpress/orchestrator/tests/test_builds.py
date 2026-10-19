@@ -893,8 +893,12 @@ def test_insights_on_a_build_are_its_owners_without_the_console_wide_permission(
                         lambda arn=None: seen.update(arn=arn) or env.handler._resp(200, {}))
     assert call(env, "GET /api/insights", qs={"build": "pclaims01"}, groups=("interns",))[0] == 200
     assert seen["arn"].endswith(f"runtime/{agent}-X")
-    assert call(env, "POST /api/insights/run", qs={"build": "pclaims01"}, groups=("interns",))[0] == 200
-    assert env.invoked[-1]["build"] == "pclaims01"
+    before = len(env.invoked)
+    st, body = call(env, "POST /api/insights/run", qs={"build": "pclaims01"}, groups=("interns",))
+    # The owner may ask; AgentCore no longer creates Insights jobs, so the answer says so
+    # and nothing is invoked.
+    assert st == 200 and body["ok"] is False and body["discontinued"] is True and "16 October 2026" in body["error"]
+    assert len(env.invoked) == before
     assert call(env, "GET /api/insights", qs={"build": "pclaims01"}, sub="u2")[0] == 404
     assert call(env, "GET /api/insights", groups=("interns",))[0] == 403    # the console's own
 
@@ -1279,9 +1283,13 @@ def test_the_audit_log_records_creating_designing_and_every_run_action(env, monk
     call(env, "POST /api/builds/{id}/design", params={"id": "pclaims01"},
          body={"message": "Add   a fraud\ncheck " + "x" * 300})
     call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
-    mark_deployed(env, "pclaims01")
+    agent = mark_deployed(env, "pclaims01")
     sid = call(env, "POST /api/sessions", body={"build": "pclaims01"})[1]["session_id"]
     at = {"params": {"id": sid}}
+    # A decision is taken only while the run waits for one (handler._claim_decision).
+    boto3.resource("dynamodb", region_name="us-east-1").Table(f"{agent}_status").update_item(
+        Key={"session_id": sid}, UpdateExpression="SET overall = :w, hitl = :h",
+        ExpressionAttributeValues={":w": "waiting_human", ":h": {"node": "review"}})
     call(env, "POST /api/sessions/{id}/decision", path=f"/api/sessions/{sid}/decision",
          body={"decision": "revise", "comment": "tighten it"}, **at)
     call(env, "POST /api/sessions/{id}/rerun", path=f"/api/sessions/{sid}/rerun",
@@ -1446,6 +1454,93 @@ def test_a_failed_first_create_is_deleted_before_the_retry_and_nothing_else_is(r
         assert cfn.deleted == deletes, states
 
 
+def _late_log_world(resources):
+    """A session whose CloudFormation reports `resources` and whose S3 records deletes."""
+    s3_calls = {"deleted": [], "listed": []}
+
+    class Cfn:
+        def describe_stack_resources(self, StackName):
+            return {"StackResources": resources}
+
+    class Pages:
+        def paginate(self, Bucket):
+            s3_calls["listed"].append(Bucket)
+            yield {"Versions": [{"Key": "cloudfront/E1.2026-10-18-01.a.gz", "VersionId": "null"}],
+                   "DeleteMarkers": []}
+
+    class S3:
+        def get_paginator(self, _):
+            return Pages()
+
+        def delete_objects(self, Bucket, Delete):
+            s3_calls["deleted"].append((Bucket, len(Delete["Objects"])))
+
+    session = types.SimpleNamespace(client=lambda name, **_: Cfn() if name == "cloudformation" else S3())
+    return session, s3_calls
+
+
+LOGS = {"LogicalResourceId": "UiLogsBucket361AB5FF", "ResourceType": "AWS::S3::Bucket",
+        "ResourceStatus": "DELETE_FAILED", "PhysicalResourceId": "ax-8686bcef-stack-uilogsbucket361ab5ff-piyu",
+        "ResourceStatusReason": 'Resource handler returned message: "The bucket you tried to delete is not empty"'}
+
+
+def test_a_destroy_a_late_cloudfront_log_failed_empties_that_bucket_and_destroys_again(runner, monkeypatch):
+    """Seen live: a CDK build's destroy ended DELETE_FAILED on UiLogsBucket, refilled by a
+    CloudFront access log delivered after the stack emptied it."""
+    session, s3 = _late_log_world([LOGS])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = []
+
+    def run(cmd, cwd, env=None, keep=60):
+        ran.append(cmd[:3])
+        if cmd[:3] == ["npx", "cdk", "destroy"] and ran.count(["npx", "cdk", "destroy"]) == 1:
+            raise runner.StepFailed("`npx cdk destroy` failed (exit 1): UiLogsBucket not empty")
+        return []
+    monkeypatch.setattr(runner, "run", run)
+    assert runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"}) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 2
+    assert s3["deleted"] == [("ax-8686bcef-stack-uilogsbucket361ab5ff-piyu", 1)]
+
+
+@pytest.mark.parametrize("resource", [
+    {**LOGS, "ResourceStatusReason": "Access Denied"},                     # failed for another reason
+    {**LOGS, "LogicalResourceId": "UiBucket6890E4C3"},                       # another bucket
+    {**LOGS, "PhysicalResourceId": "someone-elses-bucket-uilogsbucket"},     # not this stack's name
+    {**LOGS, "ResourceStatus": "DELETE_COMPLETE"},                           # not what failed
+    {**LOGS, "ResourceType": "AWS::Lambda::Function"},
+], ids=["other-reason", "other-bucket", "other-name", "not-failed", "not-a-bucket"])
+def test_any_other_destroy_failure_is_reported_as_it_is_and_nothing_is_emptied(runner, monkeypatch, resource):
+    session, s3 = _late_log_world([resource])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = []
+
+    def run(cmd, cwd, env=None, keep=60):
+        ran.append(cmd[:3])
+        if cmd[:3] == ["npx", "cdk", "destroy"]:
+            raise runner.StepFailed("`npx cdk destroy` failed (exit 1)")
+        return []
+    monkeypatch.setattr(runner, "run", run)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
+    assert ran.count(["npx", "cdk", "destroy"]) == 1 and s3["deleted"] == [] and s3["listed"] == []
+
+
+def test_the_late_log_grant_is_the_same_on_both_paths_and_in_connected_accounts():
+    root = Path(__file__).resolve().parent.parent
+    tf = (root / "terraform" / "builder.tf").read_text()
+    ts = (root / "cdk" / "lib" / "builder-plane.ts").read_text()
+    import accounts
+    sts = [s for s in accounts.CDK_AND_RUNNER_STATEMENTS if s["Sid"] == "LateLogBuckets"]
+    assert len(sts) == 1
+    for arn in sts[0]["Resource"]:
+        assert f'"{arn}"' in tf and f"`{arn}`" in ts
+    for action in sts[0]["Action"]:
+        assert f'"{action}"' in tf.split('Sid      = "LateLogBuckets"')[1].split("}")[0]
+        assert f'"{action}"' in ts.split('sid: "LateLogBuckets"')[1].split("}")[0]
+    # Never more than a build's own logs bucket.
+    assert all(a.startswith("arn:aws:s3:::ax-*-stack-uilogsbucket") for a in sts[0]["Resource"])
+
+
 # --- AWS Agent Registry (bff/registry.py) -------------------------------------------------
 
 def test_publishing_to_the_registry_is_for_admins_and_a_skill_goes_as_its_skill_md(env, monkeypatch):
@@ -1504,3 +1599,15 @@ def test_a_registry_conflict_is_the_callers_to_resolve(env):
     with pytest.raises(env.builds.BuildError) as e:
         env.builds.registry_call(boom)
     assert e.value.status == 409 and "already exists" in str(e.value)
+
+
+def test_a_cdk_deploy_refuses_web_search_keys_that_need_connector_1_2_0():
+    """CloudFormation creates a web-search target at the default 1.1.0 and cannot pin
+    1.2.0, which the include list and date filters need: say so at Deploy."""
+    import builds
+    for t in ({"domains": {"include": ["docs.aws.amazon.com"]}}, {"publishedFrom": "2026-01-01T00:00:00Z"},
+              {"publishedTo": "2026-01-01T00:00:00Z"}, {"connectorVersion": "1.2.0"}):
+        msg = builds.cdk_websearch_refusal({"tools": {"web": {"type": "websearch", **t}}})
+        assert "1.2.0" in msg and "Terraform" in msg, t
+    assert builds.cdk_websearch_refusal({"tools": {"web": {"type": "websearch", "domains": {"exclude": ["x.com"]}}}}) == ""
+    assert builds.cdk_websearch_refusal({"tools": {"kb": {"type": "kb", "publishedFrom": "x"}}}) == ""

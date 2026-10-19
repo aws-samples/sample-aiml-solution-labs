@@ -27,7 +27,7 @@ import { toolsOf } from "../lib/tools";
 import type { Selection } from "./Canvas";
 import { CodeTool } from "./CodeTool";
 import { EntryForm } from "./EntryForm";
-import { AGENT_ID_RE, TOOL_KEY_RE, imageModelOf, vocab } from "./meta";
+import { AGENT_ID_RE, TOOL_KEY_RE, applies, imageModelOf, vocab } from "./meta";
 import {
   setTools, defaultPrompt, insertStage, joinStage, moveMember, moveStage, removeAgent,
   removeTool, renameAgent, renameTool, setStageKind, stageKind, stageOf, stepAgents, stepName,
@@ -35,9 +35,19 @@ import {
 } from "./model";
 import { IssueList } from "./IssueList";
 import { KbDocuments, SecretField } from "./BuildResources";
+import { builtinLabel, builtinOverrides } from "./browserTool";
+import { ChunkingField, ParsingField } from "./KbIngestionFields";
+import { VectorStoreField } from "./VectorStoreField";
+import { DataSourceField } from "./DataSourceField";
 import { ToolConnect } from "./ToolConnect";
 import { EvaluatorPicker, type CustomEvaluator } from "./Features";
 import { capsLabel, fits, needsOf, useModels } from "./models";
+import { ModelRouting } from "./ModelRouting";
+import { AttachedList, ComponentPanel, type RowActions } from "./ComponentPanel";
+import { findComponent } from "./componentOps";
+import { CorePanel } from "./Rail";
+import { TaskPanel } from "./TaskPanel";
+import { HarnessSettings } from "./HarnessSettings";
 
 const FRAMEWORK_OPTIONS = [
   { value: "plain", label: "No framework — one ctx.llm call", description: "The simplest agent; add logic to run() as you need it." },
@@ -115,15 +125,18 @@ function PickOne({ ctx, kind, map, keys, used, value, onPick, onLibrary, none }:
   );
 }
 
-function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
+function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
   project: Project; id: string; issues: Issue[];
   onChange: (p: Project) => void; onSelect: (s: Selection) => void; server?: boolean;
+  rows: RowActions;
 }) {
   const wf = project.workflow;
   const agent = wf.agents[id];
   const mine = issuesFor(issues, { kind: "agent", id });
   const stage = stageOf(wf, id);
   const remote = agent.runtime === "a2a";
+  // An AgentCore Harness agent has no code: its prompt is `instructions` in workflow.json.
+  const harness = agent.runtime === "harness";
   const prompt = project.prompts[id];
   const setWf = (workflow: typeof wf) => onChange({ ...project, workflow });
 
@@ -168,7 +181,8 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
     <SpaceBetween size="l">
       <Header
         variant="h2"
-        description={remote ? "Remote agent (A2A) — its code is somebody else's" : "Runs in this deployment"}
+        description={remote ? "Remote agent (A2A) — its code is somebody else's"
+          : harness ? "Runs on a managed AgentCore Harness — no code of yours" : "Runs in this deployment"}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {stage >= 0 ? <Button onClick={() => setWf(unplace(wf, id))}>Remove from canvas</Button> : null}
@@ -179,6 +193,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
         {String(agent.name ?? id)}
       </Header>
       {mine.length ? <IssueList issues={mine} /> : null}
+      {!remote ? <AttachedList project={project} id={id} onSelect={onSelect} {...rows} /> : null}
       <IdField
         label="Agent id" value={id} pattern={AGENT_ID_RE} taken={Object.keys(wf.agents)}
         hint="Letters, digits and underscores, starting with a letter — no hyphens (it names an AgentCore Runtime)."
@@ -203,7 +218,18 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
         </SpaceBetween>
       ) : null}
 
-      {!remote ? (
+      {harness && agent.harness && typeof agent.harness === "object" && "arn" in agent.harness ? (
+        <Alert type="info">This agent uses a harness made elsewhere: its prompt, model and tools are set on that harness.</Alert>
+      ) : harness ? (
+        <ExpandableSection headerText="Instructions" defaultExpanded variant="container"
+          headerDescription="The system prompt its AgentCore Harness is created with. A change takes effect when you deploy.">
+          <FormField label="System prompt" stretch>
+            <Textarea rows={10} value={String(agent.instructions ?? "")} ariaLabel="Instructions"
+              placeholder="Who this agent is, what it does with the request and earlier stages, and the JSON it returns"
+              onChange={({ detail }) => onChange(updateEntry(project, "agents", id, { ...agent, instructions: detail.value }))} />
+          </FormField>
+        </ExpandableSection>
+      ) : !remote ? (
         <ExpandableSection headerText="Prompt" defaultExpanded variant="container"
           headerDescription="Written into app/subagents/<id>/prompts.py by `scaffold.py apply`.">
           <SpaceBetween size="m">
@@ -234,6 +260,32 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
           agentcore: { hidden: true },
           // Where a remote agent came from in an Agent Registry: shown on its own, not edited.
           registry: { hidden: true },
+          // Edited in the Instructions section above.
+          instructions: { hidden: true },
+          // A harness agent's model provider, tools, skills, memory, environment and endpoint.
+          harness: { render: () => <HarnessSettings agent={agent} workflow={wf}
+            onAgent={(e) => onChange(updateEntry(project, "agents", id, e))} /> },
+          // A task step is added from the palette ("+ New generic step"), not made from an agent.
+          runtime: {
+            render: (value, set) => {
+              const opts = vocab("runtimes").filter((r) => r !== "task").map((r) => ({ value: r, label: r }));
+              return (
+                <Select selectedOption={opts.find((o) => o.value === String(value ?? "main")) ?? opts[0]} options={opts}
+                  ariaLabel="Runtime" onChange={({ detail }) => {
+                    const v = detail.selectedOption.value;
+                    if (v === "harness") {
+                      // Keep only what a harness reads (no code, tools or files), and start its
+                      // `instructions` from the prompt written here.
+                      const kept = Object.fromEntries(Object.entries(agent).filter(([k]) => applies("agent", k, "harness")));
+                      onChange(updateEntry(project, "agents", id, {
+                        ...kept, runtime: v,
+                        ...(!agent.instructions && prompt?.systemPrompt?.trim() ? { instructions: prompt.systemPrompt } : {}),
+                      }));
+                    } else set(v);
+                  }} />
+              );
+            },
+          },
           skills: {
             // The build's skills (and the library's): know-how it opens when a task needs it.
             render: (value, set) => {
@@ -330,6 +382,8 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
               );
             },
           },
+          // Route rules and fallback models (app/common/model_routing.py).
+          models: { render: (value, set) => <ModelRouting value={value} set={set} models={models.models} /> },
           corpus: {
             render: (value, set) => {
               const opts = [{ label: "(every corpus)", value: "" }, ...corpora.map((c) => ({ label: c, value: c }))];
@@ -431,9 +485,6 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server }: {
               );
             })() : null}
 
-            <FeatureToggle label="Cedar policy on its tool calls" checked={Boolean(core.policy?.enabled)}
-              description="Policies themselves attach to tools, in the Policies tab."
-              onChange={(on) => onChange(on ? setCore(project, id, "policy.enabled", true) : clearCore(project, id, "policy"))} />
           </SpaceBetween>
         </ExpandableSection>
       ) : null}
@@ -484,7 +535,7 @@ function StagePanel({ project, index, issues, onChange }: {
           onChange={({ detail }) => onChange({ ...project, workflow: setStageKind(wf, index, detail.selectedId as never) })}
         />
       </FormField>
-      <FormField label="Review gate" description="Pause after this stage for a human to approve, revise or deny.">
+      <FormField label="HITL gate" description="Pause after this stage for HITL (a human in the loop) to approve, revise or deny.">
         <Toggle checked={Boolean(step.hitl)} onChange={({ detail }) => set({ hitl: detail.checked || undefined })}>
           {step.hitl ? "A reviewer signs off here" : "No review"}
         </Toggle>
@@ -593,7 +644,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
   };
   return (
     <SpaceBetween size="l">
-      <Header variant="h2" description={`${String(tool.type)} tool · used by ${users.join(", ") || "no agent yet"}`}
+      <Header variant="h2" description={`${builtinLabel(tool) ?? String(tool.type)} tool · used by ${users.join(", ") || "no agent yet"}`}
         actions={<Button onClick={() => { onChange(removeTool(project, id)); onSelect(null); }}>Delete</Button>}>
         {String(tool.description ?? id)}
       </Header>
@@ -615,9 +666,14 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
       <EntryForm name="tool" entry={tool} issues={issues} pathPrefix={`tools.${id}`}
         // A code tool's grants and files have their own panel below (CodeTool).
         // How it connects (auth, service, oauth, identity) has its own panel above (ToolConnect).
-        overrides={{ code: { hidden: true }, auth: { hidden: true }, service: { hidden: true }, oauth: { hidden: true },
+        overrides={{ code: { hidden: true }, allow: { hidden: true }, auth: { hidden: true }, service: { hidden: true }, oauth: { hidden: true },
           registry: { hidden: true },
           identity: { hidden: true },
+          // A Knowledge Base's document processing, as choices rather than JSON.
+          chunking: { render: (value, set) => <ChunkingField value={value} onChange={set} /> },
+          parsing: { render: (value, set) => <ParsingField value={value} onChange={set} /> },
+          vectorStore: { render: (value, set) => <VectorStoreField value={value} onChange={set} /> },
+          dataSource: { render: (value, set) => <DataSourceField value={value} onChange={set} vectorStore={tool.vectorStore} /> },
           policies: {
             render: (value) => {
               const cur = Array.isArray(value) ? value.map(String) : [];
@@ -636,9 +692,11 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
             },
           },
           // Written here: there is no ARN or shipped source to name.
-          ...(tool.code !== undefined ? { lambdaArn: { hidden: true }, source: { hidden: true } } : {}) }}
+          ...(tool.code !== undefined ? { lambdaArn: { hidden: true }, source: { hidden: true } } : {}),
+          // Code Interpreter and Browser: the framework owns the function (browserTool.ts).
+          ...builtinOverrides(tool) }}
         onChange={(e) => onChange(updateEntry(project, "tools", id, e))} />
-      {String(tool.type) === "lambda" ? <CodeTool project={project} id={id} onChange={onChange} server={server} /> : null}
+      {String(tool.type) === "lambda" && !builtinLabel(tool) ? <CodeTool project={project} id={id} onChange={onChange} server={server} /> : null}
       {String(tool.type) === "openapi" ? (
         <OpenApiUpload onSchema={(schema) => {
           const { schemaS3Uri: _u, source: _s, ...rest } = tool as Record<string, unknown>;
@@ -647,12 +705,18 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
       ) : null}
       {server && String(tool.type) === "kb" ? (
         <ExpandableSection headerText="Documents" variant="container" defaultExpanded
-          headerDescription={tool.knowledgeBaseId ? "From your Knowledge Base." : tool.s3Uri ? "From your S3 bucket." : "What each corpus retrieves from."}>
+          headerDescription={tool.knowledgeBaseId ? "From your Knowledge Base." : tool.s3Uri ? "From your S3 bucket."
+            : tool.dataSource ? "From a connector." : "What each corpus retrieves from."}>
           {tool.knowledgeBaseId ? (
             <Box color="text-body-secondary">
               Retrieves from your Knowledge Base <b>{String(tool.knowledgeBaseId)}</b>, in the account and region this
               build deploys to. Nothing is uploaded, and destroying the build leaves it as it is. Its retrieval function is
               granted bedrock:Retrieve on that one Knowledge Base only.
+            </Box>
+          ) : tool.dataSource ? (
+            <Box color="text-body-secondary">
+              Taken from the {String((tool.dataSource as Record<string, unknown>).type ?? "")} connector set under Advanced → Where
+              documents come from, and re-synced on every deploy. Nothing is uploaded here.
             </Box>
           ) : tool.s3Uri ? (
             <Box color="text-body-secondary">
@@ -671,7 +735,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
   );
 }
 
-export function Inspector({ project, selection, issues, onChange, onSelect, server, callbackUrls, agentName }: {
+export function Inspector({ project, selection, issues, onChange, onSelect, server, callbackUrls, agentName, ...rows }: {
   project: Project; selection: Selection; issues: Issue[];
   onChange: (p: Project) => void; onSelect: (s: Selection) => void;
   /** With the console's builds store: secrets and documents can be stored for the build. */
@@ -680,20 +744,38 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
   callbackUrls?: Record<string, string>;
   /** The build's fixed AWS name (the Gateway role is named from it). */
   agentName?: string;
-}) {
+} & RowActions) {
   const wf = project.workflow;
   let body;
-  if (selection?.kind === "agent" && wf.agents[selection.id]) {
-    body = <AgentPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} />;
+  const toolPanel = (id: string) => (
+    <ToolPanel project={project} id={id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} callbackUrls={callbackUrls} agentName={agentName} />
+  );
+  const row = selection?.kind === "component" && wf.agents[selection.agent] && findComponent(project, selection.agent, selection.key)
+    ? <ComponentPanel project={project} agent={selection.agent} componentKey={selection.key} onChange={onChange}
+        onSelect={onSelect} toolPanel={toolPanel} {...rows} />
+    : null;
+  if (row) {
+    body = row;
+  } else if (selection?.kind === "component" && wf.agents[selection.agent]) {
+    // The row is gone (removed, or renamed by an edit): show its agent.
+    body = wf.agents[selection.agent].runtime === "task"
+      ? <TaskPanel project={project} id={selection.agent} issues={issues} onChange={onChange} onSelect={onSelect} />
+      : <AgentPanel project={project} id={selection.agent} issues={issues} onChange={onChange} onSelect={onSelect} server={server} rows={rows} />;
+  } else if (selection?.kind === "agent" && wf.agents[selection.id]?.runtime === "task") {
+    body = <TaskPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} />;
+  } else if (selection?.kind === "agent" && wf.agents[selection.id]) {
+    body = <AgentPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} rows={rows} />;
   } else if (selection?.kind === "stage" && wf.steps[selection.index]) {
     body = <StagePanel project={project} index={selection.index} issues={issues} onChange={onChange} />;
   } else if (selection?.kind === "tool" && wf.tools[selection.id]) {
-    body = <ToolPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} callbackUrls={callbackUrls} agentName={agentName} />;
+    body = toolPanel(selection.id);
+  } else if (selection?.kind === "core") {
+    body = <CorePanel project={project} id={selection.id} onSelect={onSelect} />;
   } else {
     const errors = issues.filter((i) => i.severity === "error").length;
     body = (
       <SpaceBetween size="m">
-        <Header variant="h2" description="Select an agent, a stage or a tool to configure it.">Problems</Header>
+        <Header variant="h2" description="Click an agent to see everything attached to it; click any row on an agent (a tool, memory, guardrail…) to configure it.">Problems</Header>
         {issues.length
           ? <IssueList issues={issues} onPick={(w) => {
             if (w.kind === "agent") onSelect({ kind: "agent", id: w.id });
@@ -730,7 +812,7 @@ function GateSettings({ hitl, onChange }: { hitl: boolean | GateSpec; onChange: 
     onChange(Object.keys(next).length ? (next as GateSpec) : true);
   };
   const opt = (v: string, label: string) => ({ value: v, label });
-  const modes = [opt("always", "Always: a person decides"), opt("threshold", "Only when a rule matches"),
+  const modes = [opt("always", "Always: HITL decides"), opt("threshold", "Only when a rule matches"),
     opt("auto", "Approves itself (logged)")];
   const approvals = [opt("console", "In the app"), opt("event", "In the app, or by EventBridge event")];
   const mode = h.mode ?? "always";
@@ -742,7 +824,7 @@ function GateSettings({ hitl, onChange }: { hitl: boolean | GateSpec; onChange: 
             onChange={({ detail }) => write({ mode: detail.selectedOption.value as Gate["mode"] })} />
         </FormField>
         {mode === "threshold" ? (
-          <FormField label="Rules that call for a person" stretch errorText={rulesErr}
+          <FormField label="Rules that call for HITL" stretch errorText={rulesErr}
             description={'Branch rules without goto, against this stage\'s output: [{"field": "riskScore", "gte": 80}, {"contains": "URGENT"}]. No match: it approves itself.'}>
             <Textarea rows={3} value={rules} onChange={({ detail }) => setRules(detail.value)}
               onBlur={() => {

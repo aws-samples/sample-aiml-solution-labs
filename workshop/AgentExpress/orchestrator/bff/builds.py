@@ -64,6 +64,10 @@ DOC_EXTENSIONS = (".pdf", ".txt", ".md", ".html", ".htm", ".csv", ".doc", ".docx
 DOC_MAX_BYTES = 50 * 1024 * 1024
 
 
+#: Why a team's viewer may not change its build (bff/teams.py).
+VIEWER_ONLY = "you can view this team's build but not change it: ask a team owner to make you an editor"
+
+
 class BuildError(Exception):
     """An expected refusal, with the status code the route should answer."""
 
@@ -77,38 +81,52 @@ class Who(str):
     their email, which is what a share names them by (bff/sharing.py)."""
 
     email: str = ""
+    #: The sign-in provider's groups (bff/authz.py groups_of): a team role can name one.
+    groups: tuple = ()
 
-    def __new__(cls, sub: str, email: str = ""):
+    def __new__(cls, sub: str, email: str = "", groups=()):
         obj = super().__new__(cls, sub)
         obj.email = str(email or "").strip().lower()
+        obj.groups = tuple(str(g) for g in groups or ())
         return obj
 
 
 def owner_of(claims: dict) -> Who:
     """Whose builds these are. `sub` is stable across email changes; "anonymous" when the
     deployment has no identity provider (a GSI key may not be empty)."""
-    return Who(str(claims.get("sub") or claims.get("email") or "anonymous"), str(claims.get("email") or ""))
+    import authz
+    groups = authz.groups_of({"requestContext": {"authorizer": {"jwt": {"claims": claims}}}})
+    return Who(str(claims.get("sub") or claims.get("email") or "anonymous"), str(claims.get("email") or ""),
+               groups)
 
 
 # --- reading ----------------------------------------------------------------------
 
-def _meta(build_id: str, owner: str) -> dict:
+def _meta(build_id: str, owner: str, write: bool = True) -> dict:
+    """The build, if the caller may use it: to change it (`write`), or only to read it."""
     if not buildstore.ID_RE.match(build_id or ""):
         raise BuildError(400, "invalid build id")
     item = _table.get_item(Key=buildstore.meta_key(build_id)).get("Item")
     # Someone else's build answers exactly like a missing one — unless it is shared with
-    # the caller (bff/sharing.py), who may then do everything its owner may.
-    import sharing
-    if not item or not sharing.can_access(item, owner):
+    # the caller (bff/sharing.py), who may then do everything its owner may, or is in a
+    # team workspace the caller has a role in (bff/teams.py): a viewer reads, no more.
+    import teams
+    level = teams.access(item, owner)
+    if not level:
         raise BuildError(404, "unknown build")
+    if write and level != "edit":
+        raise BuildError(403, VIEWER_ONLY)
     return item
 
 
-def _public(item: dict, who=None) -> dict:
-    """The META item minus the storage keys; `shared` when the caller is not its owner."""
+def _public(item: dict, who=None, level: str = "") -> dict:
+    """The META item minus the storage keys; `shared` when the caller is not its owner, and
+    `readOnly` when they may only read it (a team viewer)."""
     out = {k: v for k, v in item.items() if k not in ("pk", "sk", "owner")}
     if who is not None and str(item.get("owner") or "") != str(who):
         out["shared"] = True
+    if level == "read":
+        out["readOnly"] = True
     return out
 
 
@@ -157,6 +175,15 @@ def list_builds(owner: str) -> list[dict]:
         if not page.get("LastEvaluatedKey"):
             break
         kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+    # A build the caller made that is now in a team they are in lists in that team's
+    # workspace (bff/teams.py), not here. Not in one (they left it): it stays here.
+    import teams
+    member: dict = {}
+    for i in items:
+        t = str(i.get("team") or "")
+        if t and t not in member:
+            member[t] = bool(teams.role_of(teams.get_team(t), owner))
+    items = [i for i in items if not member.get(str(i.get("team") or ""))]
     # And every build shared with the caller (bff/sharing.py), newest first with the rest.
     import sharing
     mine = {i["id"] for i in items}
@@ -214,10 +241,11 @@ def get_build(build_id: str, owner: str) -> dict:
     """The build, its draft, and the shared items the draft uses (bff/library.py), so the
     page shows them live."""
     import library
-    item = _meta(build_id, owner)
+    import teams
+    item = _meta(build_id, owner, write=False)
     _refresh([item])
     project = _draft(build_id)
-    return {"build": _public(item, owner), "project": project,
+    return {"build": _public(item, owner, teams.access(item, owner)), "project": project,
             "refs": library.refs_for(project, owner, str(item.get("owner") or ""))}
 
 
@@ -234,9 +262,11 @@ def set_shares(build_id: str, who, shares) -> dict:
 
 # --- writing ----------------------------------------------------------------------
 
-def save(build_id: str, owner: str, project: dict, email: str = "", on_create=None) -> dict:
+def save(build_id: str, owner: str, project: dict, email: str = "", on_create=None, team: str = "") -> dict:
     """Create or update a build from the Build view's autosave. `on_create(summary)` is
-    called once, by the save that created it (the audit log's build.created)."""
+    called once, by the save that created it (the audit log's build.created). `team`: the
+    team workspace a NEW build is created in (bff/teams.py); ignored for an existing one,
+    which moves only by PUT /api/builds/{id}/team."""
     if not buildstore.ID_RE.match(build_id or ""):
         raise BuildError(400, "invalid build id")
     if not isinstance(project, dict) or not isinstance(project.get("workflow"), dict):
@@ -256,10 +286,18 @@ def save(build_id: str, owner: str, project: dict, email: str = "", on_create=No
     # an older copy than the stored one is refused (409), so two people editing the same
     # build cannot silently overwrite each other: `rev` counts saves.
     import library
-    import sharing
+    import teams
     current = _table.get_item(Key=buildstore.meta_key(build_id)).get("Item")
-    if current and not sharing.can_access(current, owner):
+    level = teams.access(current, owner) if current else ""
+    if current and not level:
         raise BuildError(404, "unknown build")
+    if current and level != "edit":
+        raise BuildError(403, VIEWER_ONLY)
+    team = "" if current else str(team or "")
+    if team:
+        if not teams.ID_RE.match(team):
+            raise BuildError(400, "invalid team id")
+        teams.require_role(team, owner)
     if current and base is not None and int(current.get("rev") or 0) != int(base):
         raise BuildError(409, f"this build was changed by {current.get('lastEditor') or 'someone else'} "
                               f"since you opened it: reload to get their changes")
@@ -284,16 +322,18 @@ def save(build_id: str, owner: str, project: dict, email: str = "", on_create=No
                              "rev = if_not_exists(rev, :z) + :one, lastEditor = :e, "
                              # Which library items it uses, so deleting one finds its
                              # builds without reading every draft (library.detach).
-                             "libraryUses = :u",
+                             "libraryUses = :u" + (", #tm = if_not_exists(#tm, :tm)" if team else ""),
             ConditionExpression="attribute_not_exists(pk) OR #o = :o",
-            ExpressionAttributeNames={"#n": "name", "#o": "owner"},
+            ExpressionAttributeNames={"#n": "name", "#o": "owner", **({"#tm": "team"} if team else {})},
             ExpressionAttributeValues={":n": name, ":t": stamp, ":id": build_id,
                                        ":a": agent_name, ":o": owner_id, ":one": 1,
                                        ":z": 0, ":e": email, ":h": hashes,
-                                       ":u": library.ids_in(project)},
+                                       ":u": library.ids_in(project), **({":tm": team} if team else {})},
             ReturnValues="ALL_NEW")
     except _table.meta.client.exceptions.ConditionalCheckFailedException:
         raise BuildError(404, "unknown build") from None
+    if team and res["Attributes"].get("team") == team:
+        teams.add_build(team, build_id)
     _s3.put_object(Bucket=BUILDS_BUCKET, Key=buildstore.draft_key(build_id), Body=blob,
                    ContentType="application/json")
     if current and str(current.get("owner")) == str(owner) and email and current.get("ownerEmail") != email:
@@ -418,6 +458,29 @@ def _start(item: dict, action: str, tool: str, version: int, user: str,
     return {**job, "id": job_id}
 
 
+def cdk_websearch_refusal(wf: dict) -> str:
+    """Why a CDK deploy of `wf` would be refused at synth for its web-search tools, or "".
+
+    CloudFormation creates a web-search target at the connector's default version (1.1.0)
+    and cannot pin one (ConnectorSource has only ConnectorId); the domain include list and
+    published-date filters exist only from 1.2.0. Mirrors cdk/lib/orchestrator-stack.ts, so
+    the person hears it when they click Deploy, not minutes into the job.
+    https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-connector-versions.html"""
+    for name, t in (wf.get("tools") or {}).items():
+        if not isinstance(t, dict) or t.get("type") != "websearch":
+            continue
+        keys = [k for k, on in (("domains.include", bool((t.get("domains") or {}).get("include"))),
+                                ("publishedFrom", bool(t.get("publishedFrom"))),
+                                ("publishedTo", bool(t.get("publishedTo"))),
+                                ("connectorVersion", bool(t.get("connectorVersion")))) if on]
+        if keys:
+            return (f"tools.{name} sets {', '.join(keys)}, which a CDK deploy cannot honour: "
+                    f"CloudFormation creates a web-search target at the connector's default version "
+                    f"(1.1.0) and cannot pin another, and these need 1.2.0. Deploy with Terraform, "
+                    f"which pins 1.2.0, or remove {'them' if len(keys) > 1 else 'it'}.")
+    return ""
+
+
 def deploy(build_id: str, owner: str, tool: str, user: str, account: str = "",
            region: str = "") -> dict:
     if tool not in buildstore.TOOLS:
@@ -476,6 +539,10 @@ def deploy(build_id: str, owner: str, tool: str, user: str, account: str = "",
         raise BuildError(400, f"this build has {len(problems)} error"
                               f"{'s' if len(problems) != 1 else ''} to fix before it can "
                               f"deploy — {shown}{more}")
+    if tool == "cdk":
+        refusal = cdk_websearch_refusal(wf)
+        if refusal:
+            raise BuildError(400, refusal)
     wrong = code_errors(project)
     if wrong:
         raise BuildError(400, f"a tool's code has {len(wrong)} error{'s' if len(wrong) != 1 else ''} "
@@ -610,7 +677,7 @@ def _invite_collaborator(build_id: str, item: dict, who) -> dict:
 def label(build_id: str, owner: str) -> dict:
     """What the audit log names a build by. Read before the action, since a delete
     leaves nothing to read after."""
-    item = _meta(build_id, owner)
+    item = _meta(build_id, owner, write=False)
     return {"build": build_id, "name": item.get("name", ""), "agentName": item.get("agentName", "")}
 
 
@@ -629,7 +696,7 @@ def activity(owner: str, everyone: bool = False, day: str = "", limit: int = 500
 
 def is_deployed_or_partial(build_id: str, owner: str) -> bool:
     """Whether deleting this build must first destroy something in AWS."""
-    return bool(_meta(build_id, owner).get("tool"))
+    return bool(_meta(build_id, owner, write=False).get("tool"))
 
 
 def delete(build_id: str, owner: str) -> None:
@@ -640,6 +707,8 @@ def delete(build_id: str, owner: str) -> None:
     delete_secrets(build_id)
     import sharing
     sharing.drop_pointers("BUILD", build_id, item.get("shares"))
+    import teams
+    teams.drop_build(str(item.get("team") or ""), build_id)
     buildstore.purge(_table, _s3, BUILDS_BUCKET, build_id, str(item["owner"]))
 
 
@@ -668,7 +737,7 @@ def _read_secrets(build_id: str) -> dict:
 
 def secret_names(build_id: str, owner: str) -> dict:
     """Which secrets are set — names only, never values."""
-    _meta(build_id, owner)
+    _meta(build_id, owner, write=False)
     data = _read_secrets(build_id)
     return {k: sorted(v) for k, v in data.items()}
 
@@ -728,7 +797,7 @@ def doc_upload(build_id: str, owner: str, corpus: str, name: str) -> dict:
 
 
 def list_docs(build_id: str, owner: str) -> list[dict]:
-    _meta(build_id, owner)
+    _meta(build_id, owner, write=False)
     prefix, out = buildstore.kb_prefix(build_id), []
     for page in _s3.get_paginator("list_objects_v2").paginate(Bucket=BUILDS_BUCKET, Prefix=prefix):
         for o in page.get("Contents", []):
@@ -747,7 +816,8 @@ def empty_corpora(build_id: str, owner: str, workflow: dict) -> list[tuple[str, 
     existing one (`knowledgeBaseId`) is not checked: its corpora are values in their
     metadata."""
     kbs = [(k, t) for k, t in (workflow.get("tools") or {}).items()
-           if isinstance(t, dict) and t.get("type") == "kb" and not t.get("s3Uri") and not t.get("knowledgeBaseId")]
+           if isinstance(t, dict) and t.get("type") == "kb" and not t.get("s3Uri") and not t.get("knowledgeBaseId")
+           and not t.get("dataSource")]
     if not kbs:
         return []
     have = {d["corpus"] for d in list_docs(build_id, owner)}
@@ -772,7 +842,7 @@ def deployments(build_id: str, who, limit: int = 50, read_max: int = 5000) -> di
     shared with sees each deploy, theirs and the owner's alike. Reads at most `read_max`
     of the owner's events, which covers years of a person's activity."""
     from boto3.dynamodb.conditions import Attr, Key
-    item = _meta(build_id, who)
+    item = _meta(build_id, who, write=False)
     owner = str(item.get("owner") or "")
     kw = {"KeyConditionExpression": Key("pk").eq(f"AUDIT#{owner}"), "ScanIndexForward": False,
           "FilterExpression": Attr("detail.build").eq(build_id) & Attr("action").is_in(list(DEPLOY_OUTCOMES))}
@@ -800,7 +870,7 @@ def deployments(build_id: str, who, limit: int = 50, read_max: int = 5000) -> di
 
 def job_log(build_id: str, owner: str, limit: int = 200) -> dict:
     """The tail of the latest job's CodeBuild log, so a failure is readable in place."""
-    job = _meta(build_id, owner).get("job") or {}
+    job = _meta(build_id, owner, write=False).get("job") or {}
     if not job.get("id"):
         return {"lines": []}
     builds = _codebuild.batch_get_builds(ids=[job["id"]]).get("builds", [])
@@ -859,7 +929,7 @@ def target(build_id: str, owner: str | None = None) -> dict:
             "runtimeArn": deployed["runtimeArn"], "statusTable": deployed["statusTable"],
             "eventsTable": deployed["eventsTable"],
             "telemetryTable": deployed["telemetryTable"],
-            "raw": raw, "view": wf_mod.project(raw)}
+            "raw": raw, "view": wf_mod.project(raw, item.get("agentName", ""))}
 
 
 def build_of_run(session_id: str) -> str:
@@ -904,7 +974,7 @@ def registry_state(build_id: str, owner: str) -> dict:
     """For the Builder: a newer approved version of each item this build took from a
     registry, and where the build is published (R2)."""
     import registry
-    item = _meta(build_id, owner)
+    item = _meta(build_id, owner, write=False)
     draft = _draft(build_id)
     ups = registry_call(registry.updates, draft) if registry._linked(draft) else []
     published = item.get("registry") or {}

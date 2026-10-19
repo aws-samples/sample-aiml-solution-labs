@@ -66,7 +66,8 @@ def _system_tokens(model: str, system_text: str, mode: str) -> tuple[int, bool]:
     to the ~4-chars/token estimate. Returns (tokens, is_exact)."""
     # mode "error" means the call failed before Bedrock answered, so there is
     # nothing to count exactly — fall back to the estimate.
-    if mode == "error" or not system_text:
+    # "litellm": not a Bedrock model (app/common/litellm_proxy.py), so CountTokens cannot count it.
+    if mode in ("error", "litellm") or not system_text:
         return est_tokens(system_text), False
     from app.features.observability import tokens as _tok
     exact = _tok.exact_system_tokens(model, system_text)
@@ -75,24 +76,43 @@ def _system_tokens(model: str, system_text: str, mode: str) -> tuple[int, bool]:
     return exact, True
 
 
+def _chosen_by() -> str:
+    """Why this call's model was chosen (app/common/model_routing.py); "" if unknown."""
+    try:
+        from app.common import model_routing
+        return model_routing.chosen_by()
+    except Exception:  # noqa: BLE001 - never lose the row over its label
+        return ""
+
+
 def record_llm(*, model: str, input_tokens: int, output_tokens: int,
                system_text: str = "", latency_ms: int = 0, mode: str = "bedrock",
                user_input: str = "", output_text: str = "",
                temperature: float = 0.0, max_tokens: int = 0,
-               finish_reason: str = "", prompt: str = "") -> None:
+               finish_reason: str = "", prompt: str = "",
+               cost_usd=None, rates_source: str = "") -> None:
     """One Bedrock model call: exact tokens, rates, cost, and the captured I/O the
-    "Prompts & I/O" inspector (and AgentCore Evaluations) read back."""
+    "Prompts & I/O" inspector (and AgentCore Evaluations) read back.
+
+    `cost_usd` and `rates_source` replace the price lookup for a call priced elsewhere: a
+    LiteLLM proxy call carries the proxy's own cost ("proxy"), or 0 when it sent none
+    ("none", so rates_known is false and nobody reads the 0 as measured)."""
     try:
         s = get_scope()
         # One lookup: the rates, and which source priced them. Carried onto the row so a
         # reader can tell a listed price from the built-in snapshot or the fallback guess
         # — the fallback was silent, which made every figure for an unrecognised model
         # look measured.
-        in_rate, out_rate, source = pricing.price(model)
-        known = source != "fallback"
-        # A failed call ("error") consumed no billable tokens.
-        cost = (pricing.Decimal("0") if mode == "error"
-                else pricing.cost_at(in_rate, out_rate, input_tokens, output_tokens))
+        if cost_usd is not None:
+            in_rate = out_rate = pricing.Decimal("0")
+            source, known = rates_source or "none", rates_source == "proxy"
+            cost = pricing.Decimal(str(cost_usd))
+        else:
+            in_rate, out_rate, source = pricing.price(model)
+            known = source != "fallback"
+            # A failed call ("error") consumed no billable tokens.
+            cost = (pricing.Decimal("0") if mode == "error"
+                    else pricing.cost_at(in_rate, out_rate, input_tokens, output_tokens))
         sys_tokens, sys_exact = _system_tokens(model, system_text, mode)
         store.put(CallRecord(
             session_id=s.session_id, agent_id=s.agent_id, user=s.user,
@@ -106,6 +126,7 @@ def record_llm(*, model: str, input_tokens: int, output_tokens: int,
             finish_reason=finish_reason or "", status=("error" if mode == "error" else "ok"),
             system_prompt=_truncate(system_text), user_input=_truncate(user_input),
             output_text=_truncate(output_text), version=s.version, prompt=prompt or "",
+            chosen_by=_chosen_by(),
         ))
     except Exception as e:  # noqa: BLE001
         print(f"[observability] record_llm skipped: {type(e).__name__}: {e}")
@@ -225,6 +246,22 @@ def record_guardrail(*, source: str, action: str, detail: str = "", latency_ms: 
         ))
     except Exception as e:  # noqa: BLE001
         print(f"[observability] record_guardrail skipped: {type(e).__name__}: {e}")
+
+
+def record_person(*, label: str, status: str, detail: str = "") -> None:
+    """An agent asking a person mid-step (app/common/asks.py). label = "question" or the
+    tool's name; status = asked | answered | unanswered (a question), waiting | approved |
+    denied (a tool call). No latency: the time a person takes is not the agent's. Best-effort."""
+    try:
+        s = get_scope()
+        store.put(CallRecord(
+            session_id=s.session_id, agent_id=s.agent_id, user=s.user,
+            kind="person", label=label, mode="person", status=status,
+            latency_ms=0, cost_usd=pricing.Decimal("0"), seq=_next_seq(),
+            output_text=_truncate(detail), version=s.version,
+        ))
+    except Exception as e:  # noqa: BLE001
+        print(f"[observability] record_person skipped: {type(e).__name__}: {e}")
 
 
 def record_policy(*, tool: str, decision: str, filter_value: str = "",

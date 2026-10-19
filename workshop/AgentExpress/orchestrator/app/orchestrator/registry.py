@@ -27,6 +27,10 @@ from app.common.a2a_agent import A2AAgent
 from app.common.agentcore_agent import AgentCoreRuntimeAgent
 from app.common.base import Agent
 from app.common.config import AGENTS, tool_list
+from app.common.harness_agent import HarnessAgent
+from app.common.harness_agent import validate as validate_harness
+from app.common.task_agent import TaskAgent
+from app.common.task_agent import validate as validate_tasks
 
 
 def _configure(agent: Agent, agent_id: str, spec: dict) -> Agent:
@@ -358,7 +362,8 @@ def validate_runtimes() -> None:
         # remote agent it is read by nothing.
         decorative = [k for k in ("model", "temperature", "topP", "stopSequences", "maxTokens",
                                   "access", "framework", "output", "image", "vision", "attachments",
-                                  "toolMode", "maxToolCalls", "skills") if k in spec]
+                                  "toolMode", "maxToolCalls", "skills", "askPerson", "task",
+                                  "instructions", "harness", "models") if k in spec]
         if decorative:
             # All three configure ctx.llm, and a remote agent never calls it — its
             # model, its temperature, its budget. Left settable, they would read as
@@ -461,6 +466,9 @@ def load_agents() -> dict[str, Agent]:
     validate_runtimes()
     validate_tool_types()
     validate_features()
+    from app.common.config import TOOLS
+    validate_tasks(AGENTS, TOOLS)
+    validate_harness(AGENTS)
     registry: dict[str, Agent] = {}
     for agent_id, spec in AGENTS.items():
         placement = spec.get("runtime", defaults.get("agent", "runtime"))
@@ -470,6 +478,14 @@ def load_agents() -> dict[str, Agent]:
         elif placement == "a2a":
             agent = A2AAgent()
             _configure(agent, agent_id, spec)
+        elif placement == "task":
+            # A step with no model and no folder: its `task` block is the whole of it.
+            agent = TaskAgent()
+            _configure(agent, agent_id, spec).use(spec.get("task") or {})
+        elif placement == "harness":
+            # No folder either: AgentCore runs it from its `instructions` (harness_agent.py).
+            agent = HarnessAgent()
+            _configure(agent, agent_id, spec).use(spec)
         else:
             agent = build_agent_module(agent_id)
         registry[agent_id] = agent

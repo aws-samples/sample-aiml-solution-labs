@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import re
 
+from app.common import artifacts
 from app.common.config import TOOLS
 from app.common.errors import ToolDenied, ToolNeedsConsent, ToolUnavailable
 from app.common.sink import WorkflowCancelled, is_cancelled
@@ -182,11 +183,16 @@ async def gather(ctx, query: str, *, tools: list[str],
     tool type in the evidence headings, as that caller does."""
     from langchain_core.messages import HumanMessage, ToolMessage
 
+    from app.common import asks
     from app.common.llm import run_llm_tools
     specs, routes = await _specs(ctx, list(tools))
     offered = {key for _kind, key, _tool in routes.values()}
     hidden = [k for k in tools if k not in offered]
-    if not specs:
+    # askPerson: one more tool, ask_person (app/common/asks.py). It is a reason to run this
+    # turn even with no tool bound, but never a substitute for tools that ARE bound and
+    # that the Gateway does not list.
+    ask = asks.ask_spec(getattr(ctx, "agent_id", ""))
+    if not specs and (tools or not ask):
         # Nothing to call means nothing to reason from. Carrying on would hand the agent
         # an empty evidence block, and a model with a task and no evidence writes one —
         # observed live: it "called" the tool in prose and reported made-up numbers. So
@@ -200,6 +206,10 @@ async def gather(ctx, query: str, *, tools: list[str],
             # First, so it reads as part of how the task is done; never a Gateway call.
             specs.insert(0, skills.tool_spec(own_skills))
             routes[skills.TOOL_NAME] = ("skill", None, None)
+    if ask and asks.TOOL_NAME not in routes:
+        specs.append(asks.tool_spec(ask))
+        routes[asks.TOOL_NAME] = ("ask", None, None)
+    journal = asks.journaling(ctx)
     opens = 0
     messages: list = [HumanMessage(content=_task(ctx, query))]
     parts: list[str] = []
@@ -207,13 +217,29 @@ async def gather(ctx, query: str, *, tools: list[str],
                               for k in hidden]
     calls = 0
     budget = max(1, int(getattr(ctx, "max_tool_calls", 6) or 6))
-    for _turn in range(budget + 1):
+    # Each question takes a model turn of its own, so it does not eat the tool budget.
+    for _turn in range(budget + 1 + (ask["maxQuestions"] if ask else 0)):
         if is_cancelled(ctx.session_id):
             raise WorkflowCancelled(ctx.session_id)
-        # Room for an argument that carries a whole draft, not just a search query.
-        ai = await run_llm_tools(f"{ctx.agent_id}.tools", SYSTEM, messages, specs,
-                                 model=getattr(ctx, "model", None),
-                                 max_tokens=min(int(getattr(ctx, "max_tokens", 1500) or 1500), 8000))
+
+        async def turn():
+            # Room for an argument that carries a whole draft, not just a search query.
+            # The same model choice as ctx.llm (app/common/model_routing.py).
+            from app.common import model_routing
+            chain = model_routing.candidates(
+                ctx, SYSTEM, "\n\n".join(str(getattr(m, "content", "")) for m in messages))
+            return await model_routing.call(ctx, chain, lambda m: run_llm_tools(
+                f"{ctx.agent_id}.tools", SYSTEM, messages, specs, model=m,
+                max_tokens=min(int(getattr(ctx, "max_tokens", 1500) or 1500), 8000)))
+        if journal:
+            # Journaled (asks.py): a node re-run on resume replays this turn, not bills it again.
+            async def recorded():
+                ai = await turn()
+                return {"content": ai.content, "tool_calls": list(getattr(ai, "tool_calls", None) or [])}
+            from langchain_core.messages import AIMessage
+            ai = AIMessage(**await asks.once(ctx, recorded))
+        else:
+            ai = await turn()
         messages.append(ai)
         wanted = list(getattr(ai, "tool_calls", None) or [])
         if not wanted:
@@ -239,6 +265,10 @@ async def gather(ctx, query: str, *, tools: list[str],
                 continue
             if route is None:
                 text = f"There is no tool named {name}. Use one of: {', '.join(routes)}."
+            elif route[0] == "ask":
+                # A question for a person (asks.py): the run waits for the answer. Not a
+                # tool call, so not counted against maxToolCalls; capped on its own.
+                text = await asks.ask(ctx, args.get("question"))
             elif calls >= budget:
                 text = (f"Not called: this agent may make at most {budget} tool calls, and has. "
                         f"Answer with what you have.")
@@ -246,28 +276,59 @@ async def gather(ctx, query: str, *, tools: list[str],
                 calls += 1
                 _kind, key, _tool = route
                 shown = json.dumps(args, ensure_ascii=False, default=str)[:300]
-                await ctx.log(f"Tool call {calls}/{budget}: {name}({shown})")
-                try:
-                    found, mode = await _call(ctx, route, args)
-                except ToolDenied as e:
+                # A tool with `approval` waits for a person, who sees the arguments the
+                # Gateway will be sent (the tool's fixed `args` win, as in invoke_chosen).
+                approved, told = (await asks.approve(
+                    ctx, key, name, {**args, **dict((TOOLS.get(key) or {}).get("args") or {})})
+                    if _kind == "gateway" else (True, ""))
+                if not approved:
+                    text = told
+                    limitations.append(f"'{name}' was not called for {shown}: it needs a person's approval, "
+                                       f"which it did not get.")
+                    messages.append(ToolMessage(content=text, tool_call_id=str(call.get("id") or name)))
+                    continue
+                n = calls
+
+                async def attempt(route=route, args=args, shown=shown, name=name, n=n):
+                    # The call and its timeline lines are one journal entry (asks.py), and
+                    # what the loop needs from it comes back as data: a node re-run on
+                    # resume must not call the tool again, nor log it twice.
+                    await ctx.log(f"Tool call {n}/{budget}: {name}({shown})")
+                    try:
+                        found, mode = await _call(ctx, route, args)
+                    except ToolDenied as e:
+                        by_interceptor = getattr(e, "by", "policy") == "interceptor"
+                        # On the timeline too: the refusal is the policy working, and it
+                        # was visible only to the model.
+                        await ctx.log(f"Refused by interceptor: {name}({shown}) — {str(e).split(': ', 1)[-1][:200]}"
+                                      if by_interceptor else f"Refused by Cedar policy: {name}({shown})")
+                        return {"denied": str(e), "layer": "interceptor" if by_interceptor else "policy"}
+                    except ToolNeedsConsent:
+                        # Not something the model can work around: the person connects
+                        # their account, then runs the step again. Fail it with that.
+                        raise
+                    except ToolUnavailable as e:
+                        return {"failed": str(e)}
+                    if route[0] == "gateway" and artifacts.is_code_tool(
+                            TOOLS.get(route[1]), getattr(route[2], "name", "")):
+                        # The code the sandbox ran, kept with the run (Files tab). Inside
+                        # the journal entry, so a resumed node does not keep it twice.
+                        import asyncio
+                        await asyncio.to_thread(
+                            artifacts.record_code_call, ctx.session_id, ctx.agent_id,
+                            {**args, **dict((TOOLS.get(route[1]) or {}).get("args") or {})}, found)
+                    return {"found": found, "mode": mode}
+                got = await asks.once(ctx, attempt)
+                if "denied" in got:
                     found, mode = "", "denied"
-                    by_interceptor = getattr(e, "by", "policy") == "interceptor"
-                    layer = "interceptor" if by_interceptor else "policy"
-                    text = f"REFUSED by the {layer}: {e}"
-                    limitations.append(f"'{name}' was refused by the Gateway's {layer} for {shown}.")
-                    # On the timeline too: the refusal is the policy working, and it
-                    # was visible only to the model.
-                    await ctx.log(f"Refused by interceptor: {name}({shown}) — {str(e).split(': ', 1)[-1][:200]}"
-                                  if by_interceptor else f"Refused by Cedar policy: {name}({shown})")
-                except ToolNeedsConsent:
-                    # Not something the model can work around: the person connects
-                    # their account, then runs the step again. Fail it with that.
-                    raise
-                except ToolUnavailable as e:
+                    text = f"REFUSED by the {got['layer']}: {got['denied']}"
+                    limitations.append(f"'{name}' was refused by the Gateway's {got['layer']} for {shown}.")
+                elif "failed" in got:
                     found, mode = "", "error"
-                    text = f"FAILED: {e}"
-                    limitations.append(f"'{name}' failed: {str(e)[:200]}")
+                    text = f"FAILED: {got['failed']}"
+                    limitations.append(f"'{name}' failed: {got['failed'][:200]}")
                 else:
+                    found, mode = got["found"], got["mode"]
                     text = found[:RESULT_CHARS] if found else "No results."
                     if found:
                         tool_kind = str((TOOLS.get(key) or {}).get("type", "mcp")).lower()
@@ -277,7 +338,7 @@ async def gather(ctx, query: str, *, tools: list[str],
                     else:
                         limitations.append(f"'{name}' returned no results for {shown}.")
             messages.append(ToolMessage(content=text, tool_call_id=str(call.get("id") or name)))
-    if not calls:
+    if not calls and tools:
         limitations.append("The model called none of this agent's tools for this request.")
     elif calls >= budget:
         await ctx.log(f"Tool calls: reached this agent's limit of {budget} (maxToolCalls).")

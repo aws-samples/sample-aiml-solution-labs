@@ -5,10 +5,17 @@
 # when a step asks for them. Mirrors gateSteps and the GateDecisions / GateTimeouts rules
 # in cdk/lib/orchestrator-stack.ts.
 locals {
-  gate_specs    = [for s in try(local.workflow_def.steps, []) : s.hitl if can(keys(s.hitl))]
-  gate_on       = local.workflow_plane && var.console_mode != "builder"
-  gate_events   = local.gate_on && length([for h in local.gate_specs : h if try(h.approval, "") == "event"]) > 0
-  gate_timeouts = local.gate_on && length([for h in local.gate_specs : h if can(keys(h.timeout))]) > 0
+  gate_specs = [for s in try(local.workflow_def.steps, []) : s.hitl if can(keys(s.hitl))]
+  gate_on    = local.workflow_plane && var.console_mode != "builder"
+  # An agent asking a person mid-step (app/common/asks.py) is answered the same ways: a tool
+  # approved by event, and an askPerson / approvalTimeout that times out.
+  ask_events = [for n, t in try(local.workflow_def.tools, {}) : n if try(t.approval, "") == "event"]
+  ask_timeouts = concat(
+    [for id, a in try(local.workflow_def.agents, {}) : id if can(a.askPerson.timeout)],
+    [for n, t in try(local.workflow_def.tools, {}) : n if can(keys(t.approvalTimeout))],
+  )
+  gate_events   = local.gate_on && length([for h in local.gate_specs : h if try(h.approval, "") == "event"]) + length(local.ask_events) > 0
+  gate_timeouts = local.gate_on && length([for h in local.gate_specs : h if can(keys(h.timeout))]) + length(local.ask_timeouts) > 0
 }
 
 resource "aws_iam_role_policy" "runtime_gate_events" {

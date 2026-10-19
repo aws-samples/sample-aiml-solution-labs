@@ -29,6 +29,9 @@ resource "aws_iam_role" "gateway" {
       }
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "gateway" {
@@ -177,7 +180,9 @@ resource "aws_iam_role_policy" "gateway" {
       # The interceptors (interceptors.tf): here, not in a separate policy, so the IAM
       # wait before the Gateway is created covers them too. Mirrors InvokeInterceptors
       # in cdk/lib/tool-plane.ts.
-    ], local.interceptor_statements)
+      # type=smithy: its hosted model and exactly the calls its `allow` names
+      # (tools_smithy.tf). Empty with no smithy tool.
+    ], local.interceptor_statements, local.smithy_statements)
   })
 }
 

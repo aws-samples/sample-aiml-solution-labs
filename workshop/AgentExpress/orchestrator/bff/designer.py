@@ -1130,7 +1130,7 @@ def _public(doc: dict) -> dict:
 
 def conversation(build_id: str, owner: str) -> dict:
     builds, *_ = _clients()
-    builds._meta(build_id, owner)          # 404 unless it is the caller's build
+    builds._meta(build_id, owner, write=False)   # 404 unless the caller may read the build
     return _public(_load(build_id))
 
 
@@ -1169,7 +1169,7 @@ def start(build_id: str, owner: str, email: str, message: str, self_invoke,
     doc.update(status="thinking", pending=turn, attempts=0, cont=0)
     _store(build_id, doc)
     self_invoke({"action": "design", "build": build_id, "owner": owner, "email": email,
-                 "turn": turn})
+                 "turn": turn, "groups": list(getattr(owner, "groups", ()) or ())})
     return _public(doc)
 
 
@@ -1716,7 +1716,9 @@ def run_turn(event: dict) -> dict:
     builds, *_ = _clients()
     email, turn = str(event.get("email") or ""), str(event.get("turn") or "")
     # The caller, with their email: someone a build is shared with reaches it by that.
-    build_id, owner = str(event.get("build") or ""), builds.Who(str(event.get("owner") or ""), email)
+    # And their sign-in groups: a team role may come from one (bff/teams.py).
+    build_id, owner = str(event.get("build") or ""), builds.Who(str(event.get("owner") or ""), email,
+                                                                event.get("groups") or ())
     try:
         meta = builds._meta(build_id, owner)
     except builds.BuildError:

@@ -25,7 +25,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from app.common import defaults
+from app.common import defaults, netguard
 from app.common.config import (
     GATEWAY_AUDIENCE,
     GATEWAY_AUTH_FLOW,
@@ -135,7 +135,8 @@ def _gateway_token() -> str:
     slot = _token_cache.get(client_id) or {}
     if slot.get("value") and slot.get("exp", 0) - 60 > now:
         return slot["value"]
-    with urllib.request.urlopen(_token_request(client_id, client_secret), timeout=10) as resp:  # noqa: S310 - https enforced in _token_request  # nosec B310
+    # Through the SSRF guard: the request carries the client secret (app/common/netguard.py).
+    with netguard.urlopen(_token_request(client_id, client_secret), timeout=10) as resp:
         tok = json.loads(resp.read())
     _token_cache[client_id] = {"value": tok["access_token"],
                                "exp": now + float(tok.get("expires_in", 3600))}
@@ -675,6 +676,38 @@ async def invoke_chosen(tool_key: str, tool, model_args: dict) -> tuple[str, str
     _record_tool(tool_key, shown, latency_ms, result)
     _record_policy(tool_key, result[1], latency_ms)
     return result
+
+
+async def invoke_task(tool_key: str, args: dict) -> list:
+    """Call one tool for a task step (runtime "task", app/common/task_agent.py) with the
+    arguments the step built: [the result as data, the result as text]. The tool's fixed
+    `args` win, as for a model's call; same span, telemetry, policy record and errors
+    (ToolUnavailable, ToolDenied)."""
+    from app.features.observability import otel
+    found = (await published_for([tool_key])).get(tool_key) or []
+    if len(found) != 1:
+        names = ", ".join(t.name for t in found) or "none"
+        raise ToolUnavailable(
+            f"Tool '{tool_key}' must publish exactly one tool for a task step to call (found {names}). "
+            f"Set \"call\" on tools.{tool_key} to pick one.")
+    tool = found[0]
+    kind = str((TOOLS.get(tool_key) or {}).get("type", "mcp")).lower()
+    sent = {**(args if isinstance(args, dict) else {}), **dict((TOOLS.get(tool_key) or {}).get("args") or {})}
+    shown = json.dumps(sent, ensure_ascii=False, default=str)[:1000]
+    start = time.perf_counter()
+    with otel.span(f"tool.{tool_key}",
+                   **{"gen_ai.tool.name": tool.name, "gen_ai.operation.name": kind,
+                      "gen_ai.tool.call.arguments": shown}):
+        try:
+            raw = await _invoke(tool, sent)
+        except ToolDenied:
+            _record_policy(tool_key, "denied", int((time.perf_counter() - start) * 1000))
+            raise
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    text = _extract_chunks(raw)
+    _record_tool(tool_key, shown, latency_ms, (text, "gateway"))
+    _record_policy(tool_key, "gateway", latency_ms)
+    return [_unwrap_mcp(raw), text]
 
 
 def extract_rows(result, row_path: str = "") -> list[dict]:

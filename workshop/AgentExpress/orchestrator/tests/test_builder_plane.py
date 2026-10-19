@@ -182,6 +182,47 @@ def test_both_paths_tag_every_resource_with_the_app_and_any_tags_given():
     assert 'variable "tags"' in VARIABLES
 
 
+def test_a_destroy_clears_the_builds_table_protection_on_both_paths():
+    """The builds table is deletion-protected while the console runs, and a destroy clears
+    that at the last moment. The step must be ALWAYS in the plan and carry the keep flag as
+    data: were it dropped when the flag is on, turning the flag on would remove the resource,
+    and removing it is what runs the clearing step, which is the opposite of the flag."""
+    # Terraform: a destroy-time step on terraform_data, present whether or not the flag is set.
+    block = TF[TF.index('resource "terraform_data" "builds_table_unprotect"'):]
+    block = block[:block.index("\n}\n") + 3]
+    assert re.search(r"count\s*=\s*local\.builder_enabled\s*\?\s*1\s*:\s*0", block)
+    assert "keep_builds_table_protected" not in re.search(r"count\s*=.*", block).group(0)
+    assert re.search(r"unprotect\s*=\s*!var\.keep_builds_table_protected", block)
+    assert re.search(r"when\s*=\s*destroy", block)
+    assert "--no-deletion-protection-enabled" in block
+    assert "aws_dynamodb_table.builds[0].name" in block     # destroyed before the table
+    assert re.search(r'variable "keep_builds_table_protected"\s*{\s*type\s*=\s*bool\s*default\s*=\s*false', TF)
+    # CDK: a delete-only custom resource, always present, flag as the parameter.
+    assert 'new cr.AwsCustomResource(this, "BuildsTableUnprotect"' in TS
+    assert "onDelete:" in TS and "onCreate:" not in TS[TS.index("BuildsTableUnprotect"):TS.index("BuildsTableUnprotect") + 900]
+    assert 'action: "updateTable"' in TS
+    assert "DeletionProtectionEnabled: props.keepTableProtected === true" in TS
+    assert "unprotect.node.addDependency(this.table)" in TS
+    # One flag, spelled for each tool, and wired from the context.
+    assert 'tryGetContext("keepBuildsTableProtected")' in BIN
+def test_the_limit_counter_iam_is_the_same_on_both_paths_and_stays_on_the_reserved_rows():
+    """orchestrator.limits keeps a running total in reserved telemetry rows. The BFF and the
+    runtimes may touch ONLY rows whose key starts _limit#, on both IaC paths. Were the
+    condition lost on one path, the runtime could edit any telemetry row there."""
+    obs = (ORCH / "terraform" / "observability.tf").read_text()
+    stack = (ORCH / "cdk" / "lib" / "orchestrator-stack.ts").read_text()
+    # Terraform: three statements (main runtime, dedicated runtimes, BFF), each conditioned.
+    assert obs.count('Sid      = "LimitCounters"') == 3
+    assert obs.count('"dynamodb:LeadingKeys" = ["_limit#*"]') == 3
+    # CDK: the same three, from one constant.
+    assert stack.count('sid: "LimitCounters"') == 3
+    assert stack.count('"dynamodb:LeadingKeys": [LIMIT_COUNTER_KEYS]') == 3
+    assert 'const LIMIT_COUNTER_KEYS = "_limit#*";' in stack
+    # And the key prefix the code files its rows under is the one the IAM allows.
+    import limits  # noqa: PLC0415
+    assert limits.PREFIX + "*" == "_limit#*"
+    # Nothing but the BFF may read these rows; nothing may delete them.
+    assert "dynamodb:DeleteItem" not in obs.split('Sid      = "LimitCounters"')[1].split("}]")[0]
 def test_the_connect_role_prefix_is_the_same_everywhere():
     assert f'CONNECT_ROLE_PREFIX = "{buildstore.CONNECT_ROLE_PREFIX}"' in TS
     assert re.search(rf'connect_role_prefix\s*=\s*"{buildstore.CONNECT_ROLE_PREFIX}"', TF)

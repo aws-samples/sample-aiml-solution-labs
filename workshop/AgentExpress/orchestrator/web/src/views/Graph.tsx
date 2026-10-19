@@ -15,9 +15,13 @@ import Popover from "@cloudscape-design/components/popover";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { type CSSProperties, useState } from "react";
 
+import type { FlowEvent } from "../lib/flow";
+import { KIND_TAG, RESOURCE_KINDS, outcomeOf } from "../lib/runComponents";
+import { stepLabel, stepNumbers } from "../lib/stepNumbers";
 import type { AgentMeta, NodeState, NodeStatus, Step, Workflow } from "../types";
 import "./graph.css";
 import { toolsLabel, toolsOf } from "../lib/tools";
+import { StepBadge } from "./StepBadge";
 
 const BRANCH_OPS = ["equals", "notEquals", "in", "contains", "exists", "gt", "gte", "lt", "lte"];
 
@@ -46,6 +50,9 @@ function monogram(name: string): string {
 function sourceLabel(meta: AgentMeta): string | null {
   if (toolsOf(meta.tool).length) return null;
   if (meta.runtime === "a2a") return meta.source ? `a2a · ${meta.source}` : "remote agent";
+  // A step with no model says what it does ("Task · Code", from bff/workflow.py).
+  if (meta.runtime === "task") return meta.source ?? "task";
+  if (meta.runtime === "harness") return meta.source ?? "AgentCore Harness";
   if (meta.access) return meta.access;
   return null;
 }
@@ -56,9 +63,64 @@ function sourceLabel(meta: AgentMeta): string | null {
  *  card; five of those in a two-column frame read as a stack of cards rather than a
  *  diagram, and at the frame's width they collided. The badges now live in the split
  *  panel's Details tab, which is where the console puts them. */
+/** One agent's tools and AgentCore features, one clickable row each, inside its box (the
+ *  same rows as the Builder's agent card). Each says what it did in this run, from the
+ *  run's Flow events (lib/runComponents.ts); clicking a row lists those events. Only this
+ *  agent's own: another agent's calls to a shared tool are counted on that agent. */
+function ComponentRows({ agentId, meta, events }: { agentId: string; meta: AgentMeta; events: FlowEvent[] | null }) {
+  const comps = meta.components ?? [];
+  const [open, setOpen] = useState<number | null>(null);
+  if (!comps.length) return null;
+  return (
+    <ul className="sfn-rows" aria-label={`Attached to ${meta.name ?? agentId}`} data-testid={`rows-${agentId}`}
+        onClick={(e) => e.stopPropagation()}>
+      {meta.componentsNow ? <li className="sfn-row-note">As configured now (this run predates the record)</li> : null}
+      {comps.map((c, i) => {
+        const o = outcomeOf(c, agentId, events);
+        return (
+          <li key={`${c.kind}:${c.tool ?? ""}:${c.name}:${i}`} className={`sfn-row sfn-tone-${o.tone}`} data-kind={c.kind}
+              data-testid={`run-comp-${agentId}-${c.kind}-${c.name}`}>
+            <button type="button" className="sfn-row-head" aria-expanded={open === i}
+                    title={[c.detail, o.line].filter(Boolean).join(" · ")}
+                    onClick={() => setOpen(open === i ? null : i)}>
+              <span className={`sfn-tag sfn-tag-${c.kind}`}>{KIND_TAG[c.kind] ?? c.kind}</span>
+              <span className="sfn-row-name">{c.name}</span>
+              <span className="sfn-row-outcome">{o.line || c.detail || ""}</span>
+            </button>
+            {open === i ? (
+              <div className="sfn-row-more">
+                {c.detail ? <div className="sfn-row-detail">{c.detail}</div> : null}
+                {/* The real thing in the account, so "strict" can be found in the Bedrock
+                    console as the guardrail it is. */}
+                {c.resources?.length ? (
+                  <dl className="sfn-row-res" aria-label={`${c.name} as deployed`}>
+                    {c.resources.map((r) => (
+                      <div key={r.label}><dt>{r.label}</dt><dd>{r.value}</dd></div>
+                    ))}
+                  </dl>
+                ) : !c.resources && RESOURCE_KINDS.has(c.kind)
+                  ? <div className="sfn-row-detail">Deployed resource: not available</div> : null}
+                {o.events.length ? (
+                  <ul className="sfn-row-events">
+                    {o.events.slice(0, 8).map((e) => <li key={e.index} className={`sfn-ev-${e.tone}`}>{e.sentence}</li>)}
+                    {o.events.length > 8 ? <li>{`…and ${o.events.length - 8} more, on the Flow tab.`}</li> : null}
+                  </ul>
+                ) : <div className="sfn-row-detail">{events ? "Nothing recorded for it in this run." : "Reading this run's events…"}</div>}
+              </div>
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function StateBox({
-  agentId, meta, state, selected, onSelect, onRerunFrom,
+  agentId, num, meta, state, selected, onSelect, onRerunFrom, events,
 }: {
+  events: FlowEvent[] | null;
+  /** Its number in the run (lib/stepNumbers.ts): "2", or "2b" in a stage of several. */
+  num: string;
   agentId: string;
   meta: AgentMeta;
   state: NodeState;
@@ -80,16 +142,16 @@ function StateBox({
       data-testid={`state-${agentId}`}
       role="button"
       tabIndex={0}
-      aria-label={`${meta.name ?? agentId} — ${status}`}
+      aria-label={`${meta.name ?? agentId} — ${stepLabel(num, status)}`}
       title={`${meta.name ?? agentId}${subtitle ? ` — ${subtitle}` : ""}`}
       onClick={(e) => { e.stopPropagation(); onSelect(agentId); }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(agentId); }
       }}
     >
-      <span className={`sfn-icon sfn-icon-${status}`} aria-hidden="true">
-        {monogram(meta.name ?? agentId)}
-      </span>
+      {/* The step's number, coloured by its status, where a monogram used to be: a reader
+          says "step 3 failed", not "the box with RW in it". */}
+      <StepBadge num={num} status={status} />
       {/* The name gets the FULL width of the text column and the placement badge sits on
           the second line beside the subtitle. With the badge on the name's line, a
           260px state truncated "Knowledge Base Research" to "Knowled…" — the badge was
@@ -113,6 +175,7 @@ function StateBox({
           />
         </span>
       ) : null}
+      <ComponentRows agentId={agentId} meta={meta} events={events} />
       {status === "running" ? (
         <div className="sfn-bar"><i style={{ width: `${state.pct || 6}%` }} /></div>
       ) : null}
@@ -152,9 +215,9 @@ function StageAnnotations({ step }: { step: Step }) {
           position="top"
           size="small"
           triggerType="custom"
-          content={<Box variant="p">A human approves, revises or denies this stage before the run continues.</Box>}
+          content={<Box variant="p">HITL (a human in the loop) approves, revises or denies this stage before the run continues.</Box>}
         >
-          <span className="sfn-pill sfn-pill-gate" role="note">Review gate</span>
+          <span className="sfn-pill sfn-pill-gate" role="note">HITL gate</span>
         </Popover>
       ) : null}
     </div>
@@ -162,26 +225,31 @@ function StageAnnotations({ step }: { step: Step }) {
 }
 
 function Stage({
-  step, index, workflow, nodes, selected, onSelect, rerunnable, onRerunFrom,
+  step, nums, workflow, nodes, selected, onSelect, rerunnable, onRerunFrom, events,
 }: {
   step: Step;
-  index: number;
+  /** Every agent's step number (lib/stepNumbers.ts). */
+  nums: Record<string, string>;
   workflow: Workflow;
   nodes: Record<string, NodeState>;
   selected: string | null;
   onSelect: (id: string) => void;
   rerunnable: (id: string) => boolean;
   onRerunFrom?: (id: string) => void;
+  /** The run's Flow events, for what each component did; null until read. */
+  events?: FlowEvent[] | null;
 }) {
   const box = (id: string) => (
     <StateBox
       key={id}
       agentId={id}
+      num={nums[id] ?? "?"}
       meta={workflow.agents[id] ?? { name: id }}
       state={nodes[id] ?? { status: "pending" }}
       selected={selected === id}
       onSelect={onSelect}
       onRerunFrom={onRerunFrom && rerunnable(id) ? onRerunFrom : undefined}
+      events={events ?? null}
     />
   );
 
@@ -222,7 +290,6 @@ function Stage({
 
   return (
     <div className="sfn-stage">
-      <div className="sfn-stage-num" aria-hidden="true">{index + 1}</div>
       <StageAnnotations step={step} />
       {body}
     </div>
@@ -232,8 +299,10 @@ function Stage({
 const ZOOMS = [0.6, 0.75, 0.9, 1, 1.15, 1.3];
 
 export function Graph({
-  workflow, nodes, selected, onSelect, rerunnable, onRerunFrom, onRestart,
+  workflow, nodes, selected, onSelect, rerunnable, onRerunFrom, onRestart, events,
 }: {
+  /** The run's Flow events (lib/flow.ts), for what each component of the selected agent did. */
+  events?: FlowEvent[] | null;
   workflow: Workflow;
   nodes: Record<string, NodeState>;
   selected: string | null;
@@ -247,6 +316,7 @@ export function Graph({
   const [zoomIdx, setZoomIdx] = useState(3);
   const zoom = ZOOMS[zoomIdx];
   const steps = workflow.steps ?? [];
+  const nums = stepNumbers(steps);
   const can = rerunnable ?? (() => false);
 
   return (
@@ -282,9 +352,9 @@ export function Graph({
           <div key={step.gateId ?? step.agent ?? i} className="sfn-stage-wrap">
             {i > 0 ? <Connector /> : null}
             <Stage
-              step={step} index={i} workflow={workflow} nodes={nodes}
+              step={step} nums={nums} workflow={workflow} nodes={nodes}
               selected={selected} onSelect={onSelect}
-              rerunnable={can} onRerunFrom={onRerunFrom}
+              rerunnable={can} onRerunFrom={onRerunFrom} events={events}
             />
           </div>
         ))}

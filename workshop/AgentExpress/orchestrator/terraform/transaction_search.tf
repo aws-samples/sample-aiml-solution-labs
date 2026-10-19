@@ -13,14 +13,16 @@
 # idempotent CLI step that checks the current state first — mirroring the
 # null_resource + local-exec pattern used for the image build and KB ingestion.
 
-# Resource policy letting X-Ray deliver spans to the aws/spans (and
-# application-signals) log groups. This one IS safe to manage in Terraform: it is
-# keyed by name and updates in place, so it never hits the singleton problem.
-resource "aws_cloudwatch_log_resource_policy" "transaction_search" {
-  count       = local.workflow_plane ? 1 : 0
-  policy_name = "${var.agent_name}-transaction-search"
-
-  policy_document = jsonencode({
+# The resource policy letting X-Ray deliver spans to the aws/spans (and
+# application-signals) log groups is ONE per account and region, shared by every
+# build. CloudWatch Logs allows only 10 resource policies per region, so a policy
+# per build made the eleventh build in an account fail with "Resource limit
+# exceeded". The step below reuses any policy that already grants X-Ray (the one
+# the console creates, or another build's) and puts the shared
+# AgentExpress-TransactionSearch policy only when none exists. It is never
+# deleted, like Transaction Search itself.
+locals {
+  transaction_search_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Sid       = "TransactionSearchXRayAccess"
@@ -54,6 +56,7 @@ resource "null_resource" "transaction_search" {
     always_run          = timestamp()
     region              = var.region
     indexing_percentage = var.transaction_search_indexing_percentage
+    policy              = local.transaction_search_policy
   }
 
   provisioner "local-exec" {
@@ -62,6 +65,21 @@ resource "null_resource" "transaction_search" {
       set -euo pipefail
       REGION="${var.region}"
       PCT="${var.transaction_search_indexing_percentage}"
+      LEGACY="${var.agent_name}-transaction-search"
+
+      # The shared span-delivery policy. This build's own legacy per-build policy
+      # does not count: removing it from the config deletes it in this same apply.
+      EXISTING="$(aws logs describe-resource-policies --region "$REGION" \
+        --query "resourcePolicies[?contains(policyDocument, 'xray.amazonaws.com') && contains(policyDocument, 'aws/spans') && policyName != '$LEGACY'].policyName | [0]" \
+        --output text 2>/dev/null || echo None)"
+      if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
+        echo "Span delivery policy $EXISTING already present; reusing it."
+      else
+        echo "Putting the shared AgentExpress-TransactionSearch resource policy"
+        aws logs put-resource-policy --region "$REGION" \
+          --policy-name AgentExpress-TransactionSearch \
+          --policy-document '${local.transaction_search_policy}' >/dev/null
+      fi
 
       # A change still in progress (Status PENDING, for up to a few minutes) refuses
       # another with "Updates are not allowed while the current status is PENDING".
@@ -90,6 +108,4 @@ resource "null_resource" "transaction_search" {
       fi
     EOT
   }
-
-  depends_on = [aws_cloudwatch_log_resource_policy.transaction_search]
 }

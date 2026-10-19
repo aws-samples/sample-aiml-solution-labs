@@ -6,21 +6,25 @@
  *  orchestrator cannot run — there is no free-form graph to get out of step with the
  *  `steps` grammar, because there is no free-form graph. */
 
-import { toolsOf } from "../lib/tools";
+import { ALL_KINDS, componentsOf, type ComponentKind } from "./components";
 import { stageKind, stepAgents, stepName, type StageKind, type Workflow } from "./model";
 
-export const AGENT_W = 220;
+export const AGENT_W = 260;
 export const AGENT_H = 60;
 export const GAP_X = 20;
 export const PAD = 16;
 export const HEADER = 30;
 export const STAGE_GAP = 72;
-/** An expanded agent's tool chips: two to a row, plus the "+ tool" chip. */
-export const CHIP_ROW = 26;
-export function agentHeight(wf: Workflow, id: string, expanded?: string | null): number {
-  if (id !== expanded) return AGENT_H;
-  const chips = toolsOf(wf.agents[id]?.tool).length + 1;
-  return AGENT_H + Math.ceil(chips / 2) * CHIP_ROW + 6;
+/** One component row on an agent card (components.ts), and its "+ Add" row. */
+export const COMP_ROW = 22;
+/** An agent is as tall as its head row plus one row per component it shows. On a canvas that
+ *  can be edited, every agent that runs here also has the "+ Add" row (a remote A2A agent
+ *  takes nothing, so it has none). */
+export function agentHeight(wf: Workflow, id: string, editable = false,
+                            shown: ComponentKind[] = ALL_KINDS): number {
+  const add = editable && !["a2a", "task"].includes(String(wf.agents?.[id]?.runtime)) ? 1 : 0;
+  const rows = componentsOf(wf, id).filter((c) => shown.includes(c.kind)).length + add;
+  return rows ? AGENT_H + rows * COMP_ROW + 8 : AGENT_H;
 }
 
 export interface StageBox {
@@ -40,7 +44,7 @@ export interface AgentBox {
   /** Relative to its stage. */
   x: number;
   y: number;
-  /** Taller when expanded to show its tools. */
+  /** Taller for each component row it shows. */
   h: number;
 }
 
@@ -51,7 +55,7 @@ export interface Layout {
   end: { x: number; y: number };
 }
 
-export function layout(wf: Workflow, expanded?: string | null): Layout {
+export function layout(wf: Workflow, editable = false, shown: ComponentKind[] = ALL_KINDS): Layout {
   const stages: StageBox[] = [];
   const agents: AgentBox[] = [];
   let y = 0;
@@ -59,11 +63,11 @@ export function layout(wf: Workflow, expanded?: string | null): Layout {
     const members = stepAgents(step);
     const n = Math.max(1, members.length);
     const w = PAD * 2 + n * AGENT_W + (n - 1) * GAP_X;
-    const tallest = Math.max(AGENT_H, ...members.map((id) => agentHeight(wf, id, expanded)));
+    const tallest = Math.max(AGENT_H, ...members.map((id) => agentHeight(wf, id, editable, shown)));
     const h = HEADER + PAD + tallest + PAD;
     stages.push({ index, name: stepName(step, index), kind: stageKind(step), x: -w / 2, y, w, h, members });
     members.forEach((id, i) => {
-      agents.push({ id, stage: index, x: PAD + i * (AGENT_W + GAP_X), y: HEADER + PAD, h: agentHeight(wf, id, expanded) });
+      agents.push({ id, stage: index, x: PAD + i * (AGENT_W + GAP_X), y: HEADER + PAD, h: agentHeight(wf, id, editable, shown) });
     });
     y += h + STAGE_GAP;
   });

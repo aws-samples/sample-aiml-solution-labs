@@ -38,6 +38,8 @@ export const TEMPLATES: Record<Point, TemplateDef[]> = {
   response: [
     { id: "audit", label: "Audit log", defaults: {},
       description: "One JSON line per answer in CloudWatch Logs: the method, tool, whether it failed and how much came back. Never the content." },
+    // A pattern mask, not a compliance control: handling SSNs or card data under PCI DSS, HIPAA or
+    // similar rules stays the customer's responsibility (AWS shared responsibility model).
     { id: "redactPii", label: "Redact personal data", defaults: { types: ["email", "phone", "ssn", "card"], mask: "[REDACTED]" },
       description: "Mask email addresses, phone numbers, US social security numbers and card numbers in tool results before an agent reads them." },
     { id: "hideTools", label: "Hide tools", defaults: { tools: [] },

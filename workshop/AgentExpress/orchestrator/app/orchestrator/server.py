@@ -20,9 +20,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
-from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from app.common import asks
 from app.common.bus import bus
 from app.common.config import DEFAULT_TOPIC, LAST_AGENT_ID
 from app.common.sink import emit, ensure_session
@@ -113,10 +113,12 @@ async def _run(sid: str, initial=None, resume=None, rerun=None):
             await _rewind(sid, rerun)
             payload = None
         else:
-            payload = Command(resume=resume) if resume is not None else initial
-        await graph.ainvoke(payload, _config(sid))
+            payload = (await asks.resume_command(graph, _config(sid), sid, resume)
+                       if resume is not None else initial)
+        invoked = await graph.ainvoke(payload, _config(sid))
         state = await graph.aget_state(_config(sid))
-        if state.next:
+        if asks.is_waiting(state, invoked):     # the same rule as runtime._finalize
+            await asks.show_next(sid, state)
             return
         values = state.values or {}
         decisions = values.get("decisions") or {}

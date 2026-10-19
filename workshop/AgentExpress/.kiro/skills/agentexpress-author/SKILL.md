@@ -1,6 +1,6 @@
 ---
 name: agentexpress-author
-description: Author a new AgentExpress multi-agent workflow from a described use case — the workflow.json config, the agent packages and their system prompts, tool definitions (kb / websearch / mcp / openapi / lambda / apigateway), review gates, named guardrails, memories, evaluators, identities and Cedar policies, and UI strings. Also use to edit a bundle exported from the AgentExpress console before importing it back. Use when someone wants to put their own domain on this framework, add or change an agent, add a data source, or asks what they need to edit to implement a use case. Also use when a workflow.json change is rejected at plan/synth, a scaffolded agent fails to import, or a run shows no cost and no prompts for an agent.
+description: Author a new AgentExpress multi-agent workflow from a described use case — the workflow.json config, the agent packages and their system prompts, tool definitions (kb / websearch / mcp / openapi / lambda / apigateway / smithy), review gates, named guardrails, memories, evaluators, identities and Cedar policies, and UI strings. Also use to edit a bundle exported from the AgentExpress console before importing it back. Use when someone wants to put their own domain on this framework, add or change an agent, add a data source, or asks what they need to edit to implement a use case. Also use when a workflow.json change is rejected at plan/synth, a scaffolded agent fails to import, or a run shows no cost and no prompts for an agent.
 ---
 
 # AgentExpress Workflow Author
@@ -92,8 +92,8 @@ A failure here means the customer's config is wrong, not that a test is stale.
   Cedar policy name `permit_<key>`, which allows no hyphens, so neither separator survives
   both. `claims_history` is rejected at synth; `claimsHistory` is fine. **Agent ids are
   different and may contain underscores**, which is why `cost_research` is legal.
-- **Six tool types are framework code**, not config: `kb`, `websearch`, `mcp`,
-  `openapi`, `lambda`, `apigateway`. A seventh would mean editing both IaC paths, so
+- **Seven tool types are framework code**, not config: `kb`, `websearch`, `mcp`,
+  `openapi`, `lambda`, `apigateway`, `smithy`. Another would mean editing both IaC paths, so
   `lambda` is the escape hatch for anything else — a warehouse, an RDBMS, a VPC resource,
   a control-plane API. A code tool (`tools.<key>.code`) is written in the build and
   deployed by the framework with only the grants it names.
@@ -111,7 +111,11 @@ A failure here means the customer's config is wrong, not that a test is stale.
 - **Capabilities follow the agent's settings.** An agent with `vision` needs a model that
   takes images; one with `toolMode: "model"` needs a model that calls tools. Problems flags a
   mismatch.
-- **Knowledge Base storage is S3 Vectors only.**
+- **Knowledge Base storage** is S3 Vectors unless the `kb` tool sets `vectorStore` (an existing
+  OpenSearch, Aurora, Neptune Analytics, Pinecone or MongoDB Atlas store the customer owns).
+- **Steps without agent code:** `runtime: "task"` (tool, code, extract, output) and
+  `runtime: "harness"` (an AgentCore Harness from `instructions`, or `harness.arn`) need no folder
+  under `app/subagents/`. See [references/contract.md](references/contract.md).
 - **The topology is a declared DAG.** Dynamic agent-to-agent routing is not expressible;
   `branch` covers conditional paths.
 - **`app/keys.json` is the source of truth**, not `workflow.schema.json` — the schema is

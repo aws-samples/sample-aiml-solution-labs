@@ -747,22 +747,10 @@
         <div class="obs-card">
           <div class="obs-controls">
             <div class="grow"><h3 style="margin:0">Cross-run insights <span class="obs-note">AgentCore batch analysis over recent runs</span></h3>
-              <div class="obs-note" style="margin:4px 0 0">Failure-pattern, user-intent and behavior analysis across ALL runs in the window.
-                Runs a batch evaluation over the runtime's CloudWatch traces — takes a few minutes.
-                Requires Transaction Search (provisioned by <code>terraform/transaction_search.tf</code>).</div></div>
-            <label>Window
-              <select id="obsInsLookback">
-                <option value="1">Last 1 hour</option>
-                <option value="3">Last 3 hours</option>
-                <option value="6">Last 6 hours</option>
-                <option value="12">Last 12 hours</option>
-                <option value="24">Last 24 hours</option>
-                <option value="72">Last 3 days</option>
-                <option value="168" selected>Last 7 days</option>
-                <option value="720">Last 30 days</option>
-              </select>
-            </label>
-            <button class="obs-btn"${authzGate("insights")} data-obs-click="runInsights">Run insights</button>
+              <div class="obs-note" style="margin:4px 0 0">Failure-pattern, user-intent and behavior analysis across runs.</div>
+              <div class="obs-note warn" style="margin:6px 0 0" id="obsInsEnded">AWS stopped accepting new AgentCore Insights jobs on
+                16 October 2026 while it redesigns Insights, so new analyses cannot be started. Findings from earlier runs are shown below.
+                <a href="https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html" target="_blank" rel="noopener noreferrer">AWS announcement</a></div></div>
             <button class="obs-btn ghost" data-obs-click="loadInsights">Refresh</button>
           </div>
         </div>
@@ -1783,7 +1771,7 @@
     const st = data.status || "none";
     if (st === "none") {
       const note = data.note ? ` ${esc(String(data.note))}` : "";
-      return `<div class="obs-note" style="margin:0">No insights run yet. Pick a window and click <b>Run insights</b> — it analyzes recent runs for failure patterns, user intents, and behavior summaries.${note}</div>`;
+      return `<div class="obs-note" style="margin:0">No earlier Insights findings for this app.${note}</div>`;
     }
     // The statuses insights.py can actually store: none | IN_PROGRESS | COMPLETED |
     // COMPLETED_WITH_ERRORS | FAILED | STOPPED. STOPPED used to fall through to the
@@ -1791,7 +1779,7 @@
     // reads like an empty result rather than a cancelled job.
     if (st === "IN_PROGRESS") return `<div class="obs-note" style="margin:0"><span class="obs-mchip">Running…</span> AgentCore is analyzing recent runtime traces (a few minutes). Click <b>Refresh</b> to check.</div>`;
     if (st === "FAILED") return `<div class="obs-note warn" style="margin:0">Insights run failed. Ensure at least one run has completed and Transaction Search is enabled, then try again.</div>`;
-    if (st === "STOPPED") return `<div class="obs-note warn" style="margin:0">The insights run was stopped before it finished, so there are no findings. Start a new one when you're ready.</div>`;
+    if (st === "STOPPED") return `<div class="obs-note warn" style="margin:0">The last Insights run was stopped before it finished, so it has no findings.</div>`;
     const f = data.findings || {};
     const s = f.sessions || {};
     const total = Number(s.total || 0), analyzed = Number(s.completed || 0), skipped = Number(s.failed || 0);
@@ -1817,24 +1805,6 @@
     }
   }
 
-  async function runInsights() {
-    const lookback = Number(($("obsInsLookback") && $("obsInsLookback").value) || 168);
-    try {
-      const r = await api("/api/insights/run", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lookbackHours: lookback }),
-      });
-      if (r && r.ok === false) {
-        if ($("obsInsightsBody")) setHtml($("obsInsightsBody"), `<div class="obs-note warn" style="margin:0">${esc(r.error || "Insights is not available here.")}</div>`);
-        return;
-      }
-      if ($("obsInsightsBody")) setHtml($("obsInsightsBody"), `<div class="obs-note" style="margin:0"><span class="obs-mchip">Running…</span> analyzing the last ${lookback}h of runs. This takes a few minutes — click <b>Refresh</b> to check.</div>`);
-      [60, 120, 180, 240].forEach((s) => setTimeout(loadInsights, s * 1000));
-    } catch (e) {
-      alert("Couldn't start insights: " + e.message);
-    }
-  }
-
   // ---- the island's contract with the React shell ---------------------------
   // ---- actions ---------------------------------------------------------------
   /* The controls' handlers, by the name a template puts in data-obs-<event>. One
@@ -1850,7 +1820,6 @@
     ["click:exportOverview", (el) => exportOverview(el.dataset.obsArg)],
     ["click:loadFlow", () => loadFlow()],
     ["click:exportFlow", (el) => exportFlow(el.dataset.obsArg)],
-    ["click:runInsights", () => runInsights()],
     ["click:loadInsights", () => loadInsights()],
     ["click:toggleAgent", (el) => toggleAgent(el.dataset.obsArg)],
     ["click:openAgentIO", (el) => openAgentIO(el.dataset.obsArg)],
@@ -1897,7 +1866,6 @@
   window.obsRunEval = runEval;
   window.obsCloseModal = closeModal;
   window.obsCopy = copyPre;
-  window.obsRunInsights = runInsights;
   window.obsLoadInsights = loadInsights;
   window.obsOpenSession = openSession;
 })();

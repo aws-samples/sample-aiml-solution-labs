@@ -15,6 +15,10 @@
 # that string is also the Cedar action id.
 
 locals {
+  # The web-search connector version every websearch target is pinned to. 1.2.0 (20 July
+  # 2026) is the first with the domain include list and published-date filters.
+  web_search_connector_version = "1.2.0"
+
   # ---- Parse + normalise the tools block ---------------------------------
   # NOT gated on the Gateway: bff.tf reads this to build the UI's data-source
   # labels even when no tool plane is deployed. The Gateway gate is on `tools` below.
@@ -122,8 +126,15 @@ locals {
       # and the pair with the obvious name was the weaker of the two.
       include_domains = try(t.domains.include, [])
       exclude_domains = try(t.domains.exclude, [])
-      # Optional connector version pin, e.g. "1.2.0". Empty tracks the latest.
-      connector_version = try(t.connectorVersion, "")
+      # The Browser tool's (source "browser") allow-list, which its function reads as
+      # ALLOW_DOMAINS (browser_tool.tf).
+      allow_domains = try(t.allowDomains, [])
+      # The web-search connector version. A target created without one gets the
+      # connector's DEFAULT (1.1.0 as of Oct 2026), not the latest, and keeps it after
+      # (the version is sticky). The domain include list and published-date filters need
+      # 1.2.0, so that is pinned unless workflow.json pins another.
+      # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-connector-versions.html
+      connector_version = try(t.connectorVersion, "") != "" ? t.connectorVersion : local.web_search_connector_version
       # Request-level published-date bounds, inclusive, ISO-8601 UTC.
       published_from = try(t.publishedFrom, "")
       published_to   = try(t.publishedTo, "")
@@ -251,6 +262,12 @@ locals {
   builtin_lambda_tools  = { for n, t in local.lambda_tools : n => t if t.source != "" }
   external_lambda_tools = { for n, t in local.lambda_tools : n => t if t.source == "" && !t.has_code }
   code_lambda_tools     = { for n, t in local.lambda_tools : n => t if t.has_code }
+  # The framework-shipped functions each have their OWN execution role, so the role's
+  # policy is built per source. Both stay in builtin_lambda_tools, which owns the
+  # function, log group and permission.
+  builtin_lambda_pricing_tools          = { for n, t in local.builtin_lambda_tools : n => t if t.source == "pricing" }
+  builtin_lambda_code_interpreter_tools = { for n, t in local.builtin_lambda_tools : n => t if t.source == "codeInterpreter" }
+  builtin_lambda_browser_tools          = { for n, t in local.builtin_lambda_tools : n => t if t.source == "browser" }
 
   # The same split for OpenAPI targets, on the same key and for the same reason.
   # `source` = a schema in app/tools/<source>/openapi.json that the framework uploads;
@@ -698,9 +715,9 @@ resource "terraform_data" "tools_validation" {
       error_message = "tools.${local.kb_tool_name}.kmsKeyArn must be a KMS key ARN, arn:aws:kms:<region>:<account>:key/<id>."
     }
     precondition {
-      condition = local.kb_existing_id == "" || length([for k in ["s3Uri", "kmsKeyArn", "embeddingModel", "dimensions"] :
+      condition = local.kb_existing_id == "" || length([for k in ["s3Uri", "kmsKeyArn", "embeddingModel", "dimensions", "dataSource", "vectorStore", "chunking", "parsing"] :
       k if try(local.kb_spec[k], null) != null]) == 0
-      error_message = "tools.${local.kb_tool_name} uses an existing Knowledge Base (knowledgeBaseId), so s3Uri, kmsKeyArn, embeddingModel and dimensions do not apply: that Knowledge Base already has its documents and embeddings."
+      error_message = "tools.${local.kb_tool_name} uses an existing Knowledge Base (knowledgeBaseId), so s3Uri, kmsKeyArn, embeddingModel, dimensions, dataSource, vectorStore, chunking and parsing do not apply: that Knowledge Base already has its documents and embeddings."
     }
     precondition {
       condition     = local.kb_kms_key == "" || local.kb_s3_uri != "" || local.kb_existing_id != ""
@@ -730,7 +747,7 @@ resource "terraform_data" "tools_validation" {
       # express, so only the built-in demo function is supported.
       condition = alltrue([for n, t in local.builtin_lambda_tools :
       contains(local.vocab.builtinLambdaSource.values, t.source)])
-      error_message = "A type=\"lambda\" tool's \"source\" names a folder under orchestrator/app/tools/, and the only one the framework ships is \"pricing\" (orchestrator/app/tools/pricing/). It is not a general \"deploy any directory\" option: a framework-deployed function needs an execution role that config cannot express - the one that exists grants logs plus read-only on the PUBLIC AWS price list, which is right for that function and wrong for a warehouse or database connector that needs VPC config and a secret. To use a function of your own: deploy it yourself, then set \"lambdaArn\" instead of \"source\". Offending: ${join(", ", [for n, t in local.builtin_lambda_tools : n if !contains(local.vocab.builtinLambdaSource.values, t.source)])}."
+      error_message = "A type=\"lambda\" tool's \"source\" names a folder under orchestrator/app/tools/, and the only ones the framework ships are \"pricing\" (orchestrator/app/tools/pricing/), \"codeInterpreter\" (orchestrator/app/tools/codeInterpreter/) and \"browser\" (orchestrator/app/tools/browser/). It is not a general \"deploy any directory\" option: a framework-deployed function needs an execution role that config cannot express - each shipped one has a role written for it (read-only on the PUBLIC AWS price list; one AgentCore Code Interpreter sandbox; the AWS-managed AgentCore Browser), which is wrong for a warehouse or database connector that needs VPC config and a secret. To use a function of your own: deploy it yourself, then set \"lambdaArn\" instead of \"source\". Offending: ${join(", ", [for n, t in local.builtin_lambda_tools : n if !contains(local.vocab.builtinLambdaSource.values, t.source)])}."
     }
     precondition {
       condition = alltrue([
@@ -1065,9 +1082,8 @@ resource "aws_bedrockagentcore_gateway_target" "websearch" {
       connector {
         source {
           connector_id = "web-search"
-          # Optional pin. Request-level filters require 1.2.0+; leaving it unset
-          # tracks the latest connector version.
-          version = each.value.connector_version != "" ? each.value.connector_version : null
+          # Always pinned (local.web_search_connector_version, or tools.<name>.connectorVersion).
+          version = each.value.connector_version
         }
 
         # "WebSearch" is the tool this connector publishes; the Gateway exposes it
@@ -1172,7 +1188,7 @@ resource "aws_bedrockagentcore_gateway_target" "mcp_server" {
         provider_arn       = aws_bedrockagentcore_oauth2_credential_provider.tool[each.key].credential_provider_arn
         scopes             = each.value.oauth_scopes
         grant_type         = { oauth2 = "CLIENT_CREDENTIALS", user = "AUTHORIZATION_CODE", obo = "TOKEN_EXCHANGE" }[each.value.auth]
-        default_return_url = each.value.auth == "user" ? "https://${aws_cloudfront_distribution.ui.domain_name}" : null
+        default_return_url = each.value.auth == "user" ? local.ui_origin : null
         custom_parameters = each.value.auth == "obo" ? merge(
           { subject_token_type = "urn:ietf:params:oauth:token-type:id_token" },
           each.value.oauth_audience != "" ? { audience = each.value.oauth_audience } : {}
@@ -1329,7 +1345,7 @@ resource "aws_bedrockagentcore_gateway_target" "openapi" {
         provider_arn       = aws_bedrockagentcore_oauth2_credential_provider.tool[each.key].credential_provider_arn
         scopes             = each.value.oauth_scopes
         grant_type         = { oauth2 = "CLIENT_CREDENTIALS", user = "AUTHORIZATION_CODE", obo = "TOKEN_EXCHANGE" }[each.value.auth]
-        default_return_url = each.value.auth == "user" ? "https://${aws_cloudfront_distribution.ui.domain_name}" : null
+        default_return_url = each.value.auth == "user" ? local.ui_origin : null
         custom_parameters = each.value.auth == "obo" ? merge(
           { subject_token_type = "urn:ietf:params:oauth:token-type:id_token" },
           each.value.oauth_audience != "" ? { audience = each.value.oauth_audience } : {}
@@ -1358,9 +1374,14 @@ resource "aws_bedrockagentcore_gateway_target" "openapi" {
 # answers from the PUBLIC AWS Price List Query API, so the rates it returns are real
 # and nothing has to be provisioned or seeded for them.
 #
-# Its execution role is FIXED — logs plus read-only on the PUBLIC AWS price list —
-# which is exactly why `source` accepts no other value. That role is right for this
-# one function and wrong for almost any other: a warehouse connector needs VPC
+# The second shipped function, `source: "codeInterpreter"` (app/tools/codeInterpreter/),
+# is created by the same role, log group and function resources below, and gets its
+# own policy (tool_lambda_code_interpreter).
+#
+# Each function's execution role is FIXED (the pricing one: logs plus read-only on the
+# PUBLIC AWS price list) — which is exactly why `source` accepts only values whose role
+# is written here. A role is right for its one function and wrong for almost any
+# other: a warehouse connector needs VPC
 # config and a secret, an RDBMS connector needs credentials, and none of that can be
 # expressed in workflow.json. So YOUR connector is a function you deploy, declared
 # with `lambdaArn`; the framework registers it as a Gateway target and grants the
@@ -1385,10 +1406,15 @@ resource "aws_iam_role" "tool_lambda" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "tool_lambda" {
-  for_each = local.builtin_lambda_tools
+  # Only the pricing function: the address and name are unchanged so an upgrade from
+  # v1.2 plans no change here. Each other shipped function has its own policy below.
+  for_each = local.builtin_lambda_pricing_tools
   name     = "ToolLambdaPricingRead"
   role     = aws_iam_role.tool_lambda[each.key].id
   policy = jsonencode({
@@ -1418,6 +1444,40 @@ resource "aws_iam_role_policy" "tool_lambda" {
   })
 }
 
+# `source: "codeInterpreter"` (app/tools/codeInterpreter/). It runs model-written code in
+# the AWS-managed sandbox, so its role is the narrowest of any function here: three
+# actions on ONE interpreter, and its own log stream. It reads nothing of this
+# deployment's: no table, bucket or secret. Mirrors cdk/lib/tool-plane.ts.
+resource "aws_iam_role_policy" "tool_lambda_code_interpreter" {
+  for_each = local.builtin_lambda_code_interpreter_tools
+  name     = "ToolLambdaCodeInterpreter"
+  role     = aws_iam_role.tool_lambda[each.key].id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        # The log group is created above (aws_cloudwatch_log_group.tool), so the
+        # function needs to write streams to it and nothing else.
+        Sid      = "Logs"
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "${aws_cloudwatch_log_group.tool[each.key].arn}:*"
+      },
+      {
+        # The AWS-managed ("system") interpreter, whose account field is the literal
+        # `aws`. Resource form: AgentCore Code Interpreter "Resource management",
+        # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/code-interpreter-resource-management.html
+        # The same ARN the Builder's own code check uses (builder.tf CodeToolChecks).
+        Sid    = "RunCodeInSystemInterpreter"
+        Effect = "Allow"
+        Action = ["bedrock-agentcore:StartCodeInterpreterSession", "bedrock-agentcore:InvokeCodeInterpreter",
+        "bedrock-agentcore:StopCodeInterpreterSession"]
+        Resource = ["arn:aws:bedrock-agentcore:${var.region}:aws:code-interpreter/aws.codeinterpreter.v1"]
+      },
+    ]
+  })
+}
+
 resource "aws_cloudwatch_log_group" "tool" {
   for_each          = local.builtin_lambda_tools
   name              = "/aws/lambda/ToolLambda-${var.agent_name}-${each.key}"
@@ -1437,17 +1497,29 @@ resource "aws_lambda_function" "tool" {
   handler          = "handler.lambda_handler"
   filename         = data.archive_file.tool_lambda[each.key].output_path
   source_code_hash = data.archive_file.tool_lambda[each.key].output_base64sha256
-  timeout          = 30
-  memory_size      = 256
+  # The code interpreter function waits on a sandbox run of up to 30 s (a constant in
+  # its handler) plus starting and stopping the session, and the browser function on a
+  # page of up to 40 s (CALL_SECONDS in its handler); pricing keeps its 30.
+  timeout     = contains(["codeInterpreter", "browser"], each.value.source) ? 60 : 30
+  memory_size = 256
 
-  environment {
-    variables = {
-      # Where the Price List Query API endpoint lives, which is NOT where prices
-      # are being asked about: the API is published in only two regions and
-      # describes prices for all of them. Pinned so the tool works on a deployment
-      # in any region. The region to price FOR is the tool's own `region` argument,
-      # defaulting to this deployment's AWS_REGION.
-      PRICING_API_REGION = "us-east-1"
+  # The pricing function has settings, and a browser function with allowDomains. A
+  # dynamic block keeps pricing's `environment` exactly as it was, so an upgrade plans no
+  # change to it.
+  dynamic "environment" {
+    for_each = each.value.source == "pricing" || (each.value.source == "browser" && length(each.value.allow_domains) > 0) ? [1] : []
+    content {
+      variables = each.value.source == "pricing" ? tomap({
+        # Where the Price List Query API endpoint lives, which is NOT where prices
+        # are being asked about: the API is published in only two regions and
+        # describes prices for all of them. Pinned so the tool works on a deployment
+        # in any region. The region to price FOR is the tool's own `region` argument,
+        # defaulting to this deployment's AWS_REGION.
+        PRICING_API_REGION = "us-east-1"
+        }) : tomap({
+        # The domains the Browser tool may open (allowDomains), comma-separated.
+        ALLOW_DOMAINS = join(",", each.value.allow_domains)
+      })
     }
   }
   # The log group must exist BEFORE the function, or Lambda creates

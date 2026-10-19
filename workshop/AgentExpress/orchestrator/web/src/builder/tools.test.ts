@@ -47,12 +47,13 @@ describe("model-chosen tool calls", () => {
 });
 
 describe("evaluators and memory", () => {
-  it("offers the 13 built-in evaluators, marks the three it cannot score yet, and adds the agent's own", async () => {
+  it("offers the 18 built-in evaluators, marks the eight it cannot score yet, and adds the agent's own", async () => {
     const { evaluatorOptions } = await import("./Features");
     const opts = evaluatorOptions([{ name: "tone", instructions: "x" }, { name: "", instructions: "" }]);
-    expect(opts.filter((o) => o.value.startsWith("Builtin.")).length).toBe(13);
+    expect(opts.filter((o) => o.value.startsWith("Builtin.")).length).toBe(18);
     expect(opts.filter((o) => "disabled" in o && o.disabled).map((o) => o.label).sort())
-      .toEqual(["GoalSuccessRate", "ToolParameterAccuracy", "ToolSelectionAccuracy"]);
+      .toEqual(["GoalSuccessRate", "SkillInstructionFollowing", "SkillSelectionAccuracy", "ToolParameterAccuracy",
+        "ToolSelectionAccuracy", "TrajectoryAnyOrderMatch", "TrajectoryExactOrderMatch", "TrajectoryInOrderMatch"]);
     expect(opts.at(-1)).toMatchObject({ label: "tone", value: "Custom.tone" });
   });
   it("offers the four memory strategies and the scopes", async () => {

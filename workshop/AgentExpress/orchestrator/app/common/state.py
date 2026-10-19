@@ -24,3 +24,8 @@ class State(TypedDict, total=False):
     group_rerun: Annotated[dict, merge_dict]  # group_id -> [agent ids to re-run this cycle]
     branch: Annotated[dict, merge_dict]      # branch step name -> step name chosen from the agent's output
     history: Annotated[dict, merge_dict]     # agent_id -> [{version, at, comment, output}] per re-run
+    # The live config version the run started with (app/common/liveconfig.py): set once, in
+    # the initial state, and checkpointed with it, so a resume on any container uses it.
+    liveconfig: dict
+    # The run's model override (app/common/model_routing.py): set once, at start, like liveconfig.
+    modelOverride: dict

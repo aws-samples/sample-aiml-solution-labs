@@ -1,3 +1,4 @@
+import type { RunComponent } from "./lib/runComponents";
 /** The shapes the BFF actually returns. Kept in one file so a projection change
  *  surfaces as a type error rather than as an undefined at runtime.
  *
@@ -23,6 +24,12 @@ export interface AgentMeta {
   maxTokens?: number;
   source?: string;
   skill?: string;
+  /** A task step's kind (runtime "task": tool, code, extract, output); `source` labels it. */
+  task?: string;
+  /** What is attached to it, by kind and name (bff/workflow.py components()). */
+  components?: RunComponent[];
+  /** The components are the agent's current ones: the run predates storing them. */
+  componentsNow?: boolean;
 }
 
 export interface BranchRule {
@@ -70,6 +77,10 @@ export interface Workflow {
   attachments?: RunAttach | null;
   /** What starts runs besides a person (bff/triggers.py). */
   triggers?: { name: string; type: string; runAs: string }[] | null;
+  /** Admins get the Live config page (orchestrator.liveConfig; bff/liveconfig.py). */
+  liveConfig?: boolean | null;
+  /** The models Start run may offer a person granted `override` (orchestrator.models.overrides). */
+  modelOverrides?: string[] | null;
   /** Which version of the workflow is deployed here, set when the Control Plane deployed it
    *  (bff/handler.py WORKFLOW_VERSION). */
   deployment?: { version: number } | null;
@@ -81,6 +92,25 @@ export interface RunAttach {
   imageMaxBytes?: number;
   types: string[];
   s3: string[];
+}
+/** One limit of `orchestrator.limits` and how much of it the caller has used (GET /api/limits). */
+export interface LimitUse {
+  limit: number;
+  used: number;
+  /** When it resets, as a phrase: "midnight Eastern time", "15:00 Eastern time". */
+  resets: string;
+  /** Used 80% or more of it. */
+  warn: boolean;
+  /** Used all of it: the next run is refused. */
+  reached: boolean;
+}
+/** The caller's use of the limits that are set. `limits: false` when none is. A limit whose
+ *  counter could not be read is left out, never shown as zero. */
+export interface LimitsUsage {
+  limits: boolean;
+  daily?: LimitUse;
+  hourly?: LimitUse;
+  monthly?: LimitUse;
 }
 /** A file a run was started with, copied into its own folder. */
 export interface RunFile {
@@ -137,11 +167,17 @@ export interface SessionSnapshot extends SessionSummary {
   subject_id?: string;
   /** The files the run was started with. */
   attachments?: RunFile[];
+  /** The live config version the run started on (bff/liveconfig.py); 0 = as deployed. */
+  configVersion?: number;
+  /** The models the run was started with (bff/model_override.py), when someone picked them. */
+  modelOverride?: ModelOverride;
   nodes?: Record<string, NodeState>;
   history?: Record<string, HistoryEntry[]>;
   logs?: LogLine[];
   result?: string;
-  hitl?: { node: string; question?: string; approval?: string; timeoutAt?: string; timeoutAction?: string } | null;
+  hitl?: { node: string; question?: string; approval?: string; timeoutAt?: string; timeoutAction?: string;
+    /** An agent asking mid-step (app/common/asks.py); absent at a review gate. */
+    kind?: "question" | "toolApproval"; askId?: string; tool?: string; args?: string } | null;
 }
 
 export interface Me {
@@ -168,4 +204,6 @@ export interface Me {
 /** The mutating actions `authorization` in workflow.json can gate. */
 export type Action =
   | "start" | "decision" | "rerun" | "cancel" | "evaluate" | "insights" | "delete"
-  | "deploy" | "destroy" | "audit" | "admin";
+  | "deploy" | "destroy" | "audit" | "admin" | "override";
+/** A run's model override: one model for every agent, and/or one per agent (bff/model_override.py). */
+export interface ModelOverride { all?: string; agents?: Record<string, string> }

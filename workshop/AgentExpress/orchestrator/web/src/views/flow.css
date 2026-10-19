@@ -1,0 +1,136 @@
+/* The Flow tab. Colours and radii are Cloudscape design tokens, as in graph.css, so it follows
+   the theme. An agent's box reuses graph.css's `.sfn-state` classes, so a status looks the same
+   here as on the Graph tab. Nothing carries meaning by colour alone: each mark has a glyph. */
+.rf {
+  --sfn-state-w: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.rf-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.rf-scrub { flex: 1 1 220px; min-width: 180px; }
+.rf-count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--awsui-color-text-status-inactive, #656871);
+}
+.rf-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 24px;
+  align-items: start;
+}
+.rf-stages { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.rf-stage { display: flex; flex-direction: column; gap: 8px; }
+.rf-parallel { flex-direction: row; flex-wrap: wrap; align-items: flex-start; gap: 12px 20px; }
+.rf-agent { display: flex; flex-direction: column; gap: 6px; }
+
+/* The agent box is a real <button>, so it needs the browser's button look removed. */
+.rf button.sfn-state {
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  width: var(--sfn-state-w);
+}
+.rf button.sfn-state:disabled { cursor: default; opacity: 0.75; }
+.rf-chevron {
+  margin-left: auto;
+  color: var(--awsui-color-text-status-inactive, #656871);
+  font-size: 12px;
+}
+
+/* An agent's opened lanes: one edge per piece it touched, a mark per event on the edge. */
+.rf-lanes { display: flex; flex-direction: column; gap: 6px; padding-left: 16px; }
+.rf-lane { display: flex; align-items: center; gap: 8px; min-height: 26px; }
+.rf-edge {
+  flex: 0 0 22px;
+  height: 2px;
+  background: var(--awsui-color-border-control-default, #8c8c94);
+}
+.rf-marks { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.rf-lane-end {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
+  border-radius: 12px;
+  color: var(--awsui-color-text-body-secondary, #424650);
+  background: var(--awsui-color-background-container-content, #fff);
+}
+
+/* An event mark: its number in the run. Shape and fill carry the tone as well as colour:
+   ok filled round, note outlined round, stopped filled square, failed outlined square. */
+.rf-mark {
+  box-sizing: border-box;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 12px;
+  color: #fff;
+  transition: transform 0.1s ease;
+}
+.rf-mark:hover { transform: translateY(-1px); }
+.rf-mark:focus-visible {
+  outline: 2px solid var(--awsui-color-text-link-default, #0972d3);
+  outline-offset: 2px;
+}
+.rf-tone-ok   { background: var(--awsui-color-text-status-success, #00802f); border-color: var(--awsui-color-text-status-success, #00802f); }
+.rf-tone-note { background: var(--awsui-color-background-container-content, #fff); border-color: var(--awsui-color-text-status-info, #0972d3); color: var(--awsui-color-text-status-info, #0972d3); }
+.rf-tone-stop { background: var(--awsui-color-text-status-warning, #8d6605); border-color: var(--awsui-color-text-status-warning, #8d6605); border-radius: 5px; }
+.rf-tone-bad  { background: var(--awsui-color-background-container-content, #fff); border-color: var(--awsui-color-text-status-error, #db0000); color: var(--awsui-color-text-status-error, #db0000); border-radius: 5px; }
+.rf-selected { box-shadow: 0 0 0 3px rgba(9, 114, 211, 0.35); }
+/* The event the replay is at: a ring in the page colour, then the focus blue, on any fill. */
+.rf-current  { box-shadow: 0 0 0 2px var(--awsui-color-background-container-content, #fff), 0 0 0 4px rgba(9, 114, 211, 0.6); }
+.rf-status { font-size: 12px; line-height: 16px; font-weight: 700; color: var(--awsui-color-text-body-secondary, #424650); white-space: nowrap; }
+
+/* The one rail: which AgentCore pieces the run used, and how often. Deliberately plain. */
+.rf-rail {
+  border-left: 2px solid var(--awsui-color-border-divider-default, #e9ebed);
+  padding-left: 14px;
+  font-size: 13px;
+}
+.rf-rail-title {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--awsui-color-text-status-inactive, #656871);
+}
+.rf-rail ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rf-rail li { display: flex; flex-direction: column; }
+.rf-rail-n { font-size: 12px; color: var(--awsui-color-text-body-secondary, #424650); }
+
+.rf-detail {
+  border: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+  border-radius: var(--awsui-border-radius-item, 8px);
+  padding: 10px 14px;
+  background: var(--awsui-color-background-container-content, #fff);
+}
+
+@media (max-width: 760px) {
+  .rf-body { grid-template-columns: minmax(0, 1fr); }
+  .rf-rail { border-left: 0; padding-left: 0; border-top: 2px solid var(--awsui-color-border-divider-default, #e9ebed); padding-top: 10px; }
+}
+
+/* Reduced motion: nothing here animates by default, and this keeps it so if one is added. */
+@media (prefers-reduced-motion: reduce) {
+  .rf, .rf * { transition: none !important; animation: none !important; }
+}

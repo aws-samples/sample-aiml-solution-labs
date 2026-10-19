@@ -1,6 +1,6 @@
 output "ui_url" {
-  description = "CloudFront URL for the web UI."
-  value       = "https://${aws_cloudfront_distribution.ui.domain_name}"
+  description = "The web UI: https://<custom_domain> when set, else the CloudFront URL."
+  value       = local.ui_origin
 }
 
 output "api_endpoint" {

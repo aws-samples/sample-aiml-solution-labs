@@ -118,6 +118,7 @@
         "arn:aws:iam::*:role/AgentCoreKB-*",
         "arn:aws:iam::*:role/AgentCoreKBLambda-*",
         "arn:aws:iam::*:role/AgentCoreSubagent-*",
+        "arn:aws:iam::*:role/AgentCoreHarness-*",
         "arn:aws:iam::*:role/ToolLambda-*",
         "arn:aws:iam::*:role/AgentCoreDeploy-*",
         "arn:aws:iam::*:role/A2AAgent-*",
@@ -139,6 +140,7 @@
         "arn:aws:iam::*:role/AgentCoreKB-*",
         "arn:aws:iam::*:role/AgentCoreKBLambda-*",
         "arn:aws:iam::*:role/AgentCoreSubagent-*",
+        "arn:aws:iam::*:role/AgentCoreHarness-*",
         "arn:aws:iam::*:role/ToolLambda-*",
         "arn:aws:iam::*:role/AgentCoreDeploy-*",
         "arn:aws:iam::*:role/A2AAgent-*",
@@ -167,6 +169,7 @@
         "arn:aws:iam::*:role/AgentCoreKB-*",
         "arn:aws:iam::*:role/AgentCoreKBLambda-*",
         "arn:aws:iam::*:role/AgentCoreSubagent-*",
+        "arn:aws:iam::*:role/AgentCoreHarness-*",
         "arn:aws:iam::*:role/ToolLambda-*",
         "arn:aws:iam::*:role/AgentCoreDeploy-*",
         "arn:aws:iam::*:role/A2AAgent-*",
@@ -228,6 +231,8 @@
         "bedrock-agentcore:CreateAgentRuntime",
         "bedrock-agentcore:ListAgentRuntimes",
         "bedrock-agentcore:ListAgentRuntimeEndpoints",
+        "bedrock-agentcore:CreateHarness",
+        "bedrock-agentcore:ListHarnesses",
         "bedrock-agentcore:CreateGateway",
         "bedrock-agentcore:ListGateways",
         "bedrock-agentcore:CreatePolicyEngine",
@@ -250,6 +255,9 @@
         "bedrock-agentcore:UpdateAgentRuntime",
         "bedrock-agentcore:DeleteAgentRuntime",
         "bedrock-agentcore:GetAgentRuntime",
+        "bedrock-agentcore:GetHarness",
+        "bedrock-agentcore:UpdateHarness",
+        "bedrock-agentcore:DeleteHarness",
         "bedrock-agentcore:CreateAgentRuntimeEndpoint",
         "bedrock-agentcore:DeleteAgentRuntimeEndpoint",
         "bedrock-agentcore:GetAgentRuntimeEndpoint",
@@ -301,6 +309,7 @@
       "Resource": [
         "arn:aws:bedrock-agentcore:*:*:evaluator/*",
         "arn:aws:bedrock-agentcore:*:*:gateway/*",
+        "arn:aws:bedrock-agentcore:*:*:harness/*",
         "arn:aws:bedrock-agentcore:*:*:memory/*",
         "arn:aws:bedrock-agentcore:*:*:policy-engine/*",
         "arn:aws:bedrock-agentcore:*:*:policy-engine/*/policy-generation/*",
@@ -568,6 +577,8 @@
       "Action": [
         "s3:CreateBucket",
         "s3:DeleteBucket",
+        "s3:ListBucketVersions",
+        "s3:DeleteObjectVersion",
         "s3:PutBucketPolicy",
         "s3:GetBucketPolicy",
         "s3:DeleteBucketPolicy",
@@ -1044,6 +1055,28 @@
         "lambda:ListTags"
       ],
       "Resource": "arn:aws:lambda:*:*:event-source-mapping:*"
+    },
+    {
+      "Sid": "BedrockAgentCoreHarnessEndpoints",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:CreateHarnessEndpoint",
+        "bedrock-agentcore:GetHarnessEndpoint",
+        "bedrock-agentcore:UpdateHarnessEndpoint",
+        "bedrock-agentcore:DeleteHarnessEndpoint",
+        "bedrock-agentcore:ListHarnessEndpoints",
+        "bedrock-agentcore:ListHarnessVersions",
+        "bedrock-agentcore:CreateAgentRuntimeEndpoint",
+        "bedrock-agentcore:GetAgentRuntimeEndpoint",
+        "bedrock-agentcore:UpdateAgentRuntimeEndpoint",
+        "bedrock-agentcore:DeleteAgentRuntimeEndpoint"
+      ],
+      "Resource": [
+        "arn:aws:bedrock-agentcore:*:*:harness/*",
+        "arn:aws:bedrock-agentcore:*:*:harness/*/harness-endpoint/*",
+        "arn:aws:bedrock-agentcore:*:*:runtime/*",
+        "arn:aws:bedrock-agentcore:*:*:runtime/*/runtime-endpoint/*"
+      ]
     }
   ]
 }

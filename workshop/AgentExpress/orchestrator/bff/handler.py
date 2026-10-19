@@ -23,12 +23,20 @@ Endpoints:
   GET    /api/workflow                           -> workflow definition (agents+steps)
   GET    /api/me                                 -> {user, groups, permittedActions}
   GET    /api/models                             -> text models this account can invoke
-  POST   /api/sessions               {topic}     -> {session_id}
+  GET    /api/models/litellm                     -> the LiteLLM proxy's models (admin, or a Builder user)
+  GET    /api/limits                             -> your use of orchestrator.limits (or {limits: false})
+  GET    /api/liveconfig                         -> the active version, and what may change (admin)
+  GET    /api/liveconfig/versions                -> live config versions, newest first (admin)
+  GET    /api/liveconfig/versions/{version}      -> one version, with its overlay (admin)
+  POST   /api/liveconfig/versions    {agents, note} -> the new version, not yet active (admin)
+  PUT    /api/liveconfig/active      {version, from} -> point new runs at it; also rollback (admin)
+  POST   /api/sessions               {topic, modelOverride?} -> {session_id}
   GET    /api/sessions                           -> [session summaries]
   GET    /api/sessions/{id}                      -> full snapshot (+ timeline)
   DELETE /api/sessions/{id}                      -> {ok} (remove a previous run)
   POST   /api/sessions/{id}/decision {decision, comment}  -> {ok}
         decision: approve | deny | revise; comment: feedback used on revise
+        (an agent's question or a tool approval: approve | deny, comment = the answer; bff/asks.py)
   POST   /api/sessions/{id}/cancel               -> {ok}
   POST   /api/sessions/{id}/rerun    {agentId|agents, comment} -> {ok}
   POST   /api/sessions/{id}/evaluate {agentId, prompt} -> {ok}  (AgentCore Evaluations)
@@ -36,7 +44,9 @@ Endpoints:
   GET    /api/insights                           -> latest Insights findings
   POST   /api/sessions/attachments   {name}  -> presigned POST for one file a run brings
   GET    /api/sessions/{id}/telemetry            -> per-run cost/token drilldown
+  GET    /api/sessions/{id}/flow                 -> the run's events, without any prompt text
   GET    /api/telemetry/aggregate                -> by date / model / user rollup
+  GET    /api/analytics                          -> per tool / agent rates, latency, health (admin)
   POST   /api/chat                   {message, history} -> {reply, actions}
 
 Builder builds (bff/builds.py; only when the builder plane is deployed):
@@ -48,6 +58,16 @@ Builder builds (bff/builds.py; only when the builder plane is deployed):
   POST   /api/builds/{id}/destroy                -> job
   GET    /api/builds/{id}/log                    -> tail of the latest job's log
   GET    /api/builds/{id}/deployments            -> who deployed or destroyed it, when, how it ended
+  GET    /api/builds/{id}/suites                 -> its test suites, with each one's trend
+  PUT    /api/builds/{id}/suites     {suites}    -> replace them (validated)
+  POST   /api/builds/{id}/suite-runs {suite}     -> run one suite: a run per case (bff/suiteruns.py)
+  GET    /api/builds/{id}/suite-runs/{run}       -> where that suite run stands, case by case
+  PUT    /api/builds/{id}/team       {team}      -> move it to a team's workspace ("" = its creator's)
+  GET    /api/teams                              -> the caller's teams (?scope=all: every team, admin)
+  POST   /api/teams                  {name, members, groups} -> a new team (admin)
+  GET    /api/teams/{id}                         -> the team, for its members and admins
+  PUT    /api/teams/{id}             {name, members, groups} -> its owners manage members (bff/teams.py)
+  DELETE /api/teams/{id}                         -> {ok} (admin; only once it has no builds)
 
 A run can target a deployed build: POST /api/sessions takes {"build": id}, and
 GET /api/sessions and /api/workflow take ?build=id. Every per-run route then finds the
@@ -62,7 +82,10 @@ import traceback
 import urllib.parse
 import uuid
 
+import a2a_server
 import accounts
+import analytics
+import asks
 import audit
 import authz
 import boto3
@@ -73,10 +96,20 @@ import codecheck
 import designer
 import gates
 import library
+import limits
+import litellm_models
+import memories
+import liveconfig
+import model_override
 import policies
 import registry
+import runartifacts
 import runfiles
+import runshares
 import sharing
+import suiteruns
+import suites
+import teams
 import triggers
 import workflow
 from boto3.dynamodb.conditions import Attr, Key
@@ -92,6 +125,12 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 #: uiUrl), so this BFF refuses the run routes for its own workflow as well as for builds.
 #: "app" (the default): a workflow's app, with the Builder beside it when it is enabled.
 CONSOLE_MODE = os.environ.get("CONSOLE_MODE", "app")
+#: AgentCore stopped accepting new batch Insights jobs on 16 October 2026 (it is being
+#: redesigned); earlier findings stay readable. Mirrors app/features/optimization/insights.py.
+#: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html
+INSIGHTS_CREATION_ENDED = ("AWS stopped accepting new AgentCore Insights jobs on 16 October 2026 while it "
+                           "redesigns Insights. Findings from earlier runs are still shown. "
+                           "See https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html")
 #: Answered on every run route of a control-plane console.
 NOT_HERE = ("this console builds and deploys; runs live in each build's own app. Open a "
             "deployed build and use Open app.")
@@ -265,11 +304,12 @@ def _service_owners(event: dict) -> list[str]:
     """The service triggers whose runs the caller may see: those listing one of its groups."""
     groups = authz.groups_of(event)
     return [f"trigger:{n}" for n, t in triggers.all_triggers().items()
-            if isinstance(t, dict) and t.get("runAs") == "service" and triggers.may_see(t, groups)]
+            if isinstance(t, dict) and t.get("runAs") == "service" and triggers.may_see(t, groups)
+            ] + a2a_server.owners_for(groups)  # A2A runs: the deployment's a2a_approvers
 
 
 def _trigger_viewer(event: dict, owner: str) -> bool:
-    return owner.startswith("trigger:") and owner in _service_owners(event)
+    return owner.startswith(("trigger:", "a2a:")) and owner in _service_owners(event)
 
 
 def _my_session_ids(tbl, owner: str) -> set[str]:
@@ -321,6 +361,13 @@ def _run(event: dict) -> dict:
         # A trigger with `gates: "auto"` (bff/triggers.py): every gate approves itself.
         if event.get("gates") == "auto":
             payload["gates"] = "auto"
+        # The live config version _begin_run read for this run (bff/liveconfig.py). On start
+        # only: a resume or re-run keeps the one in the run's state.
+        if event.get("liveconfig"):
+            payload["liveconfig"] = event["liveconfig"]
+        # The run's model override (bff/model_override.py), on start only, like liveconfig.
+        if event.get(model_override.FIELD):
+            payload[model_override.FIELD] = event[model_override.FIELD]
     elif action == "resume":
         payload["decision"] = event.get("decision", "approve")
         payload["comment"] = event.get("comment", "")
@@ -399,7 +446,7 @@ def model_problems(workflow: dict) -> list[dict]:
     default = str((workflow.get("orchestrator") or {}).get("defaultModel") or "")
     out = []
     for aid, a in (workflow.get("agents") or {}).items():
-        if not isinstance(a, dict) or a.get("runtime") == "a2a":
+        if not isinstance(a, dict) or a.get("runtime") in ("a2a", "task"):
             continue
         mid = str(a.get("model") or default)
         m = listed.get(mid)
@@ -419,7 +466,8 @@ def model_problems(workflow: dict) -> list[dict]:
         if m.get("note"):
             out.append({"severity": "warning", "where": where, "path": path,
                         "message": f"{mid} {m['note']}"})
-    return out
+    # litellm/<name> models: is LiteLLM set up here, and does the proxy serve that name.
+    return out + litellm_models.problems(workflow)
 
 
 def _caps(model_id: str, fm: dict) -> dict:
@@ -676,6 +724,42 @@ def _telemetry_session(sid: str, tbl=None) -> dict:
     return _resp(200, {"session_id": sid, "calls": items, "byAgent": by_agent, "totals": tot})
 
 
+# The fields the Flow tab draws, and nothing else. NO prompt, answer or tool text is in
+# this list on purpose: the flow shows what happened, not what was said.
+_FLOW_FIELDS = ("agent_id", "kind", "label", "status", "latency_ms", "ts", "seq", "version",
+                "mode", "cost_usd")
+#: Most rows the flow route returns for one run; the response says when it cut.
+FLOW_MAX_ROWS = 2000
+
+
+def _flow_session(sid: str, tbl=None) -> dict:
+    """The run's telemetry rows trimmed to the fields a flow needs, oldest first.
+
+    A ProjectionExpression keeps the 400 KB prompt/answer columns out of the response
+    (and out of the Lambda's memory). It does NOT reduce DynamoDB read cost: reads are
+    billed on the size of the item read, not on what is projected."""
+    if tbl is None or not sid:
+        return _resp(200, {"session_id": sid, "events": [], "capped": False, "max": FLOW_MAX_ROWS})
+    names = {f"#f{i}": f for i, f in enumerate(_FLOW_FIELDS)}
+    events, capped, kwargs = [], False, {
+        "KeyConditionExpression": Key("session_id").eq(sid),
+        "ProjectionExpression": ", ".join(names),
+        "ExpressionAttributeNames": names}
+    while not capped:
+        page = tbl.query(**kwargs)
+        for it in page.get("Items", []):
+            if len(events) >= FLOW_MAX_ROWS:
+                capped = True
+                break
+            events.append({k: it[k] for k in _FLOW_FIELDS if k in it})
+        lek = page.get("LastEvaluatedKey")
+        if not lek:
+            break
+        kwargs["ExclusiveStartKey"] = lek
+    return _resp(200, {"session_id": sid, "events": events, "capped": capped,
+                       "max": FLOW_MAX_ROWS})
+
+
 # Widest date span the aggregate endpoint will serve (one GSI query per day).
 _MAX_AGGREGATE_DAYS = 92
 
@@ -785,6 +869,9 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
             if not admin:
                 return _resp(403, authz.denial("admin", event))
             return _resp(200, builds.list_all_builds())
+        # A team's workspace (bff/teams.py): its members' view of the team's builds.
+        if qs.get("team"):
+            return _resp(200, teams.workspace(str(qs["team"]), owner))
         return _resp(200, builds.list_builds(owner))
     if route_key == "GET /api/builds/{id}":
         viewed("build")
@@ -793,7 +880,41 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
         return _resp(200, builds.save(
             build_id, owner, body.get("project"), email,
             on_create=lambda b: audit("build.created", build=build_id, name=b.get("name", ""),
-                                      agentName=b.get("agentName", ""))))
+                                      agentName=b.get("agentName", ""), team=b.get("team", "")),
+            team=str(body.get("team") or "")))
+    # Teams and their workspaces (bff/teams.py). Like a draft, nothing here changes AWS: an
+    # editor still needs `deploy` / `destroy` to deploy or destroy a team's build.
+    if route_key == "PUT /api/builds/{id}/team":
+        moved, came_from = teams.move(build_id, owner, str(body.get("team") or ""))
+        audit("build.moved", build=build_id, name=moved.get("name", ""), team=moved.get("team", ""),
+              fromTeam=came_from)
+        return _resp(200, moved)
+    if route_key == "GET /api/teams":
+        if qs.get("scope") == "all":
+            if not admin:
+                return _resp(403, authz.denial("admin", event))
+            return _resp(200, [teams.public(t, owner) for t in teams.list_teams()])
+        return _resp(200, teams.mine(owner))
+    if route_key == "GET /api/teams/{id}":
+        return _resp(200, teams.public(teams.visible(build_id, owner, admin), owner))
+    if route_key == "POST /api/teams":
+        if not admin:
+            return _resp(403, authz.denial("admin", event))
+        made = teams.create(body, owner, clock.now_str())
+        audit("team.created", team=made["id"], teamName=made["name"], members=len(made["members"]),
+              groups=len(made["groups"]))
+        return _resp(200, made)
+    if route_key == "PUT /api/teams/{id}":
+        changed, what = teams.update(build_id, body, owner, admin, clock.now_str())
+        audit("team.updated", team=build_id, teamName=changed["name"], members=len(changed["members"]),
+              groups=len(changed["groups"]), **what)
+        return _resp(200, changed)
+    if route_key == "DELETE /api/teams/{id}":
+        if not admin:
+            return _resp(403, authz.denial("admin", event))
+        gone = teams.delete(build_id)
+        audit("team.deleted", team=build_id, teamName=gone.get("name", ""))
+        return _resp(200, {"ok": True})
     # A build's secrets: names out, values in, never values out.
     if route_key == "GET /api/builds/{id}/secrets":
         return _resp(200, builds.secret_names(build_id, reader))
@@ -1060,7 +1181,11 @@ def _begin_run(context, target: dict, topic: str, owner: str, user: str, *, file
                audit_as: tuple = ("", "", ""), audit_detail: dict | None = None,
                user_token: str = "") -> str | None:
     """Create a run's status row and start it: the one run start, for a person (POST
-    /api/sessions) and for a trigger (bff/triggers.py). None if the row could not be written."""
+    /api/sessions) and for a trigger (bff/triggers.py). None if the row could not be written.
+
+    Refused with 429 when the user is over `orchestrator.limits` (bff/limits.py). First,
+    before anything is copied or written, so a refusal leaves nothing behind."""
+    limits.enforce(target.get("telemetry"), target.get("raw"), user)
     session_id = uuid.uuid4().hex[:12]
     files = runfiles.copy_in(session_id, list(files)) if files else []
     item = _skeleton(session_id, topic, list(target["raw"].get("agents") or {}))
@@ -1076,6 +1201,13 @@ def _begin_run(context, target: dict, topic: str, owner: str, user: str, *, file
     # Control Plane, which has no version numbers.
     if target.get("version") is not None:
         item["workflowVersion"] = int(target["version"])
+    # The live config version this run starts on (bff/liveconfig.py), read once, here. The
+    # runtime is sent its overlay and keeps it in the run's state for every later step.
+    if not build_id and liveconfig.enabled(target["raw"]):
+        live = liveconfig.for_run(target.get("telemetry"))
+        item["configVersion"] = live["version"]
+        if live["version"]:
+            payload_extra = {**(payload_extra or {}), "liveconfig": live}
     if subject_id:
         item["subject_id"] = subject_id  # so the UI can show it after a refresh
     if files:
@@ -1112,10 +1244,48 @@ def _begin_run(context, target: dict, topic: str, owner: str, user: str, *, file
     return session_id
 
 
+def _claim_decision(tbl, sid: str, hitl: dict | None) -> bool:
+    """Take the decision for what the run waits at now, once. False when it is already taken
+    (a second click, a second tab, an event and a person at once) or the run is not waiting.
+
+    Seen live: a second Approve sent a second after the first resumed the run twice, and the
+    approved tool call ran twice: the run still showed `waiting_human` until the runtime
+    caught up, so every check before this one passed for both. The claim is one conditional
+    write on the run's `hitl`, which the runtime replaces whole when it next waits (a new
+    question, the gate again after a revise), so each pause can be decided exactly once. For
+    a question or tool approval it also names the askId, so an answer meant for one never
+    decides another."""
+    expr = "overall = :w AND attribute_not_exists(hitl.decidedAt)"
+    vals = {":t": clock.now_str(), ":w": "waiting_human"}
+    ask_id = (hitl or {}).get("askId")
+    if ask_id:
+        expr += " AND hitl.askId = :a"
+        vals[":a"] = ask_id
+    try:
+        tbl.update_item(Key={"session_id": sid}, UpdateExpression="SET hitl.decidedAt = :t",
+                        ConditionExpression=expr, ExpressionAttributeValues=vals)
+        return True
+    except Exception as e:  # noqa: BLE001 - only a failed condition means "taken"
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            return False
+        raise
+
+
+ALREADY_DECIDED = ("this was already decided: the run is continuing with that decision. "
+                   "Reload the run to see where it is.")
+
+
 def _gate_resume(context):
     """How bff/gates.py hands a gate its decision: as the run page does, logged for the
     run's owner with who (or what) decided."""
     def resume(sid: str, decision: str, comment: str, by: str) -> None:
+        # An event and a person (or two events) deciding the same pause: the first one wins.
+        hitl = (status_tbl.get_item(Key={"session_id": sid}, ProjectionExpression="hitl")
+                .get("Item") or {}).get("hitl")
+        if not _claim_decision(status_tbl, sid, hitl):
+            print(f"[gates] {sid}: {by} decision ignored: {ALREADY_DECIDED}")
+            return
         item = status_tbl.get_item(Key={"session_id": sid}, ProjectionExpression="#o, #u",
                                    ExpressionAttributeNames={"#o": "owner", "#u": "user"}).get("Item") or {}
         if audit.enabled() and item.get("owner"):
@@ -1161,6 +1331,188 @@ def _trigger_start(context):
     return start
 
 
+def _suite_reader(target: dict):
+    """How bff/suiteruns.py reads a case's run: its snapshot, and its cost and call time once it
+    has ended. (None, None) for a run that is gone."""
+    def read(sid: str):
+        item = target["status"].get_item(
+            Key={"session_id": sid}, ProjectionExpression="#o, #n",
+            ExpressionAttributeNames={"#o": "overall", "#n": "nodes"}).get("Item")
+        if not item:
+            return None, None
+        totals = None
+        if item.get("overall") in suites.TERMINAL:
+            try:
+                got = json.loads(_telemetry_session(sid, target["telemetry"])["body"]).get("totals")
+                # No call recorded is not a cost of zero: telemetry may be off, or not written yet.
+                totals = got if got and got.get("calls") else None
+            except Exception as e:  # noqa: BLE001 - the cost checks then say nothing was recorded
+                print(f"[suites] telemetry of {sid} not read: {type(e).__name__}: {e}")
+        return item, totals
+    return read
+
+
+def _suites_route(route_key: str, params: dict, body: dict, event: dict, context) -> dict:
+    """/api/builds/{id}/suites and /suite-runs. Writing the suites is saving a draft, so it takes no
+    permission; running one starts runs, so it takes `start` like Start run does. A build is the
+    caller's own (or shared with them): anyone else's is a 404, from the same check every build route makes."""
+    if not builds.ENABLED:
+        return _resp(404, {"error": "the Builder is not enabled on this deployment"})
+    claims = authz.claims(event)
+    owner = builds.owner_of(claims)
+    email = str(claims.get("email") or "")
+    build_id = params.get("id", "")
+    qs = event.get("queryStringParameters") or {}
+    try:
+        if route_key == "GET /api/builds/{id}/suites":
+            return _resp(200, suiteruns.listing(build_id, owner, qs.get("name")))
+        if route_key == "PUT /api/builds/{id}/suites":
+            return _resp(200, suiteruns.put_suites(build_id, owner, email, body.get("suites")))
+        # The rest is about runs, which a control-plane console does not hold (see NOT_HERE).
+        if _console_mode() == "builder":
+            return _resp(404, {"error": NOT_HERE})
+        if route_key == "GET /api/builds/{id}/suite-runs/{run}":
+            return _resp(200, suiteruns.result(build_id, owner, params.get("run", ""),
+                                               lambda: _suite_reader(_build_target(build_id, owner))))
+        denied = _forbidden("start", event)
+        if denied:
+            return denied
+        target = _build_target(build_id, owner)
+        name = str(body.get("suite") or "")
+        ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
+
+        def begin(case: dict, run_id: str):
+            # Gates approve themselves, as for a trigger, so an unattended run can finish. No sign-in
+            # is passed on: a tool that acts as the person has nobody to ask (suiteruns.py).
+            return _begin_run(context, target, str(case["request"]), _owner(event), _user(event),
+                              subject_id=str(case.get("subject") or ""), build_id=build_id,
+                              payload_extra={"gates": "auto"}, audit_as=(owner, email, ip),
+                              audit_detail={"suite": name, "suiteRun": run_id, "case": case["name"]})
+
+        return _resp(202, suiteruns.start(build_id, owner, name, target["version"], begin))
+    except suiteruns.SuitesInvalid as e:
+        return _resp(400, {"error": str(e), "issues": e.issues})
+
+
+#: (viewer, link, hour) already logged, so a shared page polling a running run is logged as
+#: opened once an hour, not once per poll.
+_SHARE_SEEN: dict[tuple, bool] = {}
+
+
+def _shares_route(route_key: str, params: dict, body: dict, event: dict) -> dict:
+    """Read-only links to one run (bff/runshares.py).
+
+    Making, listing and revoking a run's links is its OWNER's alone: not an admin's, not a
+    service trigger's approvers' (both may read a run they did not start, which is not the
+    same as handing it to others). Anyone else gets the 404 every run route gives. Opening
+    a link takes any signed-in caller holding a live one, and gives them that run to read."""
+    if _console_mode() == "builder" or events_tbl is None:
+        return _resp(404, {"error": NOT_HERE})
+    claims = authz.claims(event)
+    # Whoever opens a link must be someone this deployment signed in. With no identity
+    # provider (idp = "none") there is nobody to check, so there are no links at all.
+    if not claims.get("sub"):
+        return _resp(403, {"error": "links to a run need sign-in, and this deployment has none"})
+    me = str(_owner(event))
+    email = str(claims.get("email") or "")
+    ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
+
+    if route_key == "GET /api/shared/{shareId}":
+        share_id = str(params.get("shareId") or "")
+        link = runshares.open_link(events_tbl, share_id)
+        sid = str(link.get("session") or "")
+        try:
+            target = _session_target(sid)
+            item = target["status"].get_item(Key={"session_id": sid}).get("Item")
+        except builds.BuildError:
+            item = None             # a build's run whose build is gone
+        # A deleted run, or one somehow no longer its sharer's, is not shared any more.
+        if not item or item.get("owner") != link.get("owner"):
+            return _resp(404, {"error": runshares.GONE})
+        evs, kw = [], {"KeyConditionExpression": Key("session_id").eq(sid), "ScanIndexForward": False}
+        while len(evs) < TIMELINE_MAX:
+            page = target["events"].query(**kw, Limit=TIMELINE_MAX - len(evs))
+            evs += page.get("Items", [])
+            if not page.get("LastEvaluatedKey"):
+                break
+            kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+        logs = [{"ts": e["ts"], "node": e.get("node"), "msg": e.get("msg", "")} for e in reversed(evs)]
+        seen = (me, share_id, clock.now_str()[:13])
+        if audit.enabled() and seen not in _SHARE_SEEN:
+            if len(_SHARE_SEEN) > 5000:
+                _SHARE_SEEN.clear()
+            _SHARE_SEEN[seen] = True
+            # In the OWNER's log: who opened their run, and through which link.
+            audit.record(str(link["owner"]), email, "run.share.opened", session=sid,
+                         share=runshares.hint(share_id), by=email or me, ip=ip)
+        return _resp(200, runshares.snapshot(item, logs, link))
+
+    sid = str(params.get("id") or "")
+    if not runshares.SESSION_RE.match(sid):
+        return _resp(404, {"error": "unknown session"})
+    owner = (_session_target(sid)["status"].get_item(
+        Key={"session_id": sid}, ProjectionExpression="#o",
+        ExpressionAttributeNames={"#o": "owner"}).get("Item") or {}).get("owner")
+    if not owner or owner != me:
+        return _resp(404, {"error": "unknown session"})
+    if route_key == "GET /api/sessions/{id}/shares":
+        return _resp(200, {"shares": runshares.active(events_tbl, sid), "max": runshares.MAX_ACTIVE})
+    if route_key == "POST /api/sessions/{id}/shares":
+        made = runshares.create(events_tbl, sid, me, _user(event) or email, body.get("expiresIn"))
+        if audit.enabled():
+            audit.record(me, email, "run.shared", session=sid, share=runshares.hint(made["shareId"]),
+                         expires=made["expires"], ip=ip)
+        return _resp(200, made)
+    share_id = str(params.get("shareId") or "")
+    runshares.revoke(events_tbl, sid, share_id)
+    if audit.enabled():
+        audit.record(me, email, "run.share.revoked", session=sid, share=runshares.hint(share_id), ip=ip)
+    return _resp(200, {"ok": True})
+
+
+def _files_route(route_key: str, params: dict, event: dict) -> dict:
+    """A run's files and links to them, and the caller's runs' files (bff/runartifacts.py).
+
+    A run's files go to whoever may read the run (_own_session, read=True: its owner, an
+    admin, a service trigger's approvers), checked before the bucket is read. The list
+    across runs is the caller's own runs; `scope=all` is everyone's, for `admin` only."""
+    qs = event.get("queryStringParameters") or {}
+    try:
+        if route_key == "GET /api/files":
+            everyone = qs.get("scope") == "all"
+            if everyone:
+                denied = _forbidden("admin", event)
+                if denied:
+                    return denied
+            page = runartifacts.page_number(qs)
+            tbl = _default_target()["status"]
+            kw = {"ProjectionExpression": "session_id, topic, created, #o",
+                  "ExpressionAttributeNames": {"#o": "owner"}}
+            if not everyone:
+                kw["FilterExpression"] = Attr("owner").eq(_owner(event))
+            rows = []
+            while True:
+                got = tbl.scan(**kw)
+                rows.extend(got.get("Items", []))
+                if not got.get("LastEvaluatedKey"):
+                    break
+                kw["ExclusiveStartKey"] = got["LastEvaluatedKey"]
+            if everyone:
+                _admin_viewed(event, "files", "all", "everyone")
+            return _resp(200, runartifacts.recent_files(rows, page, ASSETS_BUCKET))
+        sid = str(params.get("id") or "")
+        if not runartifacts.SESSION_RE.match(sid):
+            return _resp(404, {"error": "unknown session"})
+        target = _own_session(event, sid, read=True)
+        if route_key == "GET /api/sessions/{id}/files":
+            return _resp(200, runartifacts.run_files(sid, target["build"], ASSETS_BUCKET))
+        if target["build"] or not ASSETS_BUCKET:
+            return _resp(404, {"error": "this deployment keeps no files for this run"})
+        return _resp(200, runartifacts.link(sid, qs.get("key", ""), ASSETS_BUCKET))
+    except runartifacts.FilesError as e:
+        return _resp(e.status, {"error": str(e)})
+
+
 def _api(event: dict, context) -> dict:
     """Route one API call. An expected refusal (unknown or someone else's run or build,
     a job already running...) is raised as BuildError anywhere below and answered here."""
@@ -1181,6 +1533,20 @@ def _route(event: dict, context) -> dict:
             body = json.loads(event["body"])
         except (TypeError, ValueError):     # not JSON, or not a string
             body = {}
+
+    # Another team's agent running this workflow over A2A (bff/a2a_server.py): only when the
+    # deployment exposes it, behind its own authorizer and scope. A run it starts is owned by
+    # the client, held to orchestrator.limits under that name, and its gates wait for a person.
+    if route_key in a2a_server.ROUTES:
+        return a2a_server.handle(
+            event, status_tbl if _console_mode() != "builder" else None,
+            lambda topic, owner, ip, extra: _begin_run(
+                context, _default_target(), topic, owner, owner, item_extra=extra,
+                audit_as=(owner, "", ip), audit_detail={"via": "a2a"}),
+            WORKFLOW, WORKFLOW_VERSION)
+    # An A2A client's token is for those two routes only.
+    if a2a_server.is_a2a_token(event):
+        return _resp(403, {"error": f"an A2A client may only call {a2a_server.RPC_PATH}"})
 
     # A webhook trigger (bff/triggers.py): the one route with no JWT authorizer. Its proof
     # is the signature over the body, checked before anything else is read.
@@ -1218,6 +1584,14 @@ def _route(event: dict, context) -> dict:
         except triggers.TriggerError as e:
             return _resp(e.status, {"error": str(e)})
         return _resp(404, {"error": f"no route for {route_key}"})
+    # Long-term memory records (bff/memories.py): admins only, refused before any AWS call;
+    # every read and delete is in the activity log.
+    if route_key in memories.ROUTES:
+        denied = _forbidden("admin", event)
+        if denied:
+            return denied
+        return _resp(*memories.route(route_key, params, event.get("queryStringParameters") or {}, body,
+                                     lambda action, **d: _audit_run(event, action, "", **d)))
 
     # The activity log (bff/audit.py): your own, or — with the `audit` permission —
     # everyone's on one day. Sign-ins are logged by the Cognito trigger; sign-outs here,
@@ -1242,8 +1616,15 @@ def _route(event: dict, context) -> dict:
     # A control-plane console runs nothing itself: no run, no insight, no telemetry, no
     # assistant, no image link — for its own workflow or for a build's.
     if _console_mode() == "builder" and path.startswith(
-            ("/api/sessions", "/api/insights", "/api/telemetry", "/api/chat", "/api/images")):
+            ("/api/sessions", "/api/insights", "/api/telemetry", "/api/chat", "/api/images",
+             "/api/analytics", "/api/files")):
         return _resp(404, {"error": NOT_HERE})
+
+    # A run's files, and the caller's runs' files (bff/runartifacts.py). Who may read the
+    # run is checked before the bucket is read; before the session routes, whose
+    # `path.endswith(id)` would claim a run named "files".
+    if route_key in runartifacts.ROUTES:
+        return _files_route(route_key, params, event)
 
     if method == "GET" and path == "/api/workflow":
         # This deployment's own view needs no run tables: a control-plane console has none,
@@ -1256,9 +1637,28 @@ def _route(event: dict, context) -> dict:
         qs = event.get("queryStringParameters") or {}
         return _resp(200, _image_link(event, qs.get("key", "")))
 
+    if route_key == "GET /api/models/litellm":
+        # Admins, and anyone signed in on a console with the Builder (its model picker):
+        # the list is the proxy key's own models, read with that key. 404 while it is off.
+        who = builds.owner_of(authz.claims(event))
+        if not (builds.ENABLED and str(who) != "anonymous"):
+            denied = _forbidden("admin", event)
+            if denied:
+                return denied
+        if not litellm_models.configured():
+            return _resp(404, {"error": "LiteLLM is not set up on this deployment"})
+        return _resp(200, litellm_models.listing())
     if method == "GET" and path == "/api/models":
         # Read-only and account-level, like /api/workflow: no authz action to gate.
         return _resp(200, _models())
+
+    if method == "GET" and path == "/api/limits":
+        # What the caller has used against `orchestrator.limits`, for the Start run box. Their
+        # own figures only; no authz action to gate, like /api/models. {"limits": false} when
+        # none is set, or on a console that runs nothing of its own.
+        if _console_mode() == "builder" or status_tbl is None:
+            return _resp(200, {"limits": False})
+        return _resp(200, limits.usage(telemetry_tbl, workflow.RAW, _user(event)))
 
     if method == "GET" and path == "/api/me":
         # Who am I and what may I do — the UI disables the controls it isn't
@@ -1271,6 +1671,24 @@ def _route(event: dict, context) -> dict:
                            "email": str(authz.claims(event).get("email") or ""),
                            "consoleMode": _console_mode(), "audit": audit.enabled()})
 
+    # Live config (bff/liveconfig.py): agents' prompts and model settings changed on this
+    # running deployment. Admins only, each change in the activity log; 404 while it is off.
+    if route_key.startswith(("GET /api/liveconfig", "POST /api/liveconfig", "PUT /api/liveconfig")):
+        denied = _forbidden("admin", event)
+        if denied:
+            return denied
+        if _console_mode() == "builder" or status_tbl is None or not liveconfig.enabled(workflow.RAW):
+            return _resp(404, {"error": liveconfig.OFF})
+        status, answer = liveconfig.route(
+            route_key, params, body, event, telemetry_tbl, workflow.RAW, region=REGION,
+            audit=lambda action, **detail: _audit_run(event, action, "", **detail),
+            model_problems=model_problems)
+        return _resp(status, answer)
+
+    # A build's test suites (bff/suiteruns.py), before the builds routes that share their prefix.
+    if route_key in suiteruns.ROUTES:
+        return _suites_route(route_key, params, body, event, context)
+
     # --- Builder builds (bff/builds.py). Matched on the route key and placed BEFORE the
     # session routes, whose `path.endswith(params["id"])` would otherwise claim them.
     if route_key.startswith(("GET /api/builds", "PUT /api/builds", "POST /api/builds",
@@ -1280,8 +1698,13 @@ def _route(event: dict, context) -> dict:
                              "PUT /api/policies", "DELETE /api/policies",
                              "GET /api/library", "POST /api/library", "PUT /api/library",
                              "DELETE /api/library", "GET /api/groups", "PUT /api/groups",
-                             "DELETE /api/groups", "GET /api/registry")):
+                             "DELETE /api/groups", "GET /api/registry", "GET /api/teams",
+                             "POST /api/teams", "PUT /api/teams", "DELETE /api/teams")):
         return _builds_route(route_key, params.get("id", ""), body, event)
+
+    # Read-only links to a run, before the session routes whose `path.endswith(id)` they share.
+    if route_key in runshares.ROUTES:
+        return _shares_route(route_key, params, body, event)
 
     if method == "POST" and path == "/api/sessions/attachments":
         # A presigned POST for one file the next run will bring (bff/runfiles.py).
@@ -1317,6 +1740,11 @@ def _route(event: dict, context) -> dict:
         denied = _forbidden("start", event)
         if denied:
             return denied
+        # Picking the run's models is its own action, closed unless granted (bff/authz.py),
+        # checked before anything is read.
+        denied = _forbidden("override", event) if model_override.wanted(body) else None
+        if denied:
+            return denied
         build_id = str(body.get("build") or "").strip()
         target = (_build_target(build_id, builds.owner_of(authz.claims(event)))
                   if build_id else _default_target())
@@ -1338,10 +1766,21 @@ def _route(event: dict, context) -> dict:
         if build_id and body.get("attachments"):
             return _resp(400, {"error": "attach files in the build's own app"})
         files = [] if build_id else runfiles.resolve(_owner(event), body.get("attachments"), topic)
+        # The run's models, from orchestrator.models.overrides only (bff/model_override.py).
+        override = None
+        if model_override.wanted(body):
+            if build_id:
+                return _resp(400, {"error": "choose a build's models in the build's own app"})
+            try:
+                override = model_override.clean(target["raw"], body[model_override.FIELD])
+            except model_override.Refused as e:
+                return _resp(400, {"error": str(e)})
+        ov = {model_override.FIELD: override} if override else None
         claims = authz.claims(event)
         ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
         session_id = _begin_run(context, target, topic, _owner(event), _user(event), files=files,
                                 subject_id=subject_id, build_id=build_id,
+                                item_extra=ov, payload_extra=ov, audit_detail=ov,
                                 audit_as=(builds.owner_of(claims), str(claims.get("email") or ""), ip),
                                 user_token=_person_token(event, target, _owner(event)))
         if session_id is None:
@@ -1360,6 +1799,10 @@ def _route(event: dict, context) -> dict:
         owners = _service_owners(event) if service else []
         if service and not owners:
             return _resp(200, [])
+        # People in a2a_approvers see A2A-started runs beside their own (bff/a2a_server.py).
+        a2a_owners = [] if target["build"] else a2a_server.owners_for(authz.groups_of(event))
+        mine = (Attr("owner").is_in([_owner(event), *a2a_owners]) if a2a_owners
+                else Attr("owner").eq(_owner(event)))
         scan_kwargs = ({"ProjectionExpression": "session_id, topic, overall, hitl, created, "
                                                 "#o, #u, #tr, workflowVersion",
                         "ExpressionAttributeNames": {"#o": "owner", "#u": "user", "#tr": "trigger"}}
@@ -1370,7 +1813,7 @@ def _route(event: dict, context) -> dict:
                        if service else
                        {"ProjectionExpression": "session_id, topic, overall, hitl, created, #tr, workflowVersion",
                         "ExpressionAttributeNames": {"#tr": "trigger"},
-                        "FilterExpression": Attr("owner").eq(_owner(event))})
+                        "FilterExpression": mine})
         while True:
             page = target["status"].scan(**scan_kwargs)
             items.extend(page.get("Items", []))
@@ -1441,6 +1884,11 @@ def _route(event: dict, context) -> dict:
             return denied
         sid = params["id"]
         target = _own_session(event, sid)
+        # An agent asking a person mid-step (bff/asks.py): an answer or a tool decision.
+        asked = asks.waiting(target["status"], sid) if asks.enabled(target["raw"]) else {}
+        bad = asks.refusal(body, asked)
+        if bad:
+            return _resp(400, {"error": bad})
         decision = body.get("decision")
         # Per-agent decisions for a parallel-group gate; when present, the single
         # decision need not be one of the three.
@@ -1469,7 +1917,14 @@ def _route(event: dict, context) -> dict:
                     f"A `sequence` gate re-runs its whole chain on revise, by design. "
                     f"Per-agent decisions are only for a parallel group"
                     + (f" ({', '.join(sorted(allowed))})" if allowed else ""))})
-        _audit_run(event, "run.decided", sid, decision=decision or "per-agent",
+        # Once per pause: a second click (or tab) must not resume the run a second time.
+        pending_hitl = asked or ((target["status"].get_item(
+            Key={"session_id": sid}, ProjectionExpression="hitl").get("Item") or {}).get("hitl"))
+        if not _claim_decision(target["status"], sid, pending_hitl):
+            return _resp(409, {"error": ALREADY_DECIDED})
+        _audit_run(event, asks.audit_action(asked), sid, decision=decision or "per-agent",
+                   kind=asked.get("kind"), agent=asked.get("node") if asked.get("kind") else None,
+                   tool=asked.get("tool"),
                    decisions={str(k): str((v or {}).get("decision") if isinstance(v, dict) else v)
                               for k, v in (decisions if isinstance(decisions, dict) else {}).items()}
                    or None,
@@ -1495,6 +1950,10 @@ def _route(event: dict, context) -> dict:
         agent_id = body.get("agentId") or body.get("agent_id")
         if not agents and not agent_id:
             return _resp(400, {"error": "provide 'agentId' or a non-empty 'agents' list"})
+        # A re-run is more model calls on the same run: held to the user's daily spend,
+        # but it is not a new run, so it does not use one of the hour's.
+        limits.enforce(target.get("telemetry"), target.get("raw"),
+                       _session_user(sid, target["status"]), count_run=False)
         _audit_run(event, "run.rerun", sid,
                    agents=[str(a.get("agentId") or a.get("agent_id") or "") for a in agents
                            if isinstance(a, dict)] if isinstance(agents, list) else [str(agent_id)],
@@ -1547,6 +2006,10 @@ def _route(event: dict, context) -> dict:
             if denied:
                 return denied
             target = _default_target()
+        if INSIGHTS_CREATION_ENDED:
+            # AgentCore stopped accepting new Insights jobs on 16 Oct 2026; the page shows
+            # this instead of a job that would only fail. Reading earlier findings still works.
+            return _resp(200, {"ok": False, "discontinued": True, "error": INSIGHTS_CREATION_ENDED})
         _self_invoke(context.function_name,
                      {"action": "run_insights", "session_id": "insights",
                       "lookback_hours": int(body.get("lookbackHours") or 0),
@@ -1587,6 +2050,10 @@ def _route(event: dict, context) -> dict:
         sid = params.get("id", "")
         return _telemetry_session(sid, _own_session(event, sid, read=True)["telemetry"]
                                   if sid else None)
+    if route_key == "GET /api/sessions/{id}/flow":
+        sid = params.get("id", "")
+        return _flow_session(sid, _own_session(event, sid, read=True)["telemetry"]
+                             if sid else None)
     if route_key == "GET /api/telemetry/aggregate":
         qs = event.get("queryStringParameters") or {}
         target = _query_target(event, _owner(event))
@@ -1594,6 +2061,21 @@ def _route(event: dict, context) -> dict:
                                     target["telemetry"] if qs.get("build") else None,
                                     mine=None if _everyone(event)
                                     else _my_session_ids(target["status"], _owner(event)))
+    if route_key == "GET /api/analytics":
+        # Every user's calls (bff/analytics.py), so the permission that reads every user's
+        # runs, checked before anything is read. Its own route rather than a `by=` on the
+        # aggregate: that one sums cost for the caller's own runs and needs no permission.
+        denied = _forbidden("admin", event)
+        if denied:
+            return denied
+        qs = event.get("queryStringParameters") or {}
+        # An admin's ?build= is looked up without an owner, which skips the id check.
+        if (qs.get("build") or "").strip() and not builds.buildstore.ID_RE.match(qs["build"].strip()):
+            return _resp(400, {"error": "invalid build id"})
+        target = _query_target(event, _owner(event))
+        status, out = analytics.report(target["telemetry"], target["raw"], qs.get("from"),
+                                       qs.get("to"), clock.today_str(), _MAX_AGGREGATE_DAYS)
+        return _resp(status, out)
 
     return _resp(404, {"error": f"no route for {method} {path}"})
 

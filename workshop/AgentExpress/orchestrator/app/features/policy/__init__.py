@@ -19,13 +19,11 @@ Modes (workflow.json -> orchestrator.policy):
   enabled=true           -> engine attached in ENFORCE (default-deny; a DENY blocks)
   enabled + mode=LOG_ONLY -> evaluate + log to CloudWatch, never block (rollout/testing)
 
-Config in workflow.json (per agent — declarative, for documentation/lineage):
-  "policy": { "enabled": true, "policyRef": "kb-corpus-guard" }
+There is no per-agent check from agent code: AgentCore has no API for one (see client.py).
 
 Key files:
-  app/features/policy/client.py  — optional is_authorized() for rare agent-side checks
+  app/features/policy/client.py  — what is enforced where
   terraform/policy.tf            — the policy engine + Cedar rules
   terraform/gateway.tf           — attaches the engine to the Gateway
 """
 
-from app.features.policy.client import is_authorized  # noqa: F401

@@ -93,6 +93,10 @@ export interface BuildSummary {
   lastEditor?: string;
   /** When the build was created (ISO 8601). */
   created?: string;
+  /** The team whose workspace it is in (bff/teams.py); absent: its creator's own builds. */
+  team?: string;
+  /** The caller may only look at it: a viewer in its team. */
+  readOnly?: boolean;
 }
 
 /** Who besides its owner may see and change a build or a library item. */
@@ -214,9 +218,17 @@ export function editedLines(b: Partial<Pick<BuildSummary, "created" | "updatedAt
 }
 const enc = encodeURIComponent;
 
+/** The workspace the builds list shows: "" = the caller's own builds, else a team's id
+ *  (bff/teams.py). A build created while a team is chosen is created in that team. */
+let workspaceId = "";
+export const currentWorkspace = () => workspaceId;
+export function setWorkspace(id: string) {
+  workspaceId = id;
+  changed();
+}
 export const serverStore: BuildStore = {
   server: true,
-  list: async () => (await api.get<ServerBuild[]>("/api/builds")).map(fromServer),
+  list: async () => (await api.get<ServerBuild[]>(`/api/builds${workspaceId ? `?team=${enc(workspaceId)}` : ""}`)).map(fromServer),
   load: async (id) => {
     try {
       const r = await api.get<{ build: ServerBuild; project: Project; refs?: Record<string, LibraryItem> }>(`/api/builds/${enc(id)}`);
@@ -226,8 +238,9 @@ export const serverStore: BuildStore = {
     }
   },
   save: async (p, rev?: number) => {
+    // `team` is read only when this save creates the build; an existing one moves by moveBuild.
     const b = fromServer(await api.put<ServerBuild>(`/api/builds/${enc(p.id)}`,
-      { project: rev === undefined ? p : { ...p, rev } }));
+      { project: rev === undefined ? p : { ...p, rev }, ...(workspaceId ? { team: workspaceId } : {}) }));
     changed();
     return b;
   },
@@ -396,6 +409,12 @@ export const library = {
 };
 export const shareBuild = async (id: string, shares: Shares) => {
   const r = await api.put<Shares>(`/api/builds/${enc(id)}/shares`, shares);
+  changed();
+  return r;
+};
+/** Put a build in a team's workspace, or ("") back in its creator's own builds. */
+export const moveBuild = async (id: string, team: string) => {
+  const r = fromServer(await api.put<ServerBuild>(`/api/builds/${enc(id)}/team`, { team }));
   changed();
   return r;
 };

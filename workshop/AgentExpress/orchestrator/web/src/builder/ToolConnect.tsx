@@ -13,6 +13,7 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import Tiles from "@cloudscape-design/components/tiles";
 
 import { SecretField } from "./BuildResources";
+import { SmithyAllow } from "./SmithyAllow";
 import type { Entry, Json, Project } from "./model";
 import { updateEntry } from "./model";
 
@@ -35,12 +36,12 @@ export function methodsFor(type: string): Method[] {
   switch (type) {
     case "mcp": case "openapi": return ["none", "aws", "apikey", "app", "user", "obo"];
     case "apigateway": return ["none", "aws", "apikey"];
-    default: return [];       // lambda, kb: always AWS; websearch: managed by AWS
+    default: return [];       // lambda, kb, smithy: always AWS; websearch: managed by AWS
   }
 }
 /** What a tool whose kind allows no choice connects with. */
 export function fixedOf(type: string): string {
-  void type; // lambda, kb and websearch: the Gateway's own role, always
+  void type; // lambda, kb, smithy and websearch: the Gateway's own role, always
   return "IAM role";
 }
 
@@ -58,6 +59,7 @@ export function iamNote(tool: { type?: unknown; service?: unknown }, agentName?:
     case "lambda": return `Called by ${who}, which may invoke only this function. The function's own role controls what it reaches.`;
     case "kb": return `Read by ${who}, which may query only this Knowledge Base.`;
     case "websearch": return `Called by ${who}, through AWS's managed web search.`;
+    case "smithy": return `Signed by ${who}, which may make only the AWS calls listed below, on those resources.`;
     default: return `Signed by ${who}${tool.service ? `, for ${String(tool.service)}` : ""}.`;
   }
 }
@@ -117,6 +119,14 @@ export function ToolConnect({ project, id, onChange, server, callbackUrl, agentN
   const cur = connectionOf(tool, project);
   const set = (next: ToolEntry) => onChange(updateEntry(project, "tools", id, next));
 
+  if (cur.method === "fixed" && type === "smithy") {
+    return (
+      <SpaceBetween size="m">
+        <RoleNote tool={tool} agentName={agentName} lead={`${fixedOf(type)} (SigV4).`} />
+        <SmithyAllow tool={tool} onChange={(e) => set(e as ToolEntry)} />
+      </SpaceBetween>
+    );
+  }
   if (cur.method === "fixed") {
     return <RoleNote tool={tool} agentName={agentName} lead={`${fixedOf(type)} (SigV4). Nothing to set up.`} />;
   }

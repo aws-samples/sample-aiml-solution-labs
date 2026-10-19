@@ -178,6 +178,17 @@ describe("validateTools", () => {
     }
   });
 
+  it.each([
+    [{ domains: { include: ["docs.aws.amazon.com"] } }, "domains.include"],
+    [{ publishedFrom: "2026-01-01T00:00:00Z" }, "publishedFrom"],
+    [{ publishedTo: "2026-01-01T00:00:00Z" }, "publishedTo"],
+  ])("refuses %j, which needs connector 1.2.0 that CloudFormation cannot pin", (extra, key) => {
+    expect(() => validateTools({ ws: { type: "websearch", ...extra } } as never, {}, "us-east-1"))
+      .toThrow(new RegExp(`${key.replace(".", "\\.")}.*1\\.2\\.0`));
+  });
+  it("still takes domains.exclude, which works on the default 1.1.0", () => {
+    expect(() => validateTools({ ws: { type: "websearch", domains: { exclude: ["example.com"] } } } as never, {}, "us-east-1")).not.toThrow();
+  });
   it("rejects connectorVersion rather than silently ignoring it", () => {
     // CloudFormation's connector source accepts only connectorId, so the pin
     // cannot be expressed on this path. Accepting and dropping it would mean the
@@ -288,12 +299,15 @@ describe("validateTools", () => {
       expect(() => fn({ lambdaArn: undefined, source: "pricing" })).not.toThrow();
     });
 
-    it("accepts only the built-in value for source", () => {
+    it("accepts only the built-in values for source", () => {
       // `source` is not a general "deploy any directory" feature: a
       // framework-deployed function needs an execution role config cannot express.
       expect(() => fn({ lambdaArn: undefined, source: "my_functions/claims" })).toThrow(
-        /the only one the framework ships is "pricing"/
+        /the only ones the framework ships are "pricing" and "codeInterpreter"/
       );
+      expect(() => fn({ lambdaArn: undefined, source: "codeInterpreter" })).not.toThrow();
+      // The folder name is exact: a near miss is not the sandbox function.
+      expect(() => fn({ lambdaArn: undefined, source: "codeinterpreter" })).toThrow(/the only ones/);
     });
 
     it("does not require an ARN when source is used", () => {

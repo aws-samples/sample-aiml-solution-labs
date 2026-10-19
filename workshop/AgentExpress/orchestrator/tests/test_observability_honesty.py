@@ -239,7 +239,7 @@ def _run_batch_with(monkeypatch, *, get_side_effect, table_ok=True):
             return {"status": "COMPLETED"}
 
     monkeypatch.setattr(insights, "_agentcore", lambda: _AC())
-    result = insights.run_batch(lookback_hours=1, user="u")
+    result = insights._start_batch(lookback_hours=1, user="u")
     return result, stored
 
 
@@ -373,3 +373,13 @@ def test_the_declared_depth_reaches_the_app_config(depth):
     with workflow(defn) as imp:
         cfg = imp("app.common.config")
         assert cfg.TOOLS["policies"]["maxResults"] == depth
+
+
+def test_insights_never_starts_a_job_aws_no_longer_accepts(monkeypatch):
+    """AgentCore stopped creating Insights jobs on 16 Oct 2026: run_batch says so, and
+    makes no AWS call (a call would only fail and overwrite the stored findings)."""
+    from app.features.optimization import insights
+    monkeypatch.setattr(insights, "_agentcore", lambda: (_ for _ in ()).throw(AssertionError("no AWS call")))
+    monkeypatch.setattr(insights, "_store", lambda item: (_ for _ in ()).throw(AssertionError("no store")))
+    r = insights.run_batch(24, "u")
+    assert r["status"] == "error" and "16 October 2026" in r["error"] and "insights.html" in r["error"]

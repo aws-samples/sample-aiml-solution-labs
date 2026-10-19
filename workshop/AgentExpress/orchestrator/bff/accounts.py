@@ -110,6 +110,11 @@ CDK_AND_RUNNER_STATEMENTS = [
     {"Sid": "DeleteLeftoverBuildLogs", "Effect": "Allow",
      "Action": ["logs:DeleteLogGroup"],
      "Resource": ["arn:aws:logs:*:*:log-group:*ax_*", "arn:aws:logs:*:*:log-group:*ax-*"]},
+    # A CDK build's destroy that a late CloudFront log delivery failed: the runner empties
+    # that build's UI logs bucket and destroys again (deployer/runner.py empty_late_log_buckets).
+    {"Sid": "LateLogBuckets", "Effect": "Allow",
+     "Action": ["s3:ListBucketVersions", "s3:DeleteObject", "s3:DeleteObjectVersion"],
+     "Resource": ["arn:aws:s3:::ax-*-stack-uilogsbucket*", "arn:aws:s3:::ax-*-stack-uilogsbucket*/*"]},
 ]
 
 

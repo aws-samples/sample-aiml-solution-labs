@@ -41,7 +41,7 @@ provisions:
   (MCP, `CUSTOM_JWT`), a Bedrock **Knowledge Base** on **S3 Vectors** + its retrieve
   Lambda, and the **Cedar policy engine**.
 
-**Feature parity with Terraform.** All nine AgentCore capabilities, the same resources.
+**Feature parity with Terraform.** The same AgentCore features and resources.
 `enableGateway` is the one switch that changes the surface:
 
 | | `-c enableGateway=true` | default (`false`) |
@@ -97,20 +97,6 @@ three `cognito*` ids — a bare `cdk deploy` fails at synth saying so.
 
 Outputs include `uiUrl` (CloudFront), `apiEndpoint`, `agentRuntimeArn`, `memoryId`,
 `gatewayUrl`, `knowledgeBaseId` and the `cognito*` ids.
-
-## Test
-
-```bash
-npm test        # 315 tests in 7 files; no AWS credentials
-```
-
-Synthesizing the stack builds the UI bundle (see Prerequisites), so `stack.test.ts` and
-`named.test.ts` take a few minutes; with no `npm` on the PATH they need a container
-engine (`CDK_DOCKER=finch` works). The projections and validators, the synthesized
-template, the named blocks, and **Terraform ↔ CDK parity** —
-the two paths are independent implementations of one projection and have drifted before.
-See [`test/README.md`](test/README.md). The runtime half of the suite is
-[`orchestrator/tests/`](../tests/README.md).
 
 ## Login (`-c idp=...`)
 
@@ -220,6 +206,15 @@ Set in `cdk.json` or via `-c key=value`:
 | `extraCallbackUrls` | `""` | Further Hosted UI callback/logout URLs (comma-separated), e.g. for local development |
 | `hostedUiProviders` | `""` (COGNITO) | Sign-in options on the Hosted UI, comma-separated: `COGNITO` and/or a federated IdP you added to the pool |
 | `nag` | `false` | Run cdk-nag's AwsSolutions pack at synth; an unacknowledged finding fails it (`lib/nag.ts`) |
+| `keepBuildsTableProtected` | `false` | A destroy stops at the builds table instead of clearing its deletion protection ([Tear down](../../DEPLOYMENT.md#tear-down)) |
+| `designerS3Buckets` | `""` | Buckets (or `bucket/prefix`, comma-separated) the AgentExpress Assistant may read when a message names `s3://…` |
+| `runOwnerEmail` | `""` | Whose runs a trigger with `runAs: "owner"` starts; the Builder sets it to the build's owner |
+| `permissionsBoundaryArn`, `iamRolePath` | `""`, `/` | Permissions boundary and IAM path for every role ([Organisation guardrails](../../DEPLOYMENT.md#organisation-guardrails)) |
+| `customDomain`, `acmCertificateArn` | `""` | Your host name on CloudFront with a us-east-1 certificate, TLS 1.2+ |
+| `enableWaf`, `wafRateLimit` | `false`, `2000` | AWS WAF on CloudFront (us-east-1 stacks only) |
+| `exposeA2a`, `a2aApprovers`, `a2aIdentity` | `false`, `""`, `""` | Serve the workflow over A2A ([A2A](../../DEPLOYMENT.md#serving-the-workflow-over-a2a)) |
+| `otlpEndpoint`, `otlpHeadersSecretArn`, `otlpIncludeContent` | `""`, `""`, `false` | Also export spans over OTLP/HTTP ([OTLP](../../DEPLOYMENT.md#sending-traces-to-another-otlp-backend)) |
+| `litellmBaseUrl`, `litellmKeySecretArn` | `""` | A LiteLLM proxy for `litellm/<model>` agents ([LiteLLM](../../DEPLOYMENT.md#using-non-bedrock-models-through-litellm)) |
 
 Your **data sources are not context keys** — they live in the `tools` block of
 `../app/workflow.json`, which this stack reads (the same file Terraform reads). Likewise
@@ -275,7 +270,7 @@ nothing to configure here. The five this sample ships:
 A target's key must equal the agent's `tool` label — synth fails if it does not.
 `validateTools()` in `lib/orchestrator-stack.ts` enforces the same rules as Terraform's
 preconditions: an alphanumeric key, a known `type` (`kb`, `websearch`, `mcp`, `openapi`,
-`lambda`, `apigateway`), `endpoint` for `mcp`, exactly one of `schemaS3Uri`, `source` or
+`lambda`, `apigateway`, `smithy`), `endpoint` for `mcp`, exactly one of `schemaS3Uri`, `source` or
 an inline `schema` for `openapi`, exactly one of `lambdaArn`, `source` or `code` for
 `lambda`, `restApiId` / `stage` / `toolFilters` for `apigateway`, at most one `kb` and one
 `websearch`, a non-empty `corpora` for `kb`, `websearch` only in a supported region,
@@ -326,7 +321,7 @@ may depend on it.
 - **One CDK-only limit, surfaced as a synth error.** `connectorVersion` cannot be expressed
   — CloudFormation's connector source accepts only `connectorId`, so use Terraform for a
   version pin.
-- **No stable L2 for any AgentCore resource yet**, so everything here is L1. The Gateway,
+- **AgentCore resources are L1 constructs** here. The Gateway,
   gateway targets, policy engine, policy and credential provider use the generated L1s from
   `aws-cdk-lib/aws-bedrockagentcore` (`CfnGateway`, `CfnGatewayTarget`, …). Memory and
   Runtime are still declared as raw `CfnResource` (`AWS::BedrockAgentCore::Memory`,
@@ -339,5 +334,5 @@ may depend on it.
   triggers it.
 - **IAM propagation.** AgentCore runtime and Gateway creation occasionally race IAM role propagation (Terraform waits 25 s before each; CDK's ordering is slower)
   on a first deploy; if it fails, re-run `cdk deploy`.
-- See the repo root README's "Security, cost & scalability" section before any non-sandbox
-  use.
+- See the repo root README's [Security summary](../../README.md#security-summary) before any
+  non-sandbox use.

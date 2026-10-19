@@ -11,6 +11,12 @@ image — the Terraform just sets AGENT_ID per runtime.
 
 import os
 
+# Both roles: the optional second trace destination (off unless OTLP_EXPORT_ENDPOINT is
+# set). Before the app is imported, so it sees the first span; it never raises.
+from app.features.observability import export as _otlp_export
+
+_otlp_export.install()
+
 if os.getenv("AGENT_ID"):
     from app.subagent_runtime import app
 else:

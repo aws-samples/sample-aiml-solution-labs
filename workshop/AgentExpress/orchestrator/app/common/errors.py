@@ -52,6 +52,16 @@ class ToolDenied(DependencyUnavailable):
         self.by = by
 
 
+class BudgetReached(DependencyUnavailable):
+    """A spend limit (`orchestrator.limits`) stopped this step before it started.
+
+    Distinct from an outage: the limit is working as configured. The step did no work, so
+    nothing was spent and nothing half-finished is left behind; re-running it after the
+    limit resets (or after the limit is raised) is safe. The message says which limit and
+    when it resets. See app/features/observability/spend.py.
+    """
+
+
 class RemoteAgentUnavailable(DependencyUnavailable):
     """An agent this workflow does not operate could not be reached or did not finish.
 

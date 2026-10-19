@@ -120,8 +120,10 @@ def _write_ddb(sid: str, ev: dict) -> None:
         # entry in the nodes map, so that update would fail — do it separately.
         # How it is answered and when it times out (app/common/gates.py), for the
         # BFF's sweep and event decisions (bff/gates.py) and the run page.
+        # An agent asking mid-step (app/common/asks.py) also says what kind of wait it is.
         hitl = {"node": n, "question": ev.get("question", ""),
-                **{k: ev[k] for k in ("approval", "timeoutAt", "timeoutAction") if ev.get(k)}}
+                **{k: ev[k] for k in ("approval", "timeoutAt", "timeoutAction",
+                                      "kind", "askId", "tool", "args") if ev.get(k)}}
         before = (tbl.update_item(
             Key=_key(sid),
             UpdateExpression="SET overall = :ov, hitl = :h, updated_at = :u",
@@ -143,6 +145,15 @@ def _write_ddb(sid: str, ev: dict) -> None:
         tbl.update_item(Key=_key(sid),
                         UpdateExpression="SET hitl = :z, overall = :ov, updated_at = :u",
                         ExpressionAttributeValues={":z": None, ":ov": "running", ":u": now})
+    elif t == "ask_resolved":
+        # Only when the run still shows THIS ask: two agents of a parallel stage may each
+        # wait, and one's answer must not clear the other's question.
+        with contextlib.suppress(Exception):  # ConditionalCheckFailed: another ask is shown
+            tbl.update_item(Key=_key(sid),
+                            UpdateExpression="SET hitl = :z, overall = :ov, updated_at = :u",
+                            ConditionExpression="hitl.askId = :a",
+                            ExpressionAttributeValues={":z": None, ":ov": "running", ":u": now,
+                                                       ":a": ev.get("askId") or "-"})
     elif t == "session_status":
         expr = "SET overall = :ov, updated_at = :u"
         names, vals = {}, {":ov": ev["status"], ":u": now}

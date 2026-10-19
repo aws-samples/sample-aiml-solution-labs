@@ -48,7 +48,7 @@ export function StepPanel({
     ? toolsLabel(meta.tool, meta.corpus ? `corpus ${meta.corpus}` : undefined)
     : meta.runtime === "a2a"
       ? `remote agent${meta.source ? ` · ${meta.source}` : ""}`
-      : (meta.access ?? "—");
+      : meta.runtime === "task" ? (meta.source ?? "task") : (meta.access ?? "—");
 
   /** The gated parallel stage this step belongs to, if any. A SUBSET re-run is only
    *  offered there, because that stage's gate is what re-reviews the subset together —

@@ -21,11 +21,12 @@ import ExpandableSection from "@cloudscape-design/components/expandable-section"
 import Header from "@cloudscape-design/components/header";
 import KeyValuePairs from "@cloudscape-design/components/key-value-pairs";
 import Pagination from "@cloudscape-design/components/pagination";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Table from "@cloudscape-design/components/table";
 import Tabs from "@cloudscape-design/components/tabs";
 import TextFilter from "@cloudscape-design/components/text-filter";
-import { useMemo } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 import { AssetView } from "../assets/AssetView";
 import { duration, fmtTime } from "../lib/clock";
@@ -33,9 +34,18 @@ import { requestTitle } from "../lib/request";
 import { isSettled, statusIndicator } from "../lib/status";
 import type { Action, NodeStatus, SessionSnapshot, Workflow } from "../types";
 import { Graph } from "./Graph";
+import { StepBadge } from "./StepBadge";
+import { stepNumbers } from "../lib/stepNumbers";
+import { RunFiles } from "./RunFiles";
+import { RunFlow } from "./RunFlow";
+import { RunGantt } from "./RunGantt";
+import { api } from "../api";
+import { buildEvents, type FlowEvent, type FlowResponse } from "../lib/flow";
 import { ConnectAccount } from "./ConnectAccount";
 import { toolsLabel } from "../lib/tools";
 import { workflowVersionLabel } from "../lib/workflowVersion";
+import { configLabel } from "../lib/liveConfig";
+import { overrideLabel } from "../lib/modelOverride";
 
 /** One row of the Steps table. FLATTENED on purpose: a sortable column needs a scalar
  *  `sortingField`, so anything the table sorts by is computed once here rather than
@@ -43,6 +53,8 @@ import { workflowVersionLabel } from "../lib/workflowVersion";
 interface StepRow {
   id: string;
   stage: number;
+  /** "2", or "2b" in a stage of several (lib/stepNumbers.ts). */
+  num: string;
   name: string;
   status: NodeStatus;
   placement: string;
@@ -107,7 +119,13 @@ export function endReason(snap: SessionSnapshot, workflow?: Workflow): { type: "
 
 export function RunDetail({
   snap, workflow, selected, onSelect, can, onCancel, activeTab, onTabChange, onRerun,
+  readOnly = false, actions,
 }: {
+  /** A run opened through a share link (SharedRun.tsx): no action, and no tab that reads a
+   *  run route (Flow), which the server answers only to the run's owner. */
+  readOnly?: boolean;
+  /** More actions for the page header (the owner's Share). */
+  actions?: ReactNode;
   snap: SessionSnapshot;
   workflow: Workflow;
   selected: string | null;
@@ -119,6 +137,19 @@ export function RunDetail({
   onRerun: (agents: string[], comment: string) => Promise<void>;
 }) {
   const nodes = snap.nodes ?? {};
+  // What each agent's components did in this run, for the graph's rows: the run's Flow
+  // events (the same route the Flow tab reads), read on open and again as the run moves on.
+  // Null until read; a failed read leaves the rows without outcomes rather than breaking it.
+  const [flow, setFlow] = useState<FlowEvent[] | null>(null);
+  useEffect(() => {
+    // A shared (read-only) run reads only its share route: the flow route is the owner's.
+    if (readOnly || !snap.session_id) return undefined;
+    let alive = true;
+    api.get<FlowResponse>(`/api/sessions/${encodeURIComponent(snap.session_id)}/flow`)
+      .then((d) => { if (alive) setFlow(buildEvents(d?.events, (id) => workflow.agents[id]?.name ?? id)); })
+      .catch(() => { /* the boxes show what is attached, without what it did */ });
+    return () => { alive = false; };
+  }, [readOnly, snap.session_id, snap.updated_at, workflow]);
   const overall = String(snap.overall ?? "");
   const running = ["running", "waiting_human", "cancelling"].includes(overall);
   const settled = isSettled(overall);
@@ -147,20 +178,23 @@ export function RunDetail({
     return gate?.gateName ?? workflow.agents[node]?.name ?? node;
   }, [snap.hitl?.node, workflow]);
 
+  const nums = useMemo(() => stepNumbers(workflow.steps), [workflow]);
   const stepRows = useMemo<StepRow[]>(() => ids.map((id) => {
     const meta = workflow.agents[id] ?? {};
     const st = nodes[id];
     return {
       id,
       stage: stageOf(id),
+      num: nums[id] ?? String(stageOf(id)),
       name: meta.name ?? id,
       status: st?.status ?? "pending",
       placement: meta.runtime ?? "main",
-      source: toolsLabel(meta.tool) || (meta.runtime === "a2a" ? "remote agent" : (meta.access ?? "—")),
+      source: toolsLabel(meta.tool) || (meta.runtime === "a2a" ? "remote agent"
+        : meta.runtime === "task" ? (meta.source ?? "task") : (meta.access ?? "—")),
       produces: meta.produces ?? "—",
       bytes: st?.output?.length ?? 0,
     };
-  }), [ids, nodes, workflow]);
+  }), [ids, nodes, workflow, nums]);
 
   const eventRows = useMemo<EventRow[]>(
     () => (snap.logs ?? []).slice().reverse().map((l, i) => ({
@@ -188,6 +222,14 @@ export function RunDetail({
     pagination: { pageSize: EVENT_PAGE },
   });
 
+  // The Timeline tab: the chart (RunGantt) by default, or the log table it always had.
+  const [timelineView, setTimelineView] = useState<"chart" | "log">("chart");
+  const timelineToggle = (
+    <SegmentedControl selectedId={timelineView} label="Timeline view"
+      options={[{ id: "chart", text: "Chart" }, { id: "log", text: "Log" }]}
+      onChange={({ detail }) => setTimelineView(detail.selectedId === "log" ? "log" : "chart")} />
+  );
+
   return (
     <SpaceBetween size="l">
       <Header
@@ -195,7 +237,8 @@ export function RunDetail({
         description={`Run ${snap.session_id}`}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
-            {running ? (
+            {readOnly ? null : actions}
+            {running && !readOnly ? (
               <Button iconName="close" disabled={!can("cancel")} onClick={onCancel}>
                 Stop run
               </Button>
@@ -211,10 +254,10 @@ export function RunDetail({
         </ExpandableSection>
       ) : null}
 
-      <ConnectAccount snap={snap} canRerun={settled && can("rerun")} onRerun={onRerun} />
+      {readOnly ? null : <ConnectAccount snap={snap} canRerun={settled && can("rerun")} onRerun={onRerun} />}
       {ended ? (
         <Alert type={ended.type} header={ended.type === "error" ? "Why the run stopped" : "Why the run ended here"}
-          action={<Button onClick={() => onTabChange("timeline")}>Open the Timeline</Button>}>
+          action={<Button onClick={() => { setTimelineView("log"); onTabChange("timeline"); }}>Open the Timeline</Button>}>
           {ended.text}
         </Alert>
       ) : null}
@@ -228,6 +271,11 @@ export function RunDetail({
             { label: "Duration", value: duration(snap.created, snap.updated_at) },
             { label: "Run ID", value: <Box variant="code" fontSize="body-s">{snap.session_id}</Box> },
             { label: "Workflow", value: workflowVersionLabel(snap.workflowVersion ?? snap.workflow?.deployment?.version) },
+            // The live config version it ran on (bff/liveconfig.py), when it was not as deployed.
+            ...(configLabel(snap.configVersion) ? [{ label: "Config", value: configLabel(snap.configVersion) }] : []),
+            // The models someone picked on Start run (bff/model_override.py).
+            ...(snap.modelOverride ? [{ label: "Model override", value: overrideLabel(snap.modelOverride,
+              Object.fromEntries(Object.entries(snap.workflow?.agents ?? {}).map(([id, a]) => [id, String(a.name ?? id)]))) }] : []),
             { label: "Started by", value: snap.user || "—" },
             { label: "Subject", value: snap.subject_id || "—" },
             ...(snap.attachments?.length ? [{
@@ -263,8 +311,8 @@ export function RunDetail({
                   <Header
                     variant="h2"
                     description={settled
-                      ? "Select a step to see its configuration, output and re-run controls. Restart the whole workflow from the toolbar."
-                      : "Select a step to see its configuration and output in the panel."}
+                      ? "Each step lists its tools and AgentCore features: click one to see what it did in this run. Select a step for its configuration, output and re-run controls. Restart the whole workflow from the toolbar."
+                      : "Each step lists its tools and AgentCore features: click one to see what it did in this run. Select a step for its configuration and output."}
                   >
                     Workflow
                   </Header>
@@ -272,7 +320,7 @@ export function RunDetail({
                 disableContentPaddings
               >
                 <Graph
-                  workflow={workflow} nodes={nodes} selected={selected} onSelect={onSelect}
+                  workflow={workflow} nodes={nodes} selected={selected} onSelect={onSelect} events={flow}
                   rerunnable={(id) => settled && can("rerun") && ran(id)}
                   onRerunFrom={settled && can("rerun") ? (id) => onSelect(id) : undefined}
                   onRestart={
@@ -314,7 +362,7 @@ export function RunDetail({
                   {
                     id: "stage", header: "Stage", width: 100,
                     sortingField: "stage",
-                    cell: (r) => r.stage,
+                    cell: (r) => <StepBadge num={r.num} status={r.status} />,
                   },
                   {
                     id: "name", header: "Step", isRowHeader: true, minWidth: 220,
@@ -355,7 +403,18 @@ export function RunDetail({
           {
             id: "timeline",
             label: "Timeline",
-            content: (
+            content: timelineView === "chart" ? (
+              <Container
+                header={
+                  <Header variant="h2" actions={timelineToggle}
+                    description="Each step's run, left to right in time, with its tool, model, guardrail, memory, policy and evaluation calls inside it. Hover or focus a bar for its details.">
+                    Timeline
+                  </Header>
+                }
+              >
+                <RunGantt snap={snap} workflow={workflow} events={readOnly ? null : flow} />
+              </Container>
+            ) : (
               <Table
                 {...events.collectionProps}
                 items={events.items}
@@ -364,6 +423,7 @@ export function RunDetail({
                 header={
                   <Header
                     variant="h2"
+                    actions={timelineToggle}
                     counter={`(${events.filteredItemsCount ?? eventRows.length})`}
                     description="Newest first. Branch decisions, guardrail blocks and ungrounded-figure warnings appear here."
                   >
@@ -402,6 +462,22 @@ export function RunDetail({
             ),
           },
           {
+            id: "flow",
+            label: "Flow",
+            content: (
+              <Container
+                header={
+                  <Header variant="h2" description="What each agent did with the Gateway, memory, policy and guardrails, in order. Story tells it stage by stage, one line per call; Summary counts each agent's events. Replay them from the start.">
+                    Flow
+                  </Header>
+                }
+              >
+                <RunFlow sessionId={snap.session_id} workflow={workflow} nodes={nodes}
+                         refreshKey={snap.updated_at} logs={snap.logs} hitl={snap.hitl} history={snap.history} />
+              </Container>
+            ),
+          },
+          {
             id: "outputs",
             label: "Outputs",
             content: (
@@ -429,7 +505,14 @@ export function RunDetail({
               </Container>
             ),
           },
-        ]}
+          {
+            // What the run was started with, and the files and code its agents made
+            // (bff/runartifacts.py). Not on a shared link: the server answers the owner only.
+            id: "files",
+            label: "Files",
+            content: <RunFiles sessionId={snap.session_id} workflow={workflow} refreshKey={settled ? "settled" : snap.updated_at} />,
+          },
+        ].filter((t) => !readOnly || (t.id !== "flow" && t.id !== "files"))}
       />
     </SpaceBetween>
   );

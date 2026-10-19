@@ -12,6 +12,9 @@ DynamoDB (`<agentName>_builds`, pk `pk`, sk `sk`, GSI `by_owner` on owner/update
                              last deploy/destroy `job`, and what is `deployed`
     BUILD#<id>  RUN#<sid>    a run started against this build (for cleanup)
     RUN#<sid>   BUILD        which build a run belongs to (to route session calls)
+    BUILD#<id>  SUITERUN#<suiteKey>-<time>-<rand>
+                             one run of one of the build's test suites, and what it found
+                             (bff/suiteruns.py); removed with the build
     USER#<sub>  ACCOUNT#<n>  an AWS account the user connected, to deploy builds into
 
 Secrets Manager: <SECRETS_PREFIX><id>  a build's tool API keys and A2A tokens, write-only
@@ -104,6 +107,14 @@ def run_key(session_id: str) -> dict:
     return {"pk": f"RUN#{session_id}", "sk": "BUILD"}
 
 
+#: A run of a build's test suite (bff/suiteruns.py). Not `RUN#`, which run_ids() lists.
+SUITE_RUN_PREFIX = "SUITERUN#"
+
+
+def suite_run_key(build_id: str, run_id: str) -> dict:
+    return {"pk": f"BUILD#{build_id}", "sk": f"{SUITE_RUN_PREFIX}{run_id}"}
+
+
 def account_key(owner: str, account: str) -> dict:
     return {"pk": f"USER#{owner}", "sk": f"ACCOUNT#{account}"}
 
@@ -134,7 +145,8 @@ AUDIT_ACTIONS = ("login", "logout",
                  "run.evaluated", "policy.generated", "policy.created", "policy.updated",
                  "policy.deleted", "lambda.code.updated", "tool.tested",
                  "build.shared", "library.created", "library.updated", "library.deleted",
-                 "library.shared", "group.saved", "group.deleted")
+                 "library.shared", "group.saved", "group.deleted",
+                 "team.created", "team.updated", "team.deleted", "build.moved")
 
 
 def audit_items(owner: str, email: str, action: str, detail: dict,
@@ -227,7 +239,10 @@ def bundle_of(project: dict, version: int) -> dict:
             "project": {"id": project.get("id"), "name": project.get("name"),
                         "buildVersion": int(version)},
             "workflow": workflow, "prompts": prompts,
-            **({"toolCode": code} if code else {})}
+            **({"toolCode": code} if code else {}),
+            # The build's test suites travel with it, frozen into each version (bff/suiteruns.py).
+            # `scaffold.py apply` does not read them: they are not part of what deploys.
+            **({"suites": project["suites"]} if isinstance(project.get("suites"), list) and project["suites"] else {})}
 
 
 def code_tools(workflow: dict) -> list[str]:
@@ -323,6 +338,22 @@ def forget_runs(table, build_id: str) -> int:
     return len(ids)
 
 
+def forget_suite_runs(table, build_id: str) -> int:
+    """Drop the suite runs of a build that is being deleted."""
+    kwargs = {"KeyConditionExpression": "pk = :p AND begins_with(sk, :s)",
+              "ExpressionAttributeValues": {":p": f"BUILD#{build_id}", ":s": SUITE_RUN_PREFIX},
+              "ProjectionExpression": "sk"}
+    n = 0
+    while True:
+        page = table.query(**kwargs)
+        for item in page.get("Items", []):
+            table.delete_item(Key={"pk": f"BUILD#{build_id}", "sk": item["sk"]})
+            n += 1
+        if not page.get("LastEvaluatedKey"):
+            return n
+        kwargs["ExclusiveStartKey"] = page["LastEvaluatedKey"]
+
+
 def delete_prefix(s3, bucket: str, prefix: str) -> int:
     """Delete every object (and every version, the bucket is versioned) under prefix."""
     n = 0
@@ -339,6 +370,7 @@ def delete_prefix(s3, bucket: str, prefix: str) -> int:
 def purge(table, s3, bucket: str, build_id: str, owner: str) -> None:
     """Remove every trace of a build: its runs index, its stored versions, its state."""
     forget_runs(table, build_id)
+    forget_suite_runs(table, build_id)
     delete_prefix(s3, bucket, f"builds/{build_id}/")
     delete_prefix(s3, bucket, state_prefix(owner, build_id))
     table.delete_item(Key=meta_key(build_id))

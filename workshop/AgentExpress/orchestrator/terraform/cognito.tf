@@ -104,8 +104,9 @@ resource "aws_cognito_user_pool_client" "spa" {
   #
   # No dependency cycle: CloudFront depends on the UI *bucket*, not on this
   # client; the auth-config.js *object* depends on this client.
-  callback_urls = concat(["https://${aws_cloudfront_distribution.ui.domain_name}"], var.extra_callback_urls)
-  logout_urls   = concat(["https://${aws_cloudfront_distribution.ui.domain_name}"], var.extra_callback_urls)
+  # local.ui_origins: the CloudFront URL, and custom_domain when set (hardening.tf).
+  callback_urls = concat(local.ui_origins, var.extra_callback_urls)
+  logout_urls   = concat(local.ui_origins, var.extra_callback_urls)
 }
 
 # --- Cognito machine-to-machine identity (agent -> AgentCore Gateway) -------

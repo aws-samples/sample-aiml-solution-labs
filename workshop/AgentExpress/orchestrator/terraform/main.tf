@@ -125,6 +125,9 @@ resource "aws_iam_role" "runtime" {
       }
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "runtime" {
@@ -327,7 +330,7 @@ resource "aws_iam_role_policy" "runtime" {
 # Give the execution role a moment to propagate before the runtime validates it.
 resource "time_sleep" "iam_propagation" {
   count           = local.workflow_plane ? 1 : 0
-  depends_on      = [aws_iam_role_policy.runtime, aws_iam_role_policy.runtime_secret, aws_secretsmanager_secret_version.runtime]
+  depends_on      = [aws_iam_role_policy.runtime, aws_iam_role_policy.runtime_secret, aws_secretsmanager_secret_version.runtime, aws_iam_role_policy.runtime_otlp_export, aws_iam_role_policy.runtime_litellm]
   create_duration = "25s"
 }
 
@@ -349,7 +352,8 @@ resource "awscc_bedrockagentcore_runtime" "orchestrator" {
     network_mode = "PUBLIC"
   }
 
-  environment_variables = {
+  # The optional OTLP export's settings are merged in only when it is on (otlp_export.tf).
+  environment_variables = merge({
     AWS_REGION         = var.region
     BEDROCK_MODEL_ID   = local.model_id
     MEMORY_ID          = awscc_bedrockagentcore_memory.orchestrator[0].memory_id
@@ -441,7 +445,8 @@ resource "awscc_bedrockagentcore_runtime" "orchestrator" {
     # and per-type call options like the KB corpora or WebSearch maxResults).
     # Lets an agent invoke its configured tool without hardcoding anything.
     TOOLS_JSON = local.tools_env
-  }
+    # LiteLLM settings (litellm.tf) and HARNESS_ARNS (harness.tf) are merged in only when used.
+  }, local.otlp_export_env, local.litellm_env, local.harness_env)
 
   depends_on = [null_resource.build_push, time_sleep.iam_propagation]
 }

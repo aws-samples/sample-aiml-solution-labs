@@ -60,10 +60,19 @@ def decide(detail: dict, table, resume) -> dict:
     if not item:
         print(f"[gates] decision for {sid!r} ignored: it is not waiting for one")
         return {"decided": False, "reason": "the run is not waiting for a decision"}
-    node = str((item.get("hitl") or {}).get("node") or "")
+    hitl = item.get("hitl") or {}
+    node = str(hitl.get("node") or "")
     if detail.get("gate") and detail["gate"] != node:
         return {"decided": False, "reason": f"the run is waiting at {node}, not {detail['gate']}"}
-    if gate_spec(node).get("approval") != "event":
+    if hitl.get("kind"):
+        # An agent asking mid-step (app/common/asks.py): only a tool call whose tool says
+        # `approval: "event"` takes an event, and it is approved or denied, never revised.
+        if hitl.get("kind") != "toolApproval" or hitl.get("approval") != "event":
+            print(f"[gates] decision for {sid} at {node} ignored: it waits for a person in the app")
+            return {"decided": False, "reason": "what the run waits for is not decided by event"}
+        if decision == "revise":
+            return {"decided": False, "reason": "a tool call is approved or denied, not revised"}
+    elif gate_spec(node).get("approval") != "event":
         print(f"[gates] decision for {sid} at {node} ignored: that gate is decided in the app")
         return {"decided": False, "reason": "that gate does not take decisions by event"}
     by = f"event:{str(detail.get('by') or 'unnamed')[:100]}"

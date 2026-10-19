@@ -9,8 +9,8 @@ relative to `orchestrator/`.
 Contents: [Overview](#1-overview) · [Planes](#2-planes) · [Request flow](#3-request-flow-of-a-run) ·
 [Runtime](#4-the-runtime) · [Images](#5-images) · [AgentCore features](#6-agentcore-features) ·
 [BFF](#7-the-bff) · [Data stores](#8-data-stores) · [Deploy pipeline](#9-builder-deploy-pipeline) ·
-[Config](#10-config-as-the-single-source) · [Security](#11-security-model) · [Tests](#12-tests) ·
-[Known gaps](#13-known-gaps)
+[Config](#10-config-as-the-single-source) · [Security](#11-security-model) ·
+[Design notes](#12-design-notes)
 
 ## 1. Overview
 
@@ -118,13 +118,15 @@ gates pause again. This covers single agents, parallel-group members (the group 
 and agents inside a `sequence`. `group_rerun_plan(agent_ids)` re-runs a subset of one
 gated parallel step by seeding its gate to `revise` with that subset.
 
-### Placement: `main`, `dedicated`, `a2a`
+### Placement: `main`, `dedicated`, `a2a`, `task`, `harness`
 
 | `runtime` | Where it runs | How it is called |
 |---|---|---|
 | `main` (default) | in the orchestrator runtime | LangGraph node |
 | `dedicated` | its own AgentCore Runtime, same image, `AGENT_ID` picks the agent (`app/subagent_runtime.py`) | `AgentCoreRuntimeAgent` → `InvokeAgentRuntime`, trace context propagated |
 | `a2a` | an agent you do not operate | `app/common/a2a_agent.py`: Agent Card at `/.well-known/agent-card.json`, JSON-RPC `message/send`, `tasks/get` polling |
+| `task` | in the orchestrator runtime, no model | `app/common/task_agent.py`: a Gateway tool call, a Code Interpreter script, Textract, or an output file |
+| `harness` | an AgentCore Harness the deploy creates, or yours by `harness.arn` | `app/common/harness_agent.py` → `InvokeHarness` (no trace header is passed: ADOT rewrites it after signing) |
 
 Each dedicated agent gets its own execution role, derived from its `agentcore` block. An
 `a2a` agent has no package under `app/subagents/` and rejects `tool`, `corpus`, `model`
@@ -145,7 +147,7 @@ receives an `AgentContext` (`app/common/context.py`):
 | `ctx.retrieve(query)` | KB retrieval scoped to the agent's corpus |
 | `ctx.image(prompt, negative_prompt)` | Render an image ([Images](#5-images)) |
 | `ctx.input(agent_id)`, `ctx.log`, `ctx.heartbeat` | Upstream output, timeline line, progress |
-| `ctx.guardrail`, `ctx.memory_recall`/`memory_store`, `ctx.get_identity_token`, `ctx.get_api_key`, `ctx.policy_check` | Feature helpers, no-ops when the feature is off |
+| `ctx.guardrail`, `ctx.memory_recall`/`memory_store`, `ctx.get_identity_token`, `ctx.get_api_key` | Feature helpers, no-ops when the feature is off. (`ctx.policy_check` always returns true: Cedar is enforced at the Gateway only.) |
 
 The node wrapper (`make_agent_node`) applies input and output guardrails, memory recall
 and store, and figure grounding (`app/common/grounding.py` warns on the timeline about
@@ -169,12 +171,13 @@ what an agent's `tool` names.
 
 | `type` | Backend |
 |---|---|
-| `kb` | Lambda calling `bedrock:Retrieve` on a Bedrock KB (S3 Vectors), filtered to the agent's `doc_type` corpus |
+| `kb` | Lambda calling `bedrock:Retrieve` on a Bedrock KB (S3 Vectors, or your own store with `vectorStore`), filtered to the agent's `doc_type` corpus |
 | `websearch` | managed AgentCore Web Search connector (`connectorId: web-search`) |
 | `mcp` | remote MCP server over Streamable HTTP (sample: AWS Knowledge MCP Server) |
 | `openapi` | REST API from an OpenAPI schema in S3 (`schemaS3Uri`, or `source` under `app/tools/`) |
 | `apigateway` | an API Gateway REST API stage in the same account and region |
-| `lambda` | your function (`lambdaArn`), or code in `app/tools/<source>` that the framework deploys |
+| `lambda` | your function (`lambdaArn`), code written in the build (`code`), or a shipped `source`: `pricing`, `codeInterpreter` (AgentCore Code Interpreter), `browser` (AgentCore Browser) |
+| `smithy` | an AWS service API from its Smithy model, signed by the Gateway role with exactly the tool's `allow` |
 
 - `toolMode: "direct"` (default) queries every bound tool once before the model reasons.
   `toolMode: "model"` (`app/common/tool_loop.py`) lets the model pick tools and arguments,
@@ -220,11 +223,14 @@ Each feature lives in `app/features/<name>/` and is switched on per agent in its
 | Memory | One store is the LangGraph checkpointer; a second holds long-term `semantic`/`summary`. The actor is per agent, partitioned by `memory.scope` (`user` default, `subject`, `agent`, `run`) |
 | Gateway | MCP endpoint for all tools; CUSTOM_JWT authorizer pinned to the caller (`allowed_clients` for Cognito; `allowed_audience` + `azp` for Auth0 and Entra ID, + `cid` for Okta) |
 | Identity | Credential providers from `identities.<name>`, secrets from the environment. `gatewayIdentity: "perAgent"` gives each tool-using agent its own Gateway client |
-| Policy | Cedar engine on the Gateway, `ENFORCE` (default-deny) or `LOG_ONLY`. `ctx.policy_check` is a secondary, fail-open helper |
+| Policy | Cedar engine on the Gateway, `ENFORCE` (default-deny) or `LOG_ONLY`. AgentCore has no API for a Cedar decision outside a Gateway call, so `ctx.policy_check` always returns true |
 | Guardrails | Build-wide `guardrail` block (not created if it enforces nothing), plus named `guardrails.<name>`. A block stops the agent and the timeline names the policy that blocked; an anonymize-only finding carries on with the masked text |
 | Observability | OTEL with one `session.id` per run, AGENT and tool spans, force-flush per burst; a telemetry row per model, tool, memory, guardrail and policy call |
 | Evaluations | LLM-as-judge per named prompt per version: telemetry rows replayed into `Evaluate` as `sessionSpans`, CloudWatch span fallback. `auto: true` scores at run end |
-| Insights | Batch evaluation over recent traces; findings in the insights table |
+| Insights | Batch evaluation over recent traces; findings in the insights table (AWS paused new Insights jobs on 16 Oct 2026; earlier findings stay readable) |
+| Interceptors | At most one Lambda before each MCP request and one after each answer (`orchestrator.interceptors`), written from templates or yours by ARN |
+| Harness | `runtime: "harness"` agents; the Gateway tools reach it through an OAuth2 credential provider, so Cedar and interceptors apply |
+| Code Interpreter, Browser | Behind Lambda tools and task steps; sessions on the AWS-managed `aws.codeinterpreter.v1` / `aws.browser.v1` |
 
 Both IaC paths provision the named blocks (`guardrails`, `memories`, `evaluators`,
 `identities`, `policies`) and enable Transaction Search (an account-wide singleton) with an
@@ -241,13 +247,16 @@ One Lambda (`bff/handler.py`) behind the HTTP API.
 
 | Group | Routes |
 |---|---|
-| Runs | `POST/GET /api/sessions`, `GET/DELETE /api/sessions/{id}`, `/decision`, `/cancel`, `/rerun`, `/evaluate` |
-| Read-only | `/api/workflow`, `/api/me`, `/api/models`, `/api/images`, `/api/sessions/{id}/telemetry`, `/api/telemetry/aggregate`, `/api/insights` |
-| Assistant | `POST /api/chat` |
-| Builds | `/api/builds[/{id}]`, `/deploy`, `/destroy`, `/log`, `/design`, `/secrets`, `/docs`, `/login`, `/shares`, `/test-tool` |
-| Library, groups | `/api/library[/{id}]`, `/api/library/{id}/shares`, `/api/groups[/{id}]` |
-| Accounts, policies | `/api/accounts[/{id}]`, `/api/policies[...]`, `/api/code/check` |
+| Runs | `POST/GET /api/sessions`, `GET/DELETE /api/sessions/{id}`, `/decision`, `/cancel`, `/rerun`, `/evaluate`, `/flow`, `/telemetry`, `/files[/url]`, `/shares[/{shareId}]`; `POST /api/sessions/attachments`; `GET /api/shared/{shareId}` |
+| Read-only | `/api/workflow`, `/api/me`, `/api/models[/litellm]`, `/api/images`, `/api/limits`, `/api/files`, `/api/telemetry/aggregate`, `/api/insights` |
+| Admin pages | `/api/analytics`, `/api/memory/...`, `/api/liveconfig/...`, `/api/triggers/...` |
+| Assistants | `POST /api/chat` (Run Assistant), `/api/builds/{id}/design` (AgentExpress Assistant) |
+| Builds | `/api/builds[/{id}]`, `/deploy`, `/destroy`, `/deployments`, `/log`, `/secrets`, `/docs`, `/login`, `/shares`, `/team`, `/test-tool`, `/suites`, `/suite-runs`, `/registry`, `/publish` |
+| Library, groups, teams | `/api/library[/{id}]`, `/api/library/{id}/shares`, `/api/groups[/{id}]`, `/api/teams[/{id}]`, `/api/registry[/search]` |
+| Accounts, policies | `/api/accounts[/{id}]`, `/api/policies[...]`, `/api/code/check`, `POST /api/connect` |
 | Activity | `GET /api/audit`, `POST /api/audit/logout` |
+| No JWT | `POST /api/hooks/{name}` (webhook trigger, HMAC-signed) |
+| A2A (opt-in) | `GET /api/a2a/.well-known/agent-card.json`, `POST /api/a2a`, behind their own JWT authorizer |
 
 A run can target a deployed build (`POST /api/sessions` with `{"build": id}`); per-run
 routes then find the build from the run. The API uses one API-wide Lambda permission
@@ -318,8 +327,7 @@ ship in `bff/botocore_data/` as a fallback search path.
 sign-outs, build, library, sharing, account and policy changes); the runtime writes
 `run.completed`, `run.failed` and `run.denied` (`app/common/audit.py`, called from
 `app/common/sink.py`); the Cognito post-auth trigger (`signup_lambda/`) writes sign-ins.
-The runtime and trigger carry copies of `audit_items`; `tests/test_run_audit.py` holds
-the runtime copy to the BFF's. A user reads their own log; everyone's needs `audit`.
+A user reads their own log; everyone's needs `audit`.
 
 ## 8. Data stores
 
@@ -331,6 +339,8 @@ Table names are `<agentName>_<suffix>`; a build's `agentName` is `ax_` + 8 hex.
 | `_events` | `session_id`, `ts` | Append-only timeline |
 | `_telemetry` | `session_id`, `sk` (`ts#seq#uuid`), GSI `by_date` | Per-call rows with agent-run version and prompt name |
 | `_insights` | `id` | Cross-run Insights findings |
+| `_events` reserved rows | `share#<id>` | Run share links |
+| `_telemetry` reserved rows | `_limit#…`, `_liveconfig#…` | Spend and run counters; live config versions (IAM conditions scope access to these key prefixes) |
 | `_audit` | `pk`, `sk` | Activity log, only when there is no builds table (a build's own app) |
 | `_builds` | `pk`, `sk`, GSI `by_owner` | Builder items, below |
 | AgentCore Memory | | Checkpoints (HITL pause/resume) and long-term memory |
@@ -344,6 +354,7 @@ Table names are `<agentName>_<suffix>`; a build's `agentName` is `ax_` + 8 hex.
 | `SHARE#EMAIL#<e>`, `SHARE#GROUP#<g>`, `SHARE#ALL` | `<KIND>#<id>` | Share pointers |
 | `GROUPS` | `<name>` | Admin-defined group and member emails |
 | `AUDIT#<sub>`, `AUDIT_DAY#<date>` | `<ts>#<rand>` | Each audit event, under the user and under the UTC day |
+| `TEAMS` / `TEAM#<id>` | `<team id>` / `BUILD#<bid>` | Teams and their members; a build in a team's workspace |
 
 - Builds bucket (versioned): `builds/<id>/draft.json`, `versions/<n>.json` (immutable),
   `kb/<corpus>/…`, `design.json`, `design-rev/<n>.json`; `connect/<externalId>.json`;
@@ -351,7 +362,8 @@ Table names are `<agentName>_<suffix>`; a build's `agentName` is `ax_` + 8 hex.
   `-login` secret.
 - Assets bucket: `runs/<session>/<agent>/<n>.<ext>` (images); a run's files under
   `runs/<session>/attachments/` (copied in by `bff/runfiles.py` when it starts, read by agents
-  with `attachments`); uploads under `uploads/<owner digest>/`, expired after a day. Also UI,
+  with `attachments`); with `orchestrator.files`, `runs/<session>/outputs/` and `code/`, expired
+  after `retentionDays`; uploads under `uploads/<owner digest>/`, expired after a day. Also UI,
   KB documents and tool schema buckets.
 
 ## 9. Builder deploy pipeline
@@ -395,16 +407,14 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
 - `app/workflow.json` is the customer's file: `orchestrator`, `ui`, `guardrail`,
   `authorization`, `tools`, `agents`, `steps`, plus optional named blocks.
 - `app/keys.json` describes every key: placement, required, default, what reads it.
-  `build_schema.py --check` fails CI on drift; `format_workflow.py` orders keys.
+  `build_schema.py` regenerates the schema; `format_workflow.py` orders keys.
 - `app/vocabulary.json` holds the closed value sets (runtimes, tool types, frameworks,
   tool modes, memory strategies, RBAC actions, image models and more), read by Python,
   `cdk/lib/vocabulary.ts` and Terraform (`jsondecode(file(...))`).
-- Validator parity: the Build view's `web/src/builder/validate.ts` and its port
-  `bff/validate_build.py` run the same fixture, `tests/fixtures/validation_cases.json`.
-- IaC parity: `cdk/test/parity.test.ts` reads the HCL and compares route sets,
-  tool-plane shapes, IAM grants and Cedar policy names, and asserts every plane reads
-  `app/vocabulary.json`. The BFF workflow projection has one implementation
-  (`bff/workflow.py`). Runtime and Memory are raw `CfnResource` in CDK and `awscc_*` in
+- One set of rules: the Build view (`web/src/builder/validate.ts`) and the deploy
+  (`bff/validate_build.py`) check a workflow the same way, with the same messages.
+- Twin IaC: Terraform and CDK read the same `workflow.json` and `vocabulary.json` and create
+  the same routes, tool targets, IAM grants and Cedar policies. Runtime and Memory are raw `CfnResource` in CDK and `awscc_*` in
   Terraform; the other AgentCore resources use the L1s and `aws_bedrockagentcore_*`.
 
 ## 11. Security model
@@ -449,19 +459,8 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
   (`orchestrator.chatbot.tools`) if it should not act. Treat model, MCP and RAG output
   as untrusted.
 
-## 12. Tests
+## 12. Design notes
 
-| Suite | Runner | Count | Covers |
-|---|---|---|---|
-| `tests/` | pytest | 1535 | Graph compilation, branching, rewind, tool calls, citations, grounding, contracts, RBAC on every route, validator parity, images, audit; Builder BFF on moto DynamoDB and S3 |
-| `cdk/test/` | jest | 315 in 7 files | Projections, validators, synthesized template, Terraform ↔ CDK parity, cdk-nag |
-| `web/` | vitest | 424 in 44 files | Asset renderer, token refresh, gates, Builder views, validator parity |
-
-None need AWS credentials. Prompt quality is not unit-tested; the HITL gates and
-Evaluations cover it. Each suite's directory has a `README.md`.
-
-## 13. Known gaps
-
-Dedicated-agent calls are synchronous (long-running agents would need poll/resume). Runs
-are filtered by an `owner` attribute, not partitioned by tenant. The UI polls rather than
-receiving pushes. AgentCore Optimization recommendations are not wired; Insights is used.
+- Calls to `dedicated` agents are synchronous; a step waits for the agent's answer.
+- Runs are kept per owner (an `owner` attribute), within one deployment.
+- The UI polls for progress every few seconds rather than receiving pushes.

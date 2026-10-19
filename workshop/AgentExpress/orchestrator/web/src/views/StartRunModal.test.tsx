@@ -79,3 +79,46 @@ describe("StartRunModal", () => {
     expect((screen.getByRole("button", { name: "Start run" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe("StartRunModal and orchestrator.limits", () => {
+  const use = (used: number, limit: number, reached = false) => ({
+    used, limit, resets: "midnight Eastern time", warn: used / limit >= 0.8, reached });
+  const typeRequest = async () => {
+    const box = document.querySelector("textarea[aria-label='Request']") as HTMLTextAreaElement;
+    await act(async () => { fireEvent.change(box, { target: { value: "Triage claim 88213" } }); });
+  };
+  const start = () => screen.getByRole("button", { name: "Start run" }) as HTMLButtonElement;
+
+  it("shows nothing when no limit is set", () => {
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={vi.fn()} usage={{ limits: false }} />);
+    expect(screen.queryByTestId("limits-usage")).toBeNull();
+  });
+
+  it("shows how much is used, and still lets the user start", async () => {
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={vi.fn()}
+      usage={{ limits: true, daily: use(1.2, 5), hourly: use(3, 20) }} />);
+    await typeRequest();
+    expect(screen.getByTestId("limits-usage").textContent).toBe("Today: $1.20 of $5.00 · This hour: 3 of 20 runs");
+    expect(start().disabled).toBe(false);
+  });
+
+  it("warns when a limit is close, and still lets the user start", async () => {
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={vi.fn()}
+      usage={{ limits: true, daily: use(4.5, 5) }} />);
+    await typeRequest();
+    expect(screen.getByText(/You have used 90% of today's spend limit/)).toBeTruthy();
+    expect(start().disabled).toBe(false);
+  });
+
+  it("explains and disables Start when a limit is reached, so no refused request is sent", async () => {
+    const onStart = vi.fn();
+    render(<StartRunModal visible ui={ui} onDismiss={vi.fn()} onStart={onStart}
+      usage={{ limits: true, daily: use(5, 5, true) }} />);
+    await typeRequest();
+    expect(screen.getByText(/Today's spend limit is reached\. It resets at midnight Eastern time\./)).toBeTruthy();
+    expect(start().disabled).toBe(true);
+    const box = document.querySelector("textarea[aria-label='Request']") as HTMLTextAreaElement;
+    await act(async () => { fireEvent.keyDown(box, { key: "Enter", keyCode: 13, ctrlKey: true }); });
+    expect(onStart).not.toHaveBeenCalled();
+  });
+});

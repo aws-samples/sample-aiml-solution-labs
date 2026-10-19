@@ -46,7 +46,7 @@ export const CONSOLE_FEATURES: Item[] = [
 
 /** A build's own app: what the framework does for a run. */
 export const APP_FEATURES: Item[] = [
-  { title: "Review gates",
+  { title: "HITL gates",
     body: "A stage can pause for you to approve, revise or deny. Revise sends your note back to the agent and re-runs just that agent. A gate can also decide by rule or after a timeout." },
   { title: "Runs that wait",
     body: "A paused run is saved. Close the tab and come back later; it is still waiting at its gate." },
@@ -150,7 +150,7 @@ export function AboutPanel({ workflow, heading, console: isConsole = false }: {
               { label: "Agents", value: String(facts.ids.length) },
               { label: "Placement", value: placementText },
               {
-                label: "Review gates",
+                label: "HITL gates",
                 // A gate on a single-agent step has no gateName, so it is named by the
                 // agent it guards.
                 value: facts.gates.length

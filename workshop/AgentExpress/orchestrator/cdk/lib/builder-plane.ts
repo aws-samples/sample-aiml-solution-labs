@@ -29,7 +29,9 @@ import {
   aws_logs as logs,
   aws_s3 as s3,
   aws_s3_assets as s3assets,
+  custom_resources as cr,
 } from "aws-cdk-lib";
+import { boundaryEnforcementStatements, buildGuardrailEnv } from "./hardening";
 
 /** Every build's resources are named `ax_xxxxxxxx` (bff/buildstore.py AGENT_PREFIX). */
 export const BUILD_AGENT_PREFIX = "ax_";
@@ -63,8 +65,11 @@ export const DEPLOY_POLICY_CHUNK = 7;
  * the 6,144-character limit of one managed policy, so it is split by statement count.
  * tests/test_builder_plane.py checks every chunk stays under the limit.
  */
-export function deployPolicyChunks(orchRoot: string): any[][] {
-  const doc = JSON.parse(fs.readFileSync(path.join(orchRoot, "terraform", "deploy-role-policy.json"), "utf8"));
+export function deployPolicyChunks(orchRoot: string, rolePath = "/"): any[][] {
+  // Its role ARNs name roles at "/": with a role path they live under that path instead.
+  // Mirrors local.deploy_policy in terraform/builder.tf.
+  const doc = JSON.parse(fs.readFileSync(path.join(orchRoot, "terraform", "deploy-role-policy.json"), "utf8")
+    .split(":role/").join(`:role${rolePath}`));
   const chunks: any[][] = [];
   for (let i = 0; i < doc.Statement.length; i += DEPLOY_POLICY_CHUNK) {
     chunks.push(doc.Statement.slice(i, i + DEPLOY_POLICY_CHUNK));
@@ -83,6 +88,17 @@ export interface BuilderPlaneProps {
   logRetention: logs.RetentionDays;
   /** The stack's data key (DataKey): the builds table and the deploy project use it. */
   dataKey: kms.IKey;
+  /** Leave the builds table deletion-protected when the stack is destroyed, so a destroy
+   *  stops at the table and you clear the protection yourself. Default false: destroy
+   *  clears it just before deleting the table. `-c keepBuildsTableProtected=true`.
+   *  Mirrors var.keep_builds_table_protected in terraform/builder.tf. */
+  keepTableProtected?: boolean;
+  /** Organisation guardrails (lib/hardening.ts): passed on to every build, and the boundary
+   *  required of every role the deploy role creates. Unset by default. */
+  permissionsBoundaryArn?: string;
+  iamRolePath?: string;
+  /** This console's LiteLLM proxy and key (lib/litellm.ts), passed on to every build. */
+  litellmEnv?: Record<string, string>;
 }
 
 export class BuilderPlane extends Construct {
@@ -109,8 +125,9 @@ export class BuilderPlane extends Construct {
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       // Every build, its versions, shares and the console's audit log live here, so no
-      // account clean-up tool or stray DeleteTable may take it: turn this off on purpose
-      // before destroying the console. Mirrors aws_dynamodb_table.builds.
+      // account clean-up tool or stray DeleteTable may take it. A destroy of this stack
+      // clears it at the last moment (BuildsTableUnprotect, below) unless
+      // keepTableProtected is set. Mirrors aws_dynamodb_table.builds.
       deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
@@ -120,6 +137,36 @@ export class BuilderPlane extends Construct {
       sortKey: { name: "updated", type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
+
+    // Clears the table's deletion protection when the stack is destroyed, so `cdk destroy`
+    // finishes instead of stopping at the table. A delete-only custom resource: it does
+    // nothing on create or update, and runs `UpdateTable` when CloudFormation deletes it.
+    // It depends on the table, so CloudFormation deletes it FIRST.
+    //
+    // It is always in the template and carries the flag as DATA. Were it omitted when
+    // keepTableProtected is set, turning the flag on would delete the resource, and
+    // deleting it runs the call: the opposite of what the flag asks for. With the flag on,
+    // the call sets protection to true, which leaves the table as it is.
+    const unprotect = new cr.AwsCustomResource(this, "BuildsTableUnprotect", {
+      logGroup: new logs.LogGroup(this, "BuildsTableUnprotectLogGroup", {
+        retention: props.logRetention,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+      onDelete: {
+        service: "DynamoDB",
+        action: "updateTable",
+        parameters: {
+          TableName: this.table.tableName,
+          DeletionProtectionEnabled: props.keepTableProtected === true,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of(`${agentName}-builds-unprotect`),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({ actions: ["dynamodb:UpdateTable"], resources: [this.table.tableArn] }),
+      ]),
+      installLatestAwsSdk: false,
+    });
+    unprotect.node.addDependency(this.table);
 
     // Name generated: `agentcore-<agentName>-builds-<account>-<region>` would not fit
     // in 63 characters for the default agentName.
@@ -159,6 +206,12 @@ export class BuilderPlane extends Construct {
         TERRAFORM_VERSION: { value: TERRAFORM_VERSION },
         SECRETS_PREFIX: { value: this.secretsPrefix },
         CONSOLE_NAME: { value: agentName },
+        // The organisation's boundary and role path, for every build's roles.
+        ...Object.fromEntries(Object.entries(buildGuardrailEnv({
+          permissionsBoundaryArn: props.permissionsBoundaryArn ?? "", iamRolePath: props.iamRolePath ?? "/",
+        })).map(([k, v]) => [k, { value: v }])),
+        // This console's LiteLLM proxy and key, for every build's litellm/ agents.
+        ...Object.fromEntries(Object.entries(props.litellmEnv ?? {}).map(([k, v]) => [k, { value: v }])),
       },
       timeout: cdk.Duration.hours(2),
       logging: {
@@ -178,6 +231,17 @@ export class BuilderPlane extends Construct {
     role.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ["s3:ListBucketVersions", "s3:DeleteObjectVersion"],
       resources: [this.bucket.bucketArn, `${this.bucket.bucketArn}/*`],
+    }));
+    // A CDK build's destroy that a late CloudFront log delivery failed: the runner empties
+    // that build's UI logs bucket and destroys again (deployer/runner.py
+    // empty_late_log_buckets). Only buckets named after a build's stack.
+    role.addToPrincipalPolicy(new iam.PolicyStatement({
+      sid: "LateLogBuckets",
+      actions: ["s3:ListBucketVersions", "s3:DeleteObject", "s3:DeleteObjectVersion"],
+      resources: [
+        `arn:aws:s3:::ax-*-stack-uilogsbucket*`,
+        `arn:aws:s3:::ax-*-stack-uilogsbucket*/*`,
+      ],
     }));
     // After a destroy, the runner deletes the log groups neither tool owns (AgentCore's
     // runtime logs, CDK provider Lambdas), matched by the build's unique ax_ id.
@@ -236,7 +300,9 @@ export class BuilderPlane extends Construct {
     // SAMPLE: ReadOnlyAccess reads every service in the account. For production, replace
     // it with a read policy covering only the services your workflows deploy.
     role.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName("ReadOnlyAccess"));
-    deployPolicyChunks(props.orchRoot).forEach((statements, i) => {
+    // With a boundary set: roles only with it on them (lib/hardening.ts).
+    boundaryEnforcementStatements(props.permissionsBoundaryArn ?? "").forEach((st) => role.addToPrincipalPolicy(st));
+    deployPolicyChunks(props.orchRoot, props.iamRolePath ?? "/").forEach((statements, i) => {
       role.addManagedPolicy(new iam.ManagedPolicy(this, `TerraformDeploy${i}`, {
         managedPolicyName: `AgentExpressDeploy-${agentName}-${i}`,
         document: iam.PolicyDocument.fromJson({ Version: "2012-10-17", Statement: statements }),
@@ -246,10 +312,10 @@ export class BuilderPlane extends Construct {
 
   /** Knowledge-base documents are uploaded from the browser straight to this bucket
    *  (a presigned POST), so it must accept a POST from the console's origin. */
-  allowUploadsFrom(origin: string): void {
+  allowUploadsFrom(...origins: string[]): void {
     this.bucket.addCorsRule({
       allowedMethods: [s3.HttpMethods.POST],
-      allowedOrigins: [origin],
+      allowedOrigins: origins,
       allowedHeaders: ["*"],
       maxAge: 3000,
     });

@@ -62,6 +62,9 @@ resource "aws_iam_role" "a2a_lambda" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "a2a_lambda" {

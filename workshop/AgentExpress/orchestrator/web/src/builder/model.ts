@@ -13,6 +13,7 @@
 
 import { toolsOf } from "../lib/tools";
 import { FRAMEWORK_VERSION, defaults } from "./meta";
+import type { Suite } from "./suiteSpec";
 
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 export type Entry = Record<string, Json>;
@@ -58,6 +59,9 @@ export interface Project {
    *  requirements.txt, any other *.py it imports, and events.json (test events, which
    *  are not deployed). Kept beside the workflow like prompts, and exported with it. */
   toolCode?: Record<string, ToolFiles>;
+  /** The build's test suites (suites.ts): saved requests with checks on the run, kept and
+   *  exported with the build. Not part of what deploys. */
+  suites?: Suite[];
 }
 
 export type ToolFiles = Record<string, string>;
@@ -369,6 +373,53 @@ export function addAgent(project: Project, name: string): { project: Project; id
   return { project: next, id };
 }
 
+/** What a step with no model does (runtime "task", app/common/task_agent.py). */
+export type TaskKind = "tool" | "code" | "extract" | "output";
+export const TASK_KINDS: { kind: TaskKind; label: string; name: string; description: string }[] = [
+  { kind: "tool", label: "Tool", name: "Call a tool", description: "calls one tool, no model" },
+  { kind: "code", label: "Code", name: "Run code", description: "runs a script in a sandbox" },
+  { kind: "extract", label: "Extract", name: "Read a document", description: "text, tables and fields from PDFs and images" },
+  { kind: "output", label: "Output", name: "Write a file", description: "CSV, JSON, Markdown or text from earlier steps" },
+];
+/** "Task · Code", for the canvas and the run graph. */
+export function taskLabel(kind: unknown): string {
+  const k = TASK_KINDS.find((t) => t.kind === kind);
+  return `Task · ${k ? k.label : "step"}`;
+}
+export const STARTER_SCRIPT = [
+  "import json",
+  "",
+  "# The request, earlier steps' outputs and the run's files are in in/.",
+  "request = open(\"in/request.txt\").read()",
+  "outputs = json.load(open(\"in/outputs.json\"))",
+  "",
+  "# Files written to out/ are kept with the run. What you print is this step's output",
+  "# (read as data when it is JSON).",
+  "print(json.dumps({\"steps\": sorted(outputs), \"request\": request[:200]}))",
+  "",
+].join("\n");
+/** A task step entry of `kind`, ready to run where it can be (a tool step needs a tool).
+ *  With no kind, a generic step whose kind is still to be picked (`task: {}`): the
+ *  validators refuse it until it is, so it never deploys as a guess. */
+export function newTaskEntry(kind: TaskKind | undefined, wf: Workflow): Entry {
+  const name = TASK_KINDS.find((t) => t.kind === kind)?.name ?? "New step";
+  const firstTool = Object.keys(wf.tools ?? {})[0];
+  const task: Entry = kind === "tool"
+    ? { kind, ...(firstTool ? { tool: firstTool } : {}), arguments: { query: "{{request}}" } }
+    : kind === "code" ? { kind, language: "python", code: STARTER_SCRIPT }
+      : kind === "output" ? { kind, format: "csv" } : kind ? { kind } : {};
+  return {
+    name, runtime: "task", produces: `${idFromName(name).replace(/_/g, "-")}-output`,
+    ...(kind === "extract" ? { attachments: true } : {}), task,
+  };
+}
+export function addTask(project: Project, kind?: TaskKind): { project: Project; id: string } {
+  const entry = newTaskEntry(kind, project.workflow);
+  const id = uniqueKey(idFromName(String(entry.name)), Object.keys(project.workflow.agents));
+  const next = clone(project);
+  next.workflow.agents[id] = entry;
+  return { project: next, id };
+}
 export function updateEntry(project: Project, kind: "agents" | "tools", id: string, entry: Entry): Project {
   const next = clone(project);
   next.workflow[kind][id] = entry;
@@ -433,6 +484,8 @@ export function addTool(project: Project, name: string, type: string): { project
     entry.call = "run";
   }
   if (type === "openapi") entry.schemaS3Uri = "s3://";
+  // What the Gateway role may call for it is part of the tool: empty until listed.
+  if (type === "smithy") { entry.schemaS3Uri = "s3://"; entry.allow = { actions: [], resources: [] }; }
   if (type === "apigateway") {
     entry.restApiId = "";
     entry.stage = "prod";
@@ -532,6 +585,8 @@ export interface Bundle {
   workflow: Workflow;
   prompts: Record<string, AgentPrompt>;
   toolCode?: Record<string, ToolFiles>;
+  /** Test suites; `scaffold.py apply` does not read them. */
+  suites?: Suite[];
 }
 
 /** What `scaffold.py apply` reads. Prompts only for agents that still exist, code only
@@ -548,6 +603,7 @@ export function toBundle(project: Project, now = new Date()): Bundle {
     project: { id: project.id, name: project.name, exportedAt: now.toISOString() },
     workflow: project.workflow, prompts,
     ...(Object.keys(toolCode).length ? { toolCode } : {}),
+    ...(project.suites?.length ? { suites: project.suites } : {}),
   };
 }
 
@@ -582,6 +638,7 @@ export function fromFile(text: string, fallbackName: string, now = new Date()): 
     prompts: isBundle ? ((obj.prompts as Record<string, AgentPrompt>) ?? {}) : {},
     ...(isBundle && obj.toolCode && typeof obj.toolCode === "object"
       ? { toolCode: obj.toolCode as Record<string, ToolFiles> } : {}),
+    ...(isBundle && Array.isArray(obj.suites) && obj.suites.length ? { suites: obj.suites as Suite[] } : {}),
   });
 }
 
@@ -613,7 +670,8 @@ export function replaceWorkflow(project: Project, text: string, now = new Date()
   const code = Object.fromEntries(Object.entries({ ...(project.toolCode ?? {}), ...(got.toolCode ?? {}) })
     .filter(([k]) => coded.includes(k)));
   return { ...project, workflow: got.workflow, prompts: { ...kept, ...got.prompts },
-    ...(Object.keys(code).length ? { toolCode: code } : { toolCode: undefined }) };
+    ...(Object.keys(code).length ? { toolCode: code } : { toolCode: undefined }),
+    ...(got.suites ? { suites: got.suites } : {}) };
 }
 
 // ---------------------------------------------------------------------------

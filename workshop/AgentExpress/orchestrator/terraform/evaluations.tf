@@ -19,36 +19,36 @@ locals {
     [
       {
         semantic_memory_strategy = {
-          name       = "insights"
-          namespaces = ["insights/{actorId}"]
+          name                = "insights"
+          namespace_templates = ["/insights/{actorId}/"]
         }
       },
       {
         # Summarization is inherently per-session, so AgentCore REQUIRES {sessionId}
         # in its namespace (unlike semantic, which is actor-scoped and cross-session).
         summary_memory_strategy = {
-          name       = "summary"
-          namespaces = ["summary/{actorId}/{sessionId}"]
+          name                = "summary"
+          namespace_templates = ["/summary/{actorId}/{sessionId}/"]
         }
       },
     ],
     contains(local.memory_named, "userPreference") ? [{
       user_preference_memory_strategy = {
-        name       = "preferences"
-        namespaces = ["preferences/{actorId}"]
+        name                = "preferences"
+        namespace_templates = ["/preferences/{actorId}/"]
       }
     }] : [],
     contains(local.memory_named, "episodic") ? [{
       episodic_memory_strategy = {
         name                     = "episodes"
-        namespaces               = ["episodes/{actorId}/{sessionId}"]
-        reflection_configuration = { namespaces = ["episodes/{actorId}"] }
+        namespace_templates      = ["/episodes/{actorId}/{sessionId}/"]
+        reflection_configuration = { namespace_templates = ["/episodes/{actorId}/"] }
       }
     }] : [],
     [for id, c in local.memory_customs : {
       custom_memory_strategy = {
-        name       = substr("custom_${id}", 0, 48)
-        namespaces = ["custom-${id}/{actorId}"]
+        name                = substr("custom_${id}", 0, 48)
+        namespace_templates = ["/custom-${id}/{actorId}/"]
         configuration = {
           summary_override = c.base == "summary" ? {
             consolidation = { append_to_prompt = c.instructions, model_id = try(local.regional_model[c.model], local.memory_default_model) }
@@ -72,11 +72,11 @@ locals {
   # ones the semantic memory uses, so recall reads them the same way (context.py).
   named_memories = local.workflow_plane ? try(local.workflow_def.memories, {}) : {}
   named_memory_strategies = { for n, m in local.named_memories : n => concat(
-    contains(m.strategies, "semantic") ? [{ semantic_memory_strategy = { name = "insights", namespaces = ["insights/{actorId}"] } }] : [],
-    contains(m.strategies, "summary") ? [{ summary_memory_strategy = { name = "summary", namespaces = ["summary/{actorId}/{sessionId}"] } }] : [],
-    contains(m.strategies, "userPreference") ? [{ user_preference_memory_strategy = { name = "preferences", namespaces = ["preferences/{actorId}"] } }] : [],
+    contains(m.strategies, "semantic") ? [{ semantic_memory_strategy = { name = "insights", namespace_templates = ["/insights/{actorId}/"] } }] : [],
+    contains(m.strategies, "summary") ? [{ summary_memory_strategy = { name = "summary", namespace_templates = ["/summary/{actorId}/{sessionId}/"] } }] : [],
+    contains(m.strategies, "userPreference") ? [{ user_preference_memory_strategy = { name = "preferences", namespace_templates = ["/preferences/{actorId}/"] } }] : [],
     contains(m.strategies, "episodic") ? [{ episodic_memory_strategy = {
-      name = "episodes", namespaces = ["episodes/{actorId}/{sessionId}"], reflection_configuration = { namespaces = ["episodes/{actorId}"] }
+      name = "episodes", namespace_templates = ["/episodes/{actorId}/{sessionId}/"], reflection_configuration = { namespace_templates = ["/episodes/{actorId}/"] }
     } }] : [],
   ) }
   memories_env      = jsonencode({ for n, m in awscc_bedrockagentcore_memory.named : n => m.memory_id })
@@ -125,6 +125,9 @@ resource "aws_iam_role" "memory" {
       Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "memory" {

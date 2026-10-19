@@ -138,7 +138,7 @@ function TriggerForm({ name, t, onChange, onRemove }: {
               options={[{ value: "owner", label: "The build's owner" }, { value: "service", label: "The trigger (service)" }]}
               onChange={({ detail }) => set("runAs", detail.selectedOption.value === "owner" ? undefined : detail.selectedOption.value)} />
           </FormField>
-          <FormField label="Review gates" description="Approve every gate automatically for runs this trigger starts (logged).">
+          <FormField label="HITL gates" description="Approve every gate automatically for runs this trigger starts (logged).">
             <Checkbox checked={t.gates === "auto"} onChange={({ detail }) => set("gates", detail.checked ? "auto" : undefined)}>
               Approve automatically</Checkbox>
           </FormField>

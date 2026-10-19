@@ -2,13 +2,17 @@
   "$comment": "FRAMEWORK VOCABULARY — the closed value sets workflow.json is validated against. NOT a file a customer edits: workflow.json is yours, this is the framework's. It exists because every one of these lists used to be written out two or three times — once in Python, once in cdk/lib/*.ts and once in terraform/*.tf — so adding a value meant finding all the copies, and a copy that got missed rejected a config the other planes accepted. All three planes read THIS file now: app/orchestrator/registry.py and bff/authz.py via json, cdk/lib/vocabulary.ts via require, terraform/tools.tf via jsondecode(file(...)). cdk/test/parity.test.ts asserts they read it rather than that three copies happen to agree.",
 
   "runtimes": {
-    "$comment": "An agent's `runtime`: where the step runs. Closed by what the framework can place — a fourth value needs framework code by definition.",
-    "values": ["main", "dedicated", "a2a"]
+    "$comment": "An agent's `runtime`: where the step runs. Closed by what the framework can place — a new value needs framework code by definition. \"task\" is a step with no model: it calls a tool, runs code, reads a document or writes a file (its `task` block, app/common/task_agent.py), in the orchestrator's own runtime. \"harness\" is an agent with no code: a managed AgentCore Harness built from its `instructions` and model (app/common/harness_agent.py), which the orchestrator invokes with InvokeHarness.",
+    "values": ["main", "dedicated", "a2a", "task", "harness"]
   },
 
   "toolTypes": {
     "$comment": "A `tools` entry's `type`. Each is a different kind of Gateway target with its own infrastructure, so the set is closed by what the framework can provision. To reach anything else, put it behind a Lambda and use type \"lambda\" with \"lambdaArn\".",
-    "values": ["kb", "websearch", "mcp", "openapi", "lambda", "apigateway"]
+    "values": ["kb", "websearch", "mcp", "openapi", "lambda", "apigateway", "smithy"]
+  },
+  "smithyDeniedServices": {
+    "$comment": "IAM service prefixes a type=\"smithy\" tool's `allow` may not name. Its grants go to the build's Gateway role, which every tool shares, so a Smithy model of one of these would let a build change who may do what (iam, sts, organizations, account, sso, identitystore), run code (lambda, cloudformation), or read keys and secrets (kms, secretsmanager, bedrock-agentcore, which holds the build's token vault).",
+    "values": ["iam", "sts", "organizations", "account", "sso", "identitystore", "kms", "secretsmanager", "bedrock-agentcore", "lambda", "cloudformation"]
   },
 
   "toolSchemaPropertyTypes": {
@@ -50,10 +54,10 @@
   },
 
   "builtinEvaluators": {
-    "$comment": "AgentCore Evaluations' built-in evaluators, by level. This framework scores one agent's run (a trace), so the SESSION and TOOL_CALL ones are listed but refused until their spans are emitted (unsupported).",
-    "values": ["Builtin.Coherence", "Builtin.Conciseness", "Builtin.Correctness", "Builtin.Faithfulness", "Builtin.GoalSuccessRate", "Builtin.Harmfulness", "Builtin.Helpfulness", "Builtin.InstructionFollowing", "Builtin.Refusal", "Builtin.ResponseRelevance", "Builtin.Stereotyping", "Builtin.ToolParameterAccuracy", "Builtin.ToolSelectionAccuracy"],
-    "unsupported": ["Builtin.GoalSuccessRate", "Builtin.ToolParameterAccuracy", "Builtin.ToolSelectionAccuracy"],
-    "levels": {"Builtin.GoalSuccessRate": "SESSION", "Builtin.ToolParameterAccuracy": "TOOL_CALL", "Builtin.ToolSelectionAccuracy": "TOOL_CALL"},
+    "$comment": "AgentCore Evaluations' built-in evaluators, by level. This framework scores one agent's run (a trace), so the SESSION and TOOL_CALL ones are listed but refused until their spans are emitted (unsupported). The skill evaluators score each SKILL.md load (TOOL_CALL) and the trajectory ones compare a session's tool calls with expected ground truth (SESSION): https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/skill-evaluators.html and ground-truth-evaluations.html.",
+    "values": ["Builtin.Coherence", "Builtin.Conciseness", "Builtin.Correctness", "Builtin.Faithfulness", "Builtin.GoalSuccessRate", "Builtin.Harmfulness", "Builtin.Helpfulness", "Builtin.InstructionFollowing", "Builtin.Refusal", "Builtin.ResponseRelevance", "Builtin.SkillInstructionFollowing", "Builtin.SkillSelectionAccuracy", "Builtin.Stereotyping", "Builtin.ToolParameterAccuracy", "Builtin.ToolSelectionAccuracy", "Builtin.TrajectoryAnyOrderMatch", "Builtin.TrajectoryExactOrderMatch", "Builtin.TrajectoryInOrderMatch"],
+    "unsupported": ["Builtin.GoalSuccessRate", "Builtin.SkillInstructionFollowing", "Builtin.SkillSelectionAccuracy", "Builtin.ToolParameterAccuracy", "Builtin.ToolSelectionAccuracy", "Builtin.TrajectoryAnyOrderMatch", "Builtin.TrajectoryExactOrderMatch", "Builtin.TrajectoryInOrderMatch"],
+    "levels": {"Builtin.GoalSuccessRate": "SESSION", "Builtin.SkillInstructionFollowing": "TOOL_CALL", "Builtin.SkillSelectionAccuracy": "TOOL_CALL", "Builtin.ToolParameterAccuracy": "TOOL_CALL", "Builtin.ToolSelectionAccuracy": "TOOL_CALL", "Builtin.TrajectoryAnyOrderMatch": "SESSION", "Builtin.TrajectoryExactOrderMatch": "SESSION", "Builtin.TrajectoryInOrderMatch": "SESSION"},
     "customPlaceholders": "\n\nContext: {context}\nResponse to score: {assistant_turn}",
     "customScale": [
       {"value": 1, "label": "Very good", "definition": "Fully meets the criteria."},
@@ -122,8 +126,8 @@
   },
 
   "authorizationActions": {
-    "$comment": "The actions authorization.actions may gate. Each one is checked in bff/handler.py (_forbidden(<name>) or authz.permitted(<name>)); a name nothing checks would read as a restriction and gate nothing. audit (everyone's activity) and admin (read every user's builds and runs, destroy any build) are CLOSED unless granted; insights (which spans every user's runs) is closed unless granted whenever any action is restricted.",
-    "values": ["start", "decision", "rerun", "cancel", "evaluate", "insights", "delete", "deploy", "destroy", "audit", "admin"]
+    "$comment": "The actions authorization.actions may gate. Each one is checked in bff/handler.py (_forbidden(<name>) or authz.permitted(<name>)); a name nothing checks would read as a restriction and gate nothing. audit (everyone's activity), admin (read every user's builds and runs, destroy any build) and override (pick the run's models on Start run, orchestrator.models.overrides) are CLOSED unless granted; insights (which spans every user's runs) is closed unless granted whenever any action is restricted.",
+    "values": ["start", "decision", "rerun", "cancel", "evaluate", "insights", "delete", "deploy", "destroy", "audit", "admin", "override"]
   },
 
   "inferenceProfileGeos": {
@@ -168,10 +172,214 @@
     "$comment": "How a `type: \"kb\"` tool matches an agent's `corpus` against the metadata attribute named by `corpusKey`. DELIBERATELY ONLY SINGLE-VALUE OPERATORS: the corpus an agent may read is enforced by the generated Cedar permit, which is a scalar value match (`[\"reference\"].contains(context.input.filter)`). A list-valued operator like `in` would make the agent-supplied argument a list, which that permit cannot express - so the boundary would silently weaken to \"has a filter at all\". Multi-condition narrowing belongs in the tool's target-level `filter`, which the agent cannot influence.",
     "values": ["equals", "notEquals", "startsWith", "stringContains"]
   },
+  "kbChunkingStrategies": {
+    "$comment": "How a `type: \"kb\"` tool's documents are split into chunks (`chunking.strategy`). Closed to the strategies Bedrock's ChunkingConfiguration accepts; `api` is the value sent to Bedrock, `params` the settings each one requires (in this order, which is also the order the data source name digest uses), and `ranges` the [min, max] Bedrock enforces on each (null: no maximum). Leaving `chunking` out keeps Bedrock's default chunking (about 300 tokens). Chunking cannot be changed in place, so changing it REPLACES the data source: both IaC paths name it from a digest so the replacement just works. https://docs.aws.amazon.com/bedrock/latest/userguide/kb-chunking.html",
+    "values": ["fixedSize", "hierarchical", "semantic", "none"],
+    "api": {"fixedSize": "FIXED_SIZE", "hierarchical": "HIERARCHICAL", "semantic": "SEMANTIC", "none": "NONE"},
+    "params": {
+      "fixedSize": ["maxTokens", "overlapPercentage"],
+      "hierarchical": ["parentMaxTokens", "childMaxTokens", "overlapTokens"],
+      "semantic": ["maxTokens", "bufferSize", "breakpointPercentileThreshold"],
+      "none": []
+    },
+    "ranges": {
+      "maxTokens": [1, 8192],
+      "overlapPercentage": [1, 99],
+      "parentMaxTokens": [1, 8192],
+      "childMaxTokens": [1, 8192],
+      "overlapTokens": [1, null],
+      "bufferSize": [0, 1],
+      "breakpointPercentileThreshold": [50, 99]
+    }
+  },
+  "kbVectorStores": {
+    "$comment": "Where a `type: \"kb\"` tool's Knowledge Base keeps its vectors (`vectorStore.type`), when it is a store YOU already have. Leaving `vectorStore` out keeps today's behaviour: the framework creates an S3 Vectors bucket and index. With it, the framework creates no store: it creates the Knowledge Base pointed at yours, grants the Knowledge Base role the access AWS documents for that store (on exactly the resource named), and ingests into it. Closed to the storage types Bedrock's StorageConfiguration accepts. `api` is the value sent to Bedrock; `required` / `optional` list each store's settings in order (also the order of the Knowledge Base name digest, since the storage configuration cannot be changed in place); `patterns` are the shapes Bedrock's API model gives each setting, anchored and RE2-safe (no repeat count over 1000, so Terraform's regex() accepts them; ARNs must carry their account, because they go into an IAM grant); `columnPattern` applies to Aurora's column names. Redis Enterprise Cloud is not offered: CloudFormation's AWS::Bedrock::KnowledgeBase cannot express it, so it would deploy with Terraform only. https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html",
+    "values": ["opensearchServerless", "opensearchManaged", "aurora", "neptuneAnalytics", "pinecone", "mongodbAtlas"],
+    "api": {
+      "opensearchServerless": "OPENSEARCH_SERVERLESS",
+      "opensearchManaged": "OPENSEARCH_MANAGED_CLUSTER",
+      "aurora": "RDS",
+      "neptuneAnalytics": "NEPTUNE_ANALYTICS",
+      "pinecone": "PINECONE",
+      "mongodbAtlas": "MONGO_DB_ATLAS"
+    },
+    "required": {
+      "opensearchServerless": ["collectionArn", "indexName", "vectorField", "textField", "metadataField"],
+      "opensearchManaged": ["domainArn", "domainEndpoint", "indexName", "vectorField", "textField", "metadataField"],
+      "aurora": ["resourceArn", "credentialsSecretArn", "databaseName", "tableName", "primaryKeyField", "vectorField", "textField", "metadataField"],
+      "neptuneAnalytics": ["graphArn", "graphModel", "textField", "metadataField"],
+      "pinecone": ["connectionString", "credentialsSecretArn", "textField", "metadataField"],
+      "mongodbAtlas": ["endpoint", "credentialsSecretArn", "databaseName", "collectionName", "indexName", "vectorField", "textField", "metadataField"]
+    },
+    "optional": {
+      "opensearchServerless": [],
+      "opensearchManaged": [],
+      "aurora": ["customMetadataField"],
+      "neptuneAnalytics": [],
+      "pinecone": ["namespace"],
+      "mongodbAtlas": ["endpointServiceName", "textIndexName"]
+    },
+    "patterns": {
+      "collectionArn": "^arn:aws:aoss:[a-z]{2}(-gov)?-[a-z]+-[0-9]:[0-9]{12}:collection/[a-z0-9-]{3,32}$",
+      "domainArn": "^arn:aws(-cn|-us-gov|-iso)?:es:[a-z]{2}(-gov)?-[a-z]+-[0-9]:[0-9]{12}:domain/[a-z][a-z0-9-]{3,28}$",
+      "domainEndpoint": "^https://\\S+$",
+      "resourceArn": "^arn:aws(-cn|-us-gov)?:rds:[a-z0-9-]+:[0-9]{12}:cluster:[a-zA-Z0-9-]{1,63}$",
+      "credentialsSecretArn": "^arn:aws(-cn|-us-gov)?:secretsmanager:[a-z0-9-]{1,20}:[0-9]{12}:secret:[a-zA-Z0-9!/_+=.@-]{1,512}$",
+      "graphArn": "^arn:aws(-cn|-us-gov)?:neptune-graph:[a-z0-9-]+:[0-9]{12}:graph/g-[a-zA-Z0-9]{10}$",
+      "graphModel": "^[a-z0-9-]+(\\.[a-z0-9-]+)+(:[0-9]+)?$",
+      "databaseName": "^[a-zA-Z0-9_-]{1,63}$",
+      "tableName": "^[a-zA-Z0-9_.-]{1,63}$",
+      "collectionName": "^\\S{1,63}$",
+      "indexName": "^\\S+$",
+      "connectionString": "^\\S+$",
+      "endpoint": "^\\S+$",
+      "endpointServiceName": "^\\S{1,255}$",
+      "namespace": "^\\S+$",
+      "textIndexName": "^\\S+$",
+      "vectorField": "^\\S+$",
+      "textField": "^\\S+$",
+      "metadataField": "^\\S+$",
+      "primaryKeyField": "^[a-zA-Z0-9_-]{1,63}$",
+      "customMetadataField": "^[a-zA-Z0-9_-]{1,63}$"
+    },
+    "columnPattern": "^[a-zA-Z0-9_-]{1,63}$"
+  },
+  "kbDataSources": {
+    "$comment": "Where a `type: \"kb\"` tool's documents come from when they are not files in S3 (`dataSource.type`): a web crawl, or a Confluence, SharePoint or Salesforce site. AWS supports these four connectors only on an OpenSearch Serverless vector store, so `dataSource` needs `vectorStore.type: \"opensearchServerless\"`; AWS also stops accepting NEW connectors of these types on customer-managed knowledge bases from September 30, 2026 (existing ones keep syncing). Re-synced on every deploy, like `s3Uri`. `api` is the value sent to Bedrock; `required` / `optional` list each connector's settings; `settings` gives each setting's shape, from Bedrock's API model (type string, int, list, enum or filters; `values` maps an enum to Bedrock's value). Credentials are a Secrets Manager secret, by ARN; the Knowledge Base role may read that secret only (and, for Confluence OAuth, write it back: Bedrock refreshes the token). The web crawler takes no credentials. https://docs.aws.amazon.com/bedrock/latest/userguide/data-source-connectors.html",
+    "values": [
+      "web",
+      "confluence",
+      "sharepoint",
+      "salesforce"
+    ],
+    "api": {
+      "web": "WEB",
+      "confluence": "CONFLUENCE",
+      "sharepoint": "SHAREPOINT",
+      "salesforce": "SALESFORCE"
+    },
+    "required": {
+      "web": [
+        "seedUrls"
+      ],
+      "confluence": [
+        "hostUrl",
+        "authType",
+        "credentialsSecretArn"
+      ],
+      "sharepoint": [
+        "domain",
+        "siteUrls",
+        "credentialsSecretArn"
+      ],
+      "salesforce": [
+        "hostUrl",
+        "credentialsSecretArn"
+      ]
+    },
+    "optional": {
+      "web": [
+        "scope",
+        "inclusionFilters",
+        "exclusionFilters",
+        "rateLimit",
+        "maxPages",
+        "userAgent"
+      ],
+      "confluence": [
+        "filters"
+      ],
+      "sharepoint": [
+        "tenantId",
+        "filters"
+      ],
+      "salesforce": [
+        "filters"
+      ]
+    },
+    "settings": {
+      "seedUrls": {
+        "type": "list",
+        "pattern": "^https?://[A-Za-z0-9]\\S*$",
+        "min": 1,
+        "max": 100
+      },
+      "scope": {
+        "type": "enum",
+        "values": {
+          "hostOnly": "HOST_ONLY",
+          "subdomains": "SUBDOMAINS"
+        }
+      },
+      "inclusionFilters": {
+        "type": "list",
+        "min": 1,
+        "max": 25
+      },
+      "exclusionFilters": {
+        "type": "list",
+        "min": 1,
+        "max": 25
+      },
+      "rateLimit": {
+        "type": "int",
+        "min": 1,
+        "max": 300
+      },
+      "maxPages": {
+        "type": "int",
+        "min": 1,
+        "max": 25000
+      },
+      "userAgent": {
+        "type": "string",
+        "pattern": "^.{15,40}$"
+      },
+      "hostUrl": {
+        "type": "string",
+        "pattern": "^https://[A-Za-z0-9]\\S*$"
+      },
+      "authType": {
+        "type": "enum",
+        "values": {
+          "basic": "BASIC",
+          "oauth2": "OAUTH2_CLIENT_CREDENTIALS"
+        }
+      },
+      "credentialsSecretArn": {
+        "type": "string",
+        "pattern": "^arn:aws(-cn|-us-gov)?:secretsmanager:[a-z0-9-]{1,20}:[0-9]{12}:secret:[a-zA-Z0-9!/_+=.@-]{1,512}$"
+      },
+      "domain": {
+        "type": "string",
+        "pattern": "^\\S{1,50}$"
+      },
+      "siteUrls": {
+        "type": "list",
+        "pattern": "^https://\\S+$",
+        "min": 1,
+        "max": 100
+      },
+      "tenantId": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "filters": {
+        "type": "filters",
+        "min": 1,
+        "max": 25
+      }
+    }
+  },
+  "kbParsingStrategies": {
+    "$comment": "How a `type: \"kb\"` tool's documents are read before chunking (`parsing.strategy`). Leaving `parsing` out keeps Bedrock's default parser (text only, no charge). `foundationModel` sends PDFs and images to a Bedrock model, which also reads tables and figures, at that model's token price. Bedrock Data Automation is deliberately NOT offered: AWS documents it as a preview in US West (Oregon) only. `api` is the value sent to Bedrock. https://docs.aws.amazon.com/bedrock/latest/userguide/kb-advanced-parsing.html",
+    "values": ["foundationModel"],
+    "api": {"foundationModel": "BEDROCK_FOUNDATION_MODEL"}
+  },
 
   "builtinLambdaSource": {
-    "$comment": "A `type: \"lambda\"` tool's `source`: the folder under orchestrator/app/tools/ whose code the framework zips and deploys. Closed to the one the repo ships, because a framework-deployed function needs an execution role config cannot express - the role that exists grants logs plus read-only on the PUBLIC AWS price list, which is right for that function and wrong for a connector that needs VPC config or a secret. Your own function is deployed by you and declared with `lambdaArn`; the framework only registers it as a Gateway target. NOTE this closes `source` for type=\"lambda\" ONLY, via `vocabularyFor` in app/keys.json. A type=\"openapi\" `source` is deliberately OPEN: the framework only uploads a file, which needs no permissions, so closing it would force a customer to edit this framework-owned file to add a schema of their own. That one is checked by whether app/tools/<source>/openapi.json exists.",
-    "values": ["pricing"]
+    "$comment": "A `type: \"lambda\"` tool's `source`: the folder under orchestrator/app/tools/ whose code the framework zips and deploys. Closed to the ones the repo ships, because a framework-deployed function needs an execution role config cannot express - each shipped function has a role written for it (pricing: logs plus read-only on the PUBLIC AWS price list; codeInterpreter: one AgentCore Code Interpreter sandbox; browser: sessions on the AWS-managed AgentCore Browser), which is wrong for a connector that needs VPC config or a secret. Your own function is deployed by you and declared with `lambdaArn`; the framework only registers it as a Gateway target. NOTE this closes `source` for type=\"lambda\" ONLY, via `vocabularyFor` in app/keys.json. A type=\"openapi\" `source` is deliberately OPEN: the framework only uploads a file, which needs no permissions, so closing it would force a customer to edit this framework-owned file to add a schema of their own. That one is checked by whether app/tools/<source>/openapi.json exists.",
+    "values": ["pricing", "codeInterpreter", "browser"]
   },
   "identityTypes": {
     "$comment": "What an identity (identities.<name>) holds: oauth2 = OAuth client credentials (a client id here, its secret in the build's secrets), from which the framework creates an AgentCore Identity OAuth2 credential provider; apikey = an API key (in the build's secrets), vaulted in an AgentCore Identity API-key provider. The two provider kinds AgentCore Identity has for machine-to-machine calls.",
@@ -228,5 +436,21 @@
   "interceptorContextSources": {
     "$comment": "Where the injectContext interceptor template takes an argument's value from (templates.injectContext.arguments): the run's session id, the calling agent's id, or the run's user, sent by the runtime as the x-ax-session / x-ax-agent / x-ax-user headers.",
     "values": ["session", "agent", "user"]
+  },
+  "taskKinds": {
+    "$comment": "What a runtime \"task\" step does (agents.<id>.task.kind), with no model call: tool = call one of the build's tools through the Gateway with arguments built from the run; code = run a script in the AgentCore Code Interpreter sandbox; extract = read text, tables and form fields from the run's PDFs and images with Amazon Textract; output = write a file from earlier steps' outputs. Each needs its own framework code (app/common/task_agent.py), so the set is closed.",
+    "values": ["tool", "code", "extract", "output"]
+  },
+  "taskLanguages": {
+    "$comment": "What a code step's script is written in (task.language): the Code Interpreter's ProgrammingLanguage values.",
+    "values": ["python", "javascript", "typescript"]
+  },
+  "taskOutputFormats": {
+    "$comment": "What an output step writes (task.format). Only what the standard library writes, so no new dependency: an Excel or PDF file is a code step's job.",
+    "values": ["csv", "json", "markdown", "txt"]
+  },
+  "taskExtractFeatures": {
+    "$comment": "What an extract step asks Textract for besides the text (task.features): the AnalyzeDocument FeatureTypes this framework turns into JSON.",
+    "values": ["TABLES", "FORMS"]
   }
 }

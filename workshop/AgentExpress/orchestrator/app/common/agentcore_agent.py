@@ -21,6 +21,7 @@ import os
 import boto3
 from botocore.config import Config
 
+from app.common import liveconfig, model_routing
 from app.common.base import Agent
 from app.common.config import RUNTIME_INVOKE
 from app.features.gateway import person
@@ -96,6 +97,13 @@ class AgentCoreRuntimeAgent(Agent):
             "otel_context": otel.carrier(),
             # The run's person, for tools that act as them (gateway/person.py).
             **({"user_token": person.token()} if person.token() else {}),
+            # The run's live config version, this agent's entry only (app/common/liveconfig.py),
+            # so the dedicated container runs the version the run started with.
+            **({liveconfig.STATE_KEY: live}
+               if (live := liveconfig.for_agent(ctx.state, self.id)) else {}),
+            # The run's model override, this agent's model only (app/common/model_routing.py).
+            **({model_routing.STATE_KEY: ov}
+               if (ov := model_routing.for_agent(ctx.state, self.id)) else {}),
         }
         # Session id must be >= 33 chars; make it deterministic per (session, agent).
         session = f"{ctx.session_id}-{self.id}".ljust(33, "0")[:33]

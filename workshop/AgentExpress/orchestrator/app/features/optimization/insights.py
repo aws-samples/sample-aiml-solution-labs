@@ -28,6 +28,13 @@ from app.common.config import INSIGHTS as CONFIG_INSIGHTS
 from app.common.config import REGION
 
 _INSIGHTS_TABLE = os.getenv("INSIGHTS_TABLE", "")
+#: AgentCore stopped accepting new batch (and recurring) Insights jobs on 16 October 2026
+#: while it redesigns Insights; earlier results stay readable through GetBatchEvaluation.
+#: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html
+#: So nothing here starts a job any more; get_latest() still serves the last findings.
+CREATION_ENDED = ("AWS stopped accepting new AgentCore Insights jobs on 16 October 2026 while it redesigns "
+                  "Insights. Findings from earlier runs are still shown. "
+                  "See https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html")
 _INSIGHTS_KEY = "latest"
 
 _INSIGHT_IDS = [
@@ -293,7 +300,16 @@ def _findings(resp: dict) -> dict:
 
 def run_batch(lookback_hours: int = _DEFAULT_LOOKBACK_HOURS, user: str = "") -> dict:
     """Start an insights batch evaluation over the app's recent runtime traces,
-    poll to completion, and store the findings. Returns a summary dict."""
+    poll to completion, and store the findings. Returns a summary dict.
+
+    AgentCore no longer creates Insights jobs (CREATION_ENDED): this returns that as the
+    error without calling StartBatchEvaluation, and leaves the stored findings as they are."""
+    return {"status": "error", "error": CREATION_ENDED}
+
+
+def _start_batch(lookback_hours: int = _DEFAULT_LOOKBACK_HOURS, user: str = "") -> dict:
+    """The StartBatchEvaluation path run_batch used before AgentCore stopped creating
+    Insights jobs, kept for when the redesigned Insights API is documented."""
     import uuid
     from datetime import datetime, timedelta
 

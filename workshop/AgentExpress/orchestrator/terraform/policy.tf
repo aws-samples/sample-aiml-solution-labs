@@ -91,6 +91,7 @@ resource "aws_bedrockagentcore_policy" "tool" {
     # this list exists to prevent reachable on a fresh single apply.
     aws_bedrockagentcore_gateway_target.lambda_fn,
     aws_bedrockagentcore_gateway_target.apigateway,
+    aws_bedrockagentcore_gateway_target.smithy,
   ]
 }
 
@@ -159,5 +160,6 @@ resource "aws_bedrockagentcore_policy" "custom" {
     aws_bedrockagentcore_gateway_target.openapi,
     aws_bedrockagentcore_gateway_target.lambda_fn,
     aws_bedrockagentcore_gateway_target.apigateway,
+    aws_bedrockagentcore_gateway_target.smithy,
   ]
 }

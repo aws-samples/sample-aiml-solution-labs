@@ -86,7 +86,44 @@ SIGN_IN_TF = {"okta": {"domain": "domain", "clientId": "client_id", "authorizati
               "entra": {"tenantId": "tenant_id", "clientId": "client_id"}}
 
 
-def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dict | None = None) -> list[str]:
+#: The shapes terraform/variables.tf accepts for the console's organisation guardrails.
+BOUNDARY_ARN = re.compile(r"^arn:aws[a-z-]*:iam::(aws|[0-9]{12}):policy/[A-Za-z0-9+=,.@_/-]{1,512}$")
+ROLE_PATH = re.compile(r"^/([A-Za-z0-9+=,.@_-]+/)*$")
+
+
+def guardrails(env: dict, target: Target | None = None) -> dict:
+    """The console's organisation guardrails, for a build (terraform/hardening.tf): the
+    permissions boundary and role path its roles get, or {} when the console sets neither.
+
+    A boundary is a managed policy in the roles' own account, so a build deployed into a
+    connected account names THAT account's policy of the same name: an organisation that
+    requires a boundary has it in every account. An AWS managed policy is the same everywhere."""
+    out: dict = {}
+    arn = str(env.get("PERMISSIONS_BOUNDARY_ARN") or "")
+    if arn:
+        if not BOUNDARY_ARN.match(arn):
+            raise StepFailed(f"PERMISSIONS_BOUNDARY_ARN is not a managed policy ARN: {arn!r}")
+        if target and ":iam::aws:" not in arn:
+            arn = re.sub(r"^(arn:[^:]+:iam::)[0-9]{12}:", rf"\g<1>{target.account}:", arn)
+        out["permissionsBoundaryArn"] = arn
+    path = str(env.get("IAM_ROLE_PATH") or "/")
+    if path != "/":
+        if len(path) > 512 or not ROLE_PATH.match(path):
+            raise StepFailed(f"IAM_ROLE_PATH is not an IAM path: {path!r}")
+        out["iamRolePath"] = path
+    return out
+
+
+def litellm_settings(env: dict) -> dict:
+    """The console's LiteLLM proxy and key secret (terraform/litellm.tf), for a build's
+    litellm/<model> agents, or {} when the console sets neither. CDK and Terraform check them
+    again at synth and plan."""
+    base, arn = str(env.get("LITELLM_BASE_URL") or ""), str(env.get("LITELLM_KEY_SECRET_ARN") or "")
+    return {"litellmBaseUrl": base, "litellmKeySecretArn": arn} if base and arn else {}
+
+
+def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dict | None = None,
+                guard: dict | None = None) -> list[str]:
     """The same flags a developer deploys with, pinned for a build stack.
     Who signs its users in (authorization.signIn): a Cognito pool of its own by default,
     or the build's Okta, Auth0 or Entra ID app — the agents' Gateway client is then made
@@ -109,11 +146,13 @@ def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dic
         flags += ["-c", f"runOwnerEmail={tags['agentexpress:owner']}"]
     if tags:
         flags += ["-c", f"tags={json.dumps(tags, separators=(',', ':'))}"]
+    # The console's permissions boundary and role path (guardrails()), on this build's roles.
+    flags += [x for k, v in (guard or {}).items() for x in ("-c", f"{k}={v}")]
     return flags
 
 
 def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None,
-            signin: dict | None = None) -> dict:
+            signin: dict | None = None, guard: dict | None = None) -> dict:
     """terraform/variables.tf values, mirroring cdk_context()."""
     s = signin or {"provider": "cognito"}
     provider = s["provider"]
@@ -125,6 +164,14 @@ def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None,
         out["tags"] = tags
     if "@" in str((tags or {}).get("agentexpress:owner") or ""):
         out["run_owner_email"] = tags["agentexpress:owner"]
+    guard = guard or {}
+    if guard.get("permissionsBoundaryArn"):
+        out["iam_permissions_boundary_arn"] = guard["permissionsBoundaryArn"]
+    if guard.get("iamRolePath"):
+        out["iam_role_path"] = guard["iamRolePath"]
+    if guard.get("litellmBaseUrl"):
+        out["litellm_base_url"] = guard["litellmBaseUrl"]
+        out["litellm_key_secret_arn"] = guard["litellmKeySecretArn"]
     return out
 
 
@@ -499,13 +546,59 @@ def clear_failed_create(session, stack: str, region: str, attempts: int = 4,
                        "and deploy again")
 
 
+#: The one bucket a CDK build's destroy can find refilled: CloudFront's access logs
+#: (UiLogsBucket in lib/orchestrator-stack.ts). Its physical name starts with the stack's.
+LATE_LOG_BUCKET = "UiLogsBucket"
+
+
+def empty_late_log_buckets(session, stack: str, region: str) -> list[str]:
+    """After a failed `cdk destroy`: empty the stack's CloudFront logs bucket when that is
+    what failed, and return its name ([] when it was not, so the failure is reported as is).
+
+    Seen live: CloudFront delivers an access-log file minutes after a request, so one lands
+    after the stack's auto-delete emptied the bucket and before CloudFormation deleted it,
+    and the destroy ends DELETE_FAILED, "The bucket you tried to delete is not empty".
+    Running the destroy again cannot help (the stack empties a bucket only once), and the
+    person destroying from the console has no way to empty it. Only that bucket is touched:
+    it must be the stack's UiLogsBucket resource, DELETE_FAILED as not empty, and its name
+    must start with the stack's, which nothing else in the account carries."""
+    cfn = session.client("cloudformation", region_name=region)
+    try:
+        resources = cfn.describe_stack_resources(StackName=stack)["StackResources"]
+    except Exception as e:  # noqa: BLE001 - nothing to look at: report the destroy's own failure
+        print(f"runner: could not read {stack}'s resources: {type(e).__name__}: {e}")
+        return []
+    s3 = session.client("s3", region_name=region)
+    emptied = []
+    for r in resources:
+        name = str(r.get("PhysicalResourceId") or "")
+        # CloudFormation names it <stack>-uilogsbucket<hash>-<suffix>, lowercased.
+        if (r.get("ResourceType") != "AWS::S3::Bucket" or r.get("ResourceStatus") != "DELETE_FAILED"
+                or not str(r.get("LogicalResourceId") or "").startswith(LATE_LOG_BUCKET)
+                or "not empty" not in str(r.get("ResourceStatusReason") or "")
+                or not name.startswith(f"{stack.lower()}-{LATE_LOG_BUCKET.lower()}")):
+            continue
+        n = 0
+        for page in s3.get_paginator("list_object_versions").paginate(Bucket=name):
+            objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                       for v in (page.get("Versions") or []) + (page.get("DeleteMarkers") or [])]
+            if objects:
+                s3.delete_objects(Bucket=name, Delete={"Objects": objects, "Quiet": True})
+                n += len(objects)
+        print(f"runner: {stack}'s CloudFront logs bucket {name} was refilled after it was emptied "
+              f"(a late access-log delivery): deleted {n} object(s), destroying again", flush=True)
+        emptied.append(name)
+    return emptied
+
+
 def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
-               tags: dict | None = None, target: Target | None = None, signin: dict | None = None) -> dict:
+               tags: dict | None = None, target: Target | None = None, signin: dict | None = None,
+               guard: dict | None = None) -> dict:
     env = env or {}
     cdk = ROOT / "cdk"
     run(["npm", "ci", "--no-fund", "--no-audit"], cdk, env)
     stack = buildstore.stack_name(agent)
-    flags = cdk_context(agent, gateway, tags, signin)
+    flags = cdk_context(agent, gateway, tags, signin, guard)
     if target and action == "deploy":
         # A connected account may never have run CDK. Bootstrapping is idempotent, but
         # it is a stack update every time, so only when the account has none.
@@ -515,7 +608,15 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
             run(["npx", "cdk", "bootstrap", f"aws://{target.account}/{target.region}",
                  *flags], cdk, env)
     if action == "destroy":
-        run(["npx", "cdk", "destroy", stack, "--force", *flags], cdk, env)
+        destroy = ["npx", "cdk", "destroy", stack, "--force", *flags]
+        try:
+            run(destroy, cdk, env)
+        except StepFailed:
+            region = target.region if target else env.get("AWS_REGION") or "us-east-1"
+            session = target.session() if target else local_session()
+            if not empty_late_log_buckets(session, stack, region):
+                raise
+            run(destroy, cdk, env)          # once more; a second failure is reported as is
         return {}
     clear_failed_create(target.session() if target else local_session(), stack,
                         target.region if target else env.get("AWS_REGION") or "us-east-1")
@@ -527,7 +628,8 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
 
 def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
                      sub_env: dict | None = None, tags: dict | None = None,
-                     target: Target | None = None, signin: dict | None = None) -> dict:
+                     target: Target | None = None, signin: dict | None = None,
+                     guard: dict | None = None) -> dict:
     sub_env = sub_env or {}
     tf_dir = ROOT / "terraform"
     tf = ensure_terraform(env.get("TERRAFORM_VERSION") or "1.15.8")
@@ -545,7 +647,7 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
         + ('    profile = "console"\n' if target else "")
         + '  }\n}\n')
     (tf_dir / "builder.auto.tfvars.json").write_text(
-        json.dumps(tf_vars(agent, gateway, region, tags, signin), indent=2))
+        json.dumps(tf_vars(agent, gateway, region, tags, signin, guard), indent=2))
     run([tf, "init", "-input=false", "-no-color"], tf_dir, sub_env)
     # The UI build FIRST, on its own — for a destroy too. The files it emits are ui.tf's
     # `for_each`, and whenever the build step is not in state (a stack's first apply, or
@@ -704,8 +806,12 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
 
         buildstore.set_job(table, bid, phase="destroying" if action == "destroy" else "deploying")
         signin = sign_in(bundle.get("workflow") or {})
-        outputs = (deploy_cdk(action, agent, gateway, sub_env, tags, target, signin) if tool == "cdk"
-                   else deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin))
+        # The console's boundary and role path, if it sets them, on this build's roles too.
+        guard = guardrails(env, target)
+        # And its LiteLLM proxy, for the build's litellm/<model> agents (cdk_context passes it on).
+        guard.update(litellm_settings(env))
+        outputs = (deploy_cdk(action, agent, gateway, sub_env, tags, target, signin, guard) if tool == "cdk"
+                   else deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin, guard))
 
         if action == "destroy":
             delete_leftover_logs(agent, session=remote())

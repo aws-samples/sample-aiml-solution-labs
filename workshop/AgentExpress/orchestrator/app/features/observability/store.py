@@ -18,6 +18,7 @@ import os
 import time
 from decimal import Decimal
 
+from app.features.observability import spend
 from app.features.observability.records import CallRecord
 
 TELEMETRY_TABLE = os.getenv("TELEMETRY_TABLE", "")
@@ -96,3 +97,6 @@ def put(record: CallRecord) -> None:
         _tbl().put_item(Item=_clean(_with_ttl(_fit(record.to_item()))))
     except Exception as e:  # noqa: BLE001 - telemetry must never break a run
         print(f"[observability] telemetry write failed: {type(e).__name__}: {e}")
+        return
+    # The user's running total for `orchestrator.limits.userDailyUsd` (a no-op without one).
+    spend.add(record.user, record.date, record.cost_usd, table=_tbl())

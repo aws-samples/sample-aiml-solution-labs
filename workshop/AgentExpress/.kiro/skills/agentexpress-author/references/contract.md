@@ -7,8 +7,8 @@ subset an author needs.
 ## Top-level keys
 
 `$schema`, `$comment`, `orchestrator`, `ui`, `guardrail`, `authorization`, `tools`,
-`agents`, `steps`, and the named maps `guardrails`, `memories`, `evaluators`, `identities`
-and `policies` (below).
+`agents`, `steps`, `skills`, and the named maps `guardrails`, `memories`, `evaluators`,
+`identities` and `policies` (below).
 
 ## Tool types and their keys
 
@@ -17,12 +17,13 @@ the rest.
 
 | type | Keys used | Reaches |
 |---|---|---|
-| `kb` | `corpora`, `maxResults`, `policy`, or `s3Uri` / `knowledgeBaseId` | A Bedrock Knowledge Base. Each top-level folder in `kb_docs/` is a corpus |
+| `kb` | `corpora`, `maxResults`, `policy`, or `s3Uri` / `knowledgeBaseId`; optional `chunking`, `parsing`, `rerank`, `vectorStore` (your own store), `dataSource` (web, Confluence, SharePoint, Salesforce; needs an OpenSearch Serverless store) | A Bedrock Knowledge Base. Each top-level folder in `kb_docs/` is a corpus |
 | `websearch` | `maxResults`, `domains` | Web search (us-east-1, eu-west-1, ap-northeast-1 only) |
 | `mcp` | `endpoint`, `call`, `arg`, `args`, `listingMode`, `auth` / `identity` | An existing MCP server |
 | `openapi` | `schema` (inline), `schemaS3Uri` or `source`, `call`, `arg`, `auth` / `identity`, `rowFields`, `rowPath` | A REST API |
 | `lambda` | `code` **or** `lambdaArn` **or** `source`, `call`, `arg`, `toolSchema`, `rowFields` | Anything else |
-| `apigateway` | `restApiId`, `stage`, `toolFilters`, `auth` (`sigv4`/`apikey`) / `identity` | An API Gateway REST API |
+| `apigateway` | `restApiId`, `stage`, `toolFilters`, `toolOverrides`, `auth` (`sigv4`/`apikey`) / `identity` | An API Gateway REST API |
+| `smithy` | `schemaS3Uri` or `schema` (the Smithy JSON model), `allow` (`actions` on `resources`) | An AWS service API (RestJson services only), signed by the Gateway role |
 
 Any tool may also take `policies` (names in the build's `policies` map) and `identity` (a name in
 `identities`, instead of `auth` + `oauth`). `auth` is `none`, `apikey` (sent as `X-API-Key`),
@@ -31,6 +32,10 @@ using the app (`mcp` and `openapi` only): `user` (each person connects their own
 with a `tokenUrl` also set `oauth.authorizationUrl`) and `obo` (the person's sign-in exchanged;
 `oauth.audience` optional; not with Entra ID sign-in). An `mcp` tool in either must list its
 tools in `toolSchema`.
+
+`approval` (`"person"` or `"event"`, with optional `approvalTimeout`) on an `mcp`, `openapi`,
+`lambda`, `apigateway` or `smithy` tool makes every call wait for a person. **Tools → Add a
+connector** in the console writes a ready-made `openapi` tool (Salesforce, Slack, Jira, GitHub, …).
 
 `skills` (optional, top level): `name -> {description, instructions, files?}`: know-how written
 as a SKILL.md body, with text reference files. An agent lists the ones it may use in `skills`;
@@ -67,12 +72,12 @@ deploys it (Python 3.12) with a role of logs plus only the grants listed:
 grant only reaches a resource tagged `agentexpress:code-tools=true` (a bucket also needs S3 ABAC on). Nothing
 else (no managed policies).
 
-### `lambda`: `lambdaArn` for a function you already own, `source` only for the shipped demo
+### `lambda`: `lambdaArn` for a function you already own, `source` only for shipped functions
 
 **`source` is CLOSED for `type: "lambda"`.** It is enumerated by `builtinLambdaSource` in
-`app/vocabulary.json` and permits only the one folder the repo ships, because a
-framework-deployed function needs an execution role that config cannot express — the role
-that exists grants logs plus read-only on the public AWS price list, which is right for
+`app/vocabulary.json`: `pricing` (the sample's price list tool), `codeInterpreter` (the agent
+runs code it wrote in the AgentCore Code Interpreter) and `browser` (open a public page in the
+AgentCore Browser; optional `allowDomains`). Each has a fixed execution role, which is right for
 that function and wrong for a connector needing VPC config or a secret.
 
 So for a customer's own Lambda tool:
@@ -168,8 +173,10 @@ contain underscores.
 }
 ```
 
-`runtime` is `main` (in-process), `dedicated` (its own AgentCore Runtime), or `a2a` (an
-agent you do not operate — no folder is written).
+`runtime` is `main` (in-process), `dedicated` (its own AgentCore Runtime), `a2a` (an agent you
+do not operate), `task` (a step with no model: `task: {"kind": "tool" | "code" | "extract" |
+"output", ...}`) or `harness` (an AgentCore Harness: `instructions`, optional `harness` settings,
+or `harness.arn` for an existing one). Only `main` and `dedicated` get a folder.
 
 Other agent keys an author uses:
 
@@ -183,11 +190,16 @@ Other agent keys an author uses:
 | `output: "image"`, `image` | An image agent: its model writes a brief that Stability renders (us-west-2 today; outside the US needs `image.allowCrossRegion: true`) |
 | `vision: {"from": ["<agent>"], "maxImages": n}` | Read the images an earlier agent produced; needs a model that takes images |
 | `attachments: true` | Read the files a run is started with (uploads, or `s3://` paths inside `orchestrator.attachments.s3`); not on `a2a` agents |
+| `maxToolCalls` | With `toolMode: "model"`, the most tool calls (default 6) |
+| `skills` | Names in the top-level `skills` map |
+| `askPerson` | `true` or `{"maxQuestions", "timeout"}`: the agent may ask a person mid-step (`main`, `toolMode: "model"`) |
+| `models` | `{"route": [{"model", "inputTokensOver" or "matches"}], "fallback": [up to 3 models]}` (`main`, `dedicated`) |
+| `model: "litellm/<name>"` | A non-Bedrock model through the deployment's LiteLLM proxy |
 
 `agentcore` holds `guardrails` (`input`/`output`, `use`: a named guardrail), `memory`
-(`use`: a named memory), `evaluations` (`enabled`, `auto`, `evaluators`:
-`Builtin.<name>` or `Custom.<name>`) and `identity.outbound` (identities the agent's code may
-fetch with `ctx.get_identity_token` / `ctx.get_api_key`).
+(`longTerm` strategies, `scope`, `custom`, or `use`: a named memory), `evaluations` (`enabled`,
+`auto`, `evaluators`: `Builtin.<name>` or `Custom.<name>`, `custom`) and `identity.outbound`
+(identities the agent's code may fetch with `ctx.get_identity_token` / `ctx.get_api_key`).
 
 ## Named blocks
 
@@ -224,6 +236,10 @@ Defined once, used by name:
   `prompt` with `{{placeholders}}` from the delivery, and that type's keys (`signature`;
   `expression`, `timezone`; `pattern`, `bus`; `bucket`, `prefix`; `queueArn`). `runAs` `owner` or
   `service` (with `approvers`), `gates` `inherit` or `auto`, `maxRunsPerHour`, `attachPayload`.
+- `orchestrator.limits` (`userDailyUsd`, `userRunsPerHour`, `monthlyUsd`), `liveConfig` (admins
+  change prompts and model settings without a redeploy), `models.overrides` (models an `override`
+  holder may pick per run), `files` (`retentionDays`; lets agents `ctx.save_file`) and
+  `attachments.s3`: all off unless set.
 - An entry that is `{"library": "<id>"}` is a shared item from the console's library: keep it
   as it is.
 
@@ -278,10 +294,11 @@ await ctx.retrieve(query, doc_type)                   Knowledge Base retrieval
 await ctx.memory_recall(query)                        long-term memory, scoped by subject
 await ctx.memory_store(content)
 await ctx.guardrail(text, source)                     explicit guardrail application
-await ctx.policy_check(action)                        Cedar check (fail-open, secondary)
+await ctx.policy_check(action)                        always True: Cedar is enforced at the Gateway on tool calls
 await ctx.get_identity_token(provider)                OAuth token from an identity
 await ctx.get_api_key(identity)                       API key from an identity
 await ctx.image(prompt, negative_prompt)              an image agent's render
+await ctx.save_file(name, data, content_type)         a run file (needs orchestrator.files)
 await ctx.log(msg)                                    a line on the run timeline
 await ctx.heartbeat(pct)                              progress for the graph
 ```
@@ -353,8 +370,9 @@ absent one.
 ## `authorization`
 
 Gates the mutating actions: `start`, `decision`, `rerun`, `cancel`, `evaluate`,
-`insights`, `delete`, and on a console `deploy`, `destroy`, `audit` and `admin` (the last two
-closed unless granted). `groupsClaim` names the JWT claim carrying groups — Cognito issues
+`insights`, `delete`, and on a console `deploy`, `destroy`, `audit`, `admin` and `override`
+(the last three closed unless granted). `signIn` picks a build's sign-in provider (Cognito by
+default, or Okta, Entra ID, Auth0). `groupsClaim` names the JWT claim carrying groups — Cognito issues
 `cognito:groups`; Auth0 needs a namespaced custom claim added by a post-login Action; Okta
 uses `groups` (a claim on its authorization server); Entra ID uses `roles` (app roles).
 

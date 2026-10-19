@@ -1,0 +1,98 @@
+/* The Flow tab's Story view (RunStory.tsx). Colours are Cloudscape design tokens, as in
+   flow.css, so it follows the theme. No colour carries meaning alone: every line says its
+   outcome in words. It fits the width: text wraps, nothing scrolls sideways. */
+.st { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.st ul, .st ol { list-style: none; margin: 0; padding: 0; }
+.st-totals {
+  display: flex; flex-wrap: wrap; gap: 6px 18px;
+  font-size: 13px; font-weight: 700;
+  color: var(--awsui-color-text-body-default, #000716);
+}
+.st-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.st-stages { display: flex; flex-direction: column; gap: 14px; }
+.st-stage {
+  border: 1px solid var(--awsui-color-border-divider-default, #e9ebed);
+  border-radius: var(--awsui-border-radius-container, 12px);
+  padding: 10px 12px;
+  background: var(--awsui-color-background-container-content, #fff);
+}
+.st-stage-head, .st-agent-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  min-height: 28px;
+}
+.st-stage-title { font-size: 15px; font-weight: 700; flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
+.st-dot {
+  width: 12px; height: 12px; border-radius: 6px; margin: 0 8px;
+  background: var(--awsui-color-border-control-default, #8c8c94);
+}
+.st-role {
+  margin-left: 8px; padding: 1px 8px;
+  font-size: 12px; font-weight: 400;
+  border: 1px solid var(--awsui-color-border-input-default, #c6c6cd);
+  border-radius: 10px;
+  color: var(--awsui-color-text-body-secondary, #424650);
+}
+.st-status {
+  display: inline-flex; align-items: center; gap: 6px; margin-left: auto;
+  font-size: 12px; font-weight: 700; white-space: nowrap;
+  color: var(--awsui-color-text-body-secondary, #424650);
+}
+.st-status-time { font-variant-numeric: tabular-nums; }
+.st-agents { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 0 18px; }
+/* The agent header is a real <button>, so it needs the browser's button look removed. */
+.st-agent-head, .st-line-btn {
+  box-sizing: border-box; width: 100%;
+  margin: 0; border: 0; background: transparent;
+  font: inherit; color: inherit; text-align: left;
+  cursor: pointer; border-radius: 6px;
+}
+.st-agent-head { padding: 3px 6px; }
+.st-name { font-weight: 700; flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
+.st-chevron { width: 12px; font-size: 12px; color: var(--awsui-color-text-status-inactive, #656871); }
+.st-agent-head .axs-badge { min-width: 24px; height: 24px; font-size: 12px; }
+.st-lines { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 0 34px; }
+.st-agents .st-lines { margin-left: 26px; }
+.st-line { border-left: 3px solid currentColor; border-radius: 3px; }
+.st-line-btn {
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px;
+  padding: 4px 8px;
+  color: var(--awsui-color-text-body-default, #000716);
+}
+.st-agent-head:hover, .st-line-btn:hover { background: var(--awsui-color-background-dropdown-item-hover, #f0fbff); }
+.st-agent-head:focus-visible, .st-line-btn:focus-visible {
+  outline: 2px solid var(--awsui-color-text-link-default, #0972d3); outline-offset: 1px;
+}
+.st-emoji { flex: 0 0 auto; width: 20px; text-align: center; }
+/* Long text wraps at word boundaries; a word longer than the line breaks rather than
+   being cut off, so nothing is hidden. */
+.st-text { flex: 1 1 16em; min-width: 0; overflow-wrap: break-word; }
+.st-meta {
+  flex: 0 0 auto; margin-left: auto;
+  font-size: 12px; font-variant-numeric: tabular-nums;
+  color: var(--awsui-color-text-body-secondary, #424650);
+}
+.st-version, .st-none {
+  padding: 4px 8px; font-size: 12px; font-weight: 700;
+  color: var(--awsui-color-text-status-info, #0972d3);
+}
+.st-none { font-weight: 400; color: var(--awsui-color-text-status-inactive, #656871); }
+.st-detail { margin: 4px 8px 6px 28px; }
+.st-tone-ok      { color: var(--awsui-color-text-status-success, #00802f); }
+.st-tone-failed,
+.st-tone-denied  { color: var(--awsui-color-text-status-error, #db0000); }
+.st-tone-blocked,
+.st-tone-waiting { color: var(--awsui-color-text-status-warning, #8d6605); }
+.st-tone-skipped { color: var(--awsui-color-text-status-inactive, #656871); }
+.st-tone-note    { color: var(--awsui-color-text-status-info, #0972d3); }
+/* A failure, denial or block stands out: tinted, and its words in the outcome colour. */
+.st-problem { background: rgba(219, 0, 0, 0.06); }
+.st-problem.st-tone-blocked { background: rgba(141, 102, 5, 0.08); }
+.st-problem .st-text { color: inherit; font-weight: 700; }
+/* The line the replay is at. */
+.st-current { background: rgba(9, 114, 211, 0.12); box-shadow: inset 0 0 0 2px rgba(9, 114, 211, 0.6); }
+@media (prefers-reduced-motion: no-preference) {
+  .st-line { transition: background-color 0.15s ease; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .st, .st * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

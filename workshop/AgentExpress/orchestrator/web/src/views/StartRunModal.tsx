@@ -11,6 +11,7 @@
  *  takes files — uploaded the moment they are picked — and says which S3 locations the
  *  request may name as s3:// paths, like the AgentExpress Assistant's chat. */
 
+import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import ExpandableSection from "@cloudscape-design/components/expandable-section";
@@ -26,8 +27,11 @@ import Textarea from "@cloudscape-design/components/textarea";
 import { useEffect, useState } from "react";
 
 import { uploadRunFile } from "../api";
+import { describeUsage } from "../lib/limits";
+import { overrideOf } from "../lib/modelOverride";
 import { REQUEST_MAX } from "../lib/request";
-import type { RunAttach, UiConfig } from "../types";
+import type { LimitsUsage, ModelOverride, RunAttach, UiConfig } from "../types";
+import { ModelOverrideFields } from "./ModelOverrideFields";
 
 /** A file picked for the run, uploaded as soon as it is picked. */
 interface Picked { file: File; key?: string; name?: string; loading: boolean; error?: string }
@@ -42,14 +46,21 @@ export interface RunTarget {
 
 export function StartRunModal({
   visible, ui, onDismiss, onStart, targets = [], target = "", onTarget, attach = null,
-  upload = uploadRunFile,
+  upload = uploadRunFile, usage = null, overrideModels = [], overrideAgents = [],
 }: {
   visible: boolean;
   ui: UiConfig;
   onDismiss: () => void;
-  onStart: (topic: string, subject: string, files: { key: string; name: string }[]) => Promise<void>;
+  onStart: (topic: string, subject: string, files: { key: string; name: string }[],
+    override?: ModelOverride) => Promise<void>;
+  /** The models a person granted `override` may pick (orchestrator.models.overrides); []: none. */
+  overrideModels?: string[];
+  /** The agents whose model may be picked one by one. */
+  overrideAgents?: { id: string; name: string }[];
   /** What the run may bring (the workflow view's `attachments`); null: no files. */
   attach?: RunAttach | null;
+  /** The caller's use of `orchestrator.limits` (GET /api/limits); null: none set, or not read. */
+  usage?: LimitsUsage | null;
   /** How a picked file is uploaded (a test stands in for S3). */
   upload?: (file: File) => Promise<{ key: string; name: string }>;
   /** More than one means there are deployed builds to choose between. */
@@ -61,6 +72,8 @@ export function StartRunModal({
   const [subject, setSubject] = useState("");
   const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState<Picked[]>([]);
+  const [allModel, setAllModel] = useState("");
+  const [agentModels, setAgentModels] = useState<Record<string, string>>({});
   const uploading = files.some((f) => f.loading);
   const failed = files.some((f) => f.error);
   const pick = (picked: File[]) => {
@@ -80,16 +93,23 @@ export function StartRunModal({
   useEffect(() => {
     if (visible) setTopic(ui.defaultTopic ?? "");
     if (visible) setFiles([]);
+    if (visible) { setAllModel(""); setAgentModels({}); }
   }, [visible, ui.defaultTopic, target]);
   const picked = targets.find((t) => t.value === target) ?? targets[0];
   const tooLong = topic.length > REQUEST_MAX;
-  const ready = Boolean(topic.trim()) && !tooLong && !busy && !uploading && !failed;
+  const notice = describeUsage(usage);
+  // A reached limit is the server's to enforce; this only saves the user a refused request.
+  const ready = Boolean(topic.trim()) && !tooLong && !busy && !uploading && !failed && !notice?.blocked;
 
   const start = async () => {
     if (!ready) return;
     setBusy(true);
     const uploaded = files.filter((f) => f.key).map((f) => ({ key: f.key!, name: f.name ?? f.file.name }));
-    try { await onStart(topic.trim(), subject.trim(), uploaded); } finally { setBusy(false); }
+    const override = overrideModels.length ? overrideOf(allModel, agentModels) : undefined;
+    try {
+      await (override ? onStart(topic.trim(), subject.trim(), uploaded, override)
+        : onStart(topic.trim(), subject.trim(), uploaded));
+    } finally { setBusy(false); }
   };
 
   return (
@@ -111,6 +131,14 @@ export function StartRunModal({
     >
       <Form variant="embedded">
         <SpaceBetween size="l">
+          {notice ? (
+            <SpaceBetween size="xs">
+              {notice.alert ? <Alert type={notice.alert.type}>{notice.alert.text}</Alert> : null}
+              <Box variant="small" color="text-body-secondary" data-testid="limits-usage">
+                {notice.lines.join(" · ")}
+              </Box>
+            </SpaceBetween>
+          ) : null}
           {targets.length > 1 && picked ? (
             <FormField label="Workflow" description="Which deployed workflow runs this request.">
               <Select
@@ -183,6 +211,13 @@ export function StartRunModal({
                 onChange={({ detail }) => setSubject(detail.value)}
               />
             </FormField>
+            {overrideModels.length ? (
+              <Box margin={{ top: "l" }}>
+                <ModelOverrideFields models={overrideModels} agents={overrideAgents}
+                  all={allModel} perAgent={agentModels} onAll={setAllModel}
+                  onAgent={(id, m) => setAgentModels((cur) => ({ ...cur, [id]: m }))} />
+              </Box>
+            ) : null}
           </ExpandableSection>
         </SpaceBetween>
       </Form>

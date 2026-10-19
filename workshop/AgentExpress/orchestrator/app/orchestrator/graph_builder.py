@@ -27,7 +27,7 @@ import itertools
 
 from langgraph.graph import END, START, StateGraph
 
-from app.common import branching, gates
+from app.common import asks, branching, gates
 from app.common.config import STEPS
 from app.common.config import step_agents as agents_in
 from app.common.state import State
@@ -201,6 +201,7 @@ def build_graph(checkpointer=None):
         checkpointer = MemorySaver()
 
     validate_branches()
+    asks.validate()  # askPerson / approvalTimeout, named at start like a gate's spec
     registry = load_agents()
     g = StateGraph(State)
 

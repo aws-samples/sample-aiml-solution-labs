@@ -23,6 +23,7 @@ import {
   aws_lambda_event_sources as lambdaEventSources,
   custom_resources as cr,
   aws_bedrockagentcore as agentcore,
+  aws_certificatemanager as acm,
 } from "aws-cdk-lib";
 import { CfnStage, HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
@@ -30,9 +31,20 @@ import { HttpJwtAuthorizer } from "aws-cdk-lib/aws-apigatewayv2-authorizers";
 import {
   CustomPolicy, GATEWAY_PLACEHOLDER, INTERCEPTION_POINTS, InterceptionPoint, InterceptorSpec, ToolPlane, ToolSpec, ToolType,
 } from "./tool-plane";
+import { A2aIdentity, addA2aServer } from "./a2a-server";
 import { BuilderPlane } from "./builder-plane";
+import * as hardening from "./hardening";
 import * as vocab from "./vocabulary";
 import { keyDefault, keyDefaultFor } from "./defaults";
+import { filesRetentionDays, listRunFilesStatement, saveRunFilesStatement } from "./run-files";
+import { otlpExport } from "./otlp-export";
+import { litellmProxy } from "./litellm";
+import { validateSmithy } from "./smithy-tool";
+import { validateKbIngestion } from "./kb-ingestion";
+import { validateKbVectorStore } from "./kb-vector-store";
+import { validateKbConnector } from "./kb-data-source";
+import { taskStatements } from "./tasks";
+import { harnessAgents } from "./harness";
 
 /** Regions where the managed AgentCore Web Search connector is available. */
 /**
@@ -44,6 +56,13 @@ import { keyDefault, keyDefaultFor } from "./defaults";
  * was verified to orphan eight such groups. Keep in step with
  * terraform/variables.tf var.log_retention_days.
  */
+/** The reserved telemetry rows that hold a user's running total and run count for
+ *  orchestrator.limits (bff/limits.py, features/observability/spend.py). The IAM that touches
+ *  them is limited to keys that start with this. Mirrors PREFIX in those modules. */
+const LIMIT_COUNTER_KEYS = "_limit#*";
+/** The reserved telemetry rows that hold orchestrator.liveConfig's versions and pointer
+ *  (bff/liveconfig.py). Mirrors PREFIX there and terraform/liveconfig.tf. */
+const LIVE_CONFIG_KEYS = "_liveconfig#*";
 const LOG_RETENTION = logs.RetentionDays.ONE_YEAR;
 
 /** The BFF API's $default stage throttle (requests/s, burst). Keep in step with
@@ -75,8 +94,8 @@ const TOOL_TYPES = vocab.TOOL_TYPES as ToolType[];
 const SCHEMA_TYPES = vocab.TOOL_SCHEMA_PROPERTY_TYPES;
 const LAMBDA_ARN =
   /^arn:aws[a-z-]*:lambda:[a-z0-9-]+:[0-9]{12}:function:[a-zA-Z0-9-_]+(:[a-zA-Z0-9-_$]+)?$/;
-/** The only value `source` accepts — see the ToolSpec docs for why it is not open. */
-const BUILTIN_LAMBDA_SOURCE = vocab.BUILTIN_LAMBDA_SOURCE;
+/** The only values `source` accepts for a lambda tool — see the ToolSpec docs for why it is not open. */
+const BUILTIN_LAMBDA_SOURCES = vocab.BUILTIN_LAMBDA_SOURCES;
 
 /**
  * Validate the `tools` block from workflow.json, mirroring the preconditions in
@@ -151,7 +170,7 @@ export function validateTools(
         throw new Error(`workflow.json tools.${name}.kmsKeyArn must be a KMS key ARN, arn:aws:kms:<region>:<account>:key/<id>.`);
       }
       if (t.knowledgeBaseId) {
-        const extra = ["s3Uri", "kmsKeyArn", "embeddingModel", "dimensions"].filter((k) => t[k] !== undefined);
+        const extra = ["s3Uri", "kmsKeyArn", "embeddingModel", "dimensions", "dataSource", "vectorStore", "chunking", "parsing"].filter((k) => t[k] !== undefined);
         if (extra.length) {
           throw new Error(
             `workflow.json tools.${name} uses an existing Knowledge Base (knowledgeBaseId), so ` +
@@ -161,6 +180,9 @@ export function validateTools(
       } else if (t.kmsKeyArn && !t.s3Uri) {
         throw new Error(`workflow.json tools.${name}.kmsKeyArn only applies with s3Uri: it decrypts that bucket.`);
       }
+      validateKbIngestion(name, t);
+      validateKbVectorStore(name, t);
+      validateKbConnector(name, t);
     }
     // --- type=apigateway ------------------------------------------------
     // Mirrors bff/validate_build.py and the apigateway preconditions in terraform/tools.tf.
@@ -197,6 +219,8 @@ export function validateTools(
         );
       }
     }
+    // --- type=smithy: its model and its grant (smithy-tool.ts) ---------------
+    if (t.type === "smithy") validateSmithy(name, t);
     // --- type=openapi ---------------------------------------------------
     // One of three keys has to say where the OpenAPI document is. Mirrors terraform/tools.tf.
     if (t.type === "openapi") {
@@ -260,15 +284,15 @@ export function validateTools(
       // `source` names a FOLDER UNDER app/tools/, and is deliberately NOT a general
       // "deploy any directory" feature: a framework-deployed function needs an execution
       // role config cannot express.
-      if (t.source && t.source !== BUILTIN_LAMBDA_SOURCE) {
+      if (t.source && !BUILTIN_LAMBDA_SOURCES.includes(t.source)) {
         throw new Error(
           `workflow.json tools.${name} has "source": ${JSON.stringify(t.source)}. ` +
-            `"source" names a folder under orchestrator/app/tools/, and the only one the ` +
-            `framework ships is "${BUILTIN_LAMBDA_SOURCE}" ` +
-            `(orchestrator/app/tools/${BUILTIN_LAMBDA_SOURCE}/). It is not a general ` +
-            `"deploy any directory" option: the execution role is fixed at logs plus ` +
-            `read-only on the PUBLIC AWS price list, which is right for that function and ` +
-            `wrong for a connector that needs VPC config or a secret. To use a function of ` +
+            `"source" names a folder under orchestrator/app/tools/, and the only ones the ` +
+            `framework ships are ${BUILTIN_LAMBDA_SOURCES.map((s) => `"${s}"`).join(" and ")} ` +
+            `(orchestrator/app/tools/<source>/). It is not a general ` +
+            `"deploy any directory" option: each shipped function has an execution role ` +
+            `written for it (read-only on the PUBLIC AWS price list; one Code Interpreter ` +
+            `sandbox; the AWS-managed AgentCore Browser), which is wrong for a connector that needs VPC config or a secret. To use a function of ` +
             `your own, deploy it yourself and set "lambdaArn" instead — the framework then ` +
             `registers it as a Gateway target and touches neither its code nor its role.`
         );
@@ -332,6 +356,22 @@ export function validateTools(
         );
       }
     }
+    // CloudFormation creates a web-search target at the connector's DEFAULT version
+    // (1.1.0), and cannot pin another: ConnectorSource has only ConnectorId. The domain
+    // include list and the published-date filters exist only from 1.2.0, so on this path
+    // they would do nothing; refuse them. Mirrors bff/builds.py cdk_websearch_refusal.
+    // https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-connector-versions.html
+    const needs120 = t.type === "websearch"
+      ? [t.domains?.include?.length ? "domains.include" : "", t.publishedFrom ? "publishedFrom" : "", t.publishedTo ? "publishedTo" : ""].filter(Boolean)
+      : [];
+    if (needs120.length) {
+      throw new Error(
+        `workflow.json tools.${name} sets ${needs120.join(", ")}, which need web-search connector 1.2.0. ` +
+          `CloudFormation creates the target at the default version (1.1.0) and cannot pin another ` +
+          `(AWS::BedrockAgentCore::GatewayTarget's connector source accepts only ConnectorId). ` +
+          `Deploy this stack with Terraform, which pins 1.2.0, or remove ${needs120.length > 1 ? "them" : "it"} (domains.exclude works on 1.1.0).`
+      );
+    }
     if (t.type === "websearch" && t.connectorVersion) {
       // Fail loudly rather than accept-and-ignore: CloudFormation's
       // ConnectorSourceProperty has only connectorId, so a version pin cannot be
@@ -339,7 +379,7 @@ export function validateTools(
       throw new Error(
         `workflow.json tools.${name} sets "connectorVersion", which CloudFormation cannot express ` +
           `(AWS::BedrockAgentCore::GatewayTarget's connector source accepts only connectorId). ` +
-          `Remove it to track the latest connector, or deploy this stack with Terraform, which does ` +
+          `Remove it (the target then gets the connector's default version), or deploy this stack with Terraform, which does ` +
           `support the pin.`
       );
     }
@@ -954,7 +994,7 @@ export function validateWorkflow(workflow: any, orchRoot: string, agentName: str
   const kbDir = path.join(orchRoot, "kb_docs");
   // Only for UPLOADED documents: with `s3Uri` or `knowledgeBaseId` the corpora are values
   // in the customer's own metadata, which cannot be checked from here.
-  const uploaded = kbEntry ? !kbEntry[1].s3Uri && !kbEntry[1].knowledgeBaseId : false;
+  const uploaded = kbEntry ? !kbEntry[1].s3Uri && !kbEntry[1].knowledgeBaseId && !kbEntry[1].dataSource : false;
   if (uploaded && corpora.length && fs.existsSync(kbDir)) {
     const entries = fs.readdirSync(kbDir, { withFileTypes: true });
     const folders = entries.filter((e) => e.isDirectory()).map((e) => e.name);
@@ -1113,11 +1153,18 @@ export function triggerPattern(spec: TriggerSpec): Record<string, unknown> {
   return spec.pattern ?? {};
 }
 
-/** Whether any review gate is answered by event, or times out (steps[].hitl). Mirrors
- *  local.gate_events / local.gate_timeouts in terraform/gates.tf. */
+/** Whether any review gate is answered by event, or times out (steps[].hitl), counting an
+ *  agent that asks a person mid-step (app/common/asks.py: a tool approved by event, an
+ *  askPerson / approvalTimeout that times out). Mirrors local.gate_events /
+ *  local.gate_timeouts in terraform/gates.tf. */
 export function gateSteps(workflow: any): { events: boolean; timeouts: boolean } {
   const hs = (workflow?.steps ?? []).map((s: any) => s?.hitl).filter((h: any) => h && typeof h === "object");
-  return { events: hs.some((h: any) => h.approval === "event"), timeouts: hs.some((h: any) => h.timeout && typeof h.timeout === "object") };
+  const tools: any[] = Object.values(workflow?.tools ?? {});
+  const agents: any[] = Object.values(workflow?.agents ?? {});
+  const askTimeouts = agents.some((a) => a?.askPerson && typeof a.askPerson === "object" && a.askPerson.timeout !== undefined)
+    || tools.some((t) => t?.approvalTimeout && typeof t.approvalTimeout === "object");
+  return { events: hs.some((h: any) => h.approval === "event") || tools.some((t) => t?.approval === "event"),
+    timeouts: hs.some((h: any) => h.timeout && typeof h.timeout === "object") || askTimeouts };
 }
 
 /** orchestrator.attachments.s3, trimmed of slashes. Mirrors local.run_files_s3. */
@@ -1151,7 +1198,9 @@ export function runFilesBffStatements(bucketArn: string, locations: string[]): i
  *  MemoryStrategies. semantic and summary always (as before); userPreference and
  *  episodic only when some agent names them, and one custom strategy per agent that
  *  defines `memory.custom` — each strategy is a model call per stored turn. Namespaces
- *  match app/common/context.py _namespace_for. Mirrors local.memory_strategies in
+ *  match app/common/context.py _namespace_for, as NamespaceTemplates in the form AgentCore
+ *  stores them, one slash at each end ("/insights/{actorId}/"); `Namespaces` is the legacy
+ *  field. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/specify-long-term-memory-organization.html Mirrors local.memory_strategies in
  *  terraform/main.tf. */
 export function memoryStrategiesFor(workflow: any, defaultModel: string, region?: string): { strategies: any[]; custom: boolean } {
   const agents = Object.entries<any>(workflow.agents ?? {});
@@ -1160,18 +1209,18 @@ export function memoryStrategiesFor(workflow: any, defaultModel: string, region?
     return Array.isArray(lt) ? lt : lt ? ["semantic"] : [];
   }));
   const strategies: any[] = [
-    { SemanticMemoryStrategy: { Name: "insights", Namespaces: ["insights/{actorId}"] } },
+    { SemanticMemoryStrategy: { Name: "insights", NamespaceTemplates: ["/insights/{actorId}/"] } },
     // Summarization is inherently per-session, so AgentCore REQUIRES
     // {sessionId} here (unlike semantic, which is actor-scoped).
-    { SummaryMemoryStrategy: { Name: "summary", Namespaces: ["summary/{actorId}/{sessionId}"] } },
+    { SummaryMemoryStrategy: { Name: "summary", NamespaceTemplates: ["/summary/{actorId}/{sessionId}/"] } },
   ];
   if (named.has("userPreference")) {
-    strategies.push({ UserPreferenceMemoryStrategy: { Name: "preferences", Namespaces: ["preferences/{actorId}"] } });
+    strategies.push({ UserPreferenceMemoryStrategy: { Name: "preferences", NamespaceTemplates: ["/preferences/{actorId}/"] } });
   }
   if (named.has("episodic")) {
     strategies.push({ EpisodicMemoryStrategy: {
-      Name: "episodes", Namespaces: ["episodes/{actorId}/{sessionId}"],
-      ReflectionConfiguration: { Namespaces: ["episodes/{actorId}"] } } });
+      Name: "episodes", NamespaceTemplates: ["/episodes/{actorId}/{sessionId}/"],
+      ReflectionConfiguration: { NamespaceTemplates: ["/episodes/{actorId}/"] } } });
   }
   const customs = agents.filter(([, a]) => a?.agentcore?.memory?.custom);
   for (const [id, a] of customs) {
@@ -1182,7 +1231,7 @@ export function memoryStrategiesFor(workflow: any, defaultModel: string, region?
       : c.base === "userPreference" ? { UserPreferenceOverride: { Extraction: step, Consolidation: step } }
       : { SemanticOverride: { Extraction: step, Consolidation: step } };
     strategies.push({ CustomMemoryStrategy: {
-      Name: `custom_${id}`.slice(0, 48), Namespaces: [`custom-${id}/{actorId}`], Configuration: override } });
+      Name: `custom_${id}`.slice(0, 48), NamespaceTemplates: [`/custom-${id}/{actorId}/`], Configuration: override } });
   }
   return { strategies, custom: customs.length > 0 };
 }
@@ -1335,6 +1384,11 @@ export interface OrchestratorStackProps extends cdk.StackProps {
    * `-c consoleMode=builder`. Mirrors var.console_mode in terraform/builder.tf.
    */
   consoleMode?: string;
+  /** Leave the builds table deletion-protected when this stack is destroyed, so a destroy
+   *  stops at the table. Default false: destroy clears the protection just before it
+   *  deletes the table. `-c keepBuildsTableProtected=true`. Mirrors
+   *  var.keep_builds_table_protected in terraform/builder.tf. */
+  keepBuildsTableProtected?: boolean;
   /** Buckets, or bucket/prefix, the AgentExpress Assistant may read files from when a
    *  message names an s3:// path. `-c designerS3Buckets=a,b/prefix`. Mirrors
    *  var.designer_s3_buckets in terraform/builder.tf. */
@@ -1347,6 +1401,35 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   /** The Assistant's reasoning effort: medium (the default) | low | high | model. Mirrors
    *  Terraform's designer_effort. */
   designerEffort?: string;
+  /** Serve this workflow over A2A (lib/a2a-server.ts): `-c exposeA2a=true`, the A2A callers'
+   *  identity without a created pool (`-c a2aIdentity`), and who decides their runs' gates
+   *  (`-c a2aApprovers`). Mirror Terraform's expose_a2a / a2a_identity / a2a_approvers. */
+  exposeA2a?: boolean;
+  a2aIdentity?: A2aIdentity;
+  a2aApprovers?: string[];
+
+  /** Also send the runtimes' spans to this OTLP/HTTP traces URL, with headers from the
+   *  Secrets Manager secret otlpHeadersSecretArn; content only with otlpIncludeContent.
+   *  Off by default. See lib/otlp-export.ts. Mirrors Terraform's otlp_* variables. */
+  otlpEndpoint?: string;
+  otlpHeadersSecretArn?: string;
+  otlpIncludeContent?: boolean;
+  /** Non-Bedrock models (`litellm/<model>`) through this LiteLLM proxy, with the virtual key
+   *  in the Secrets Manager secret litellmKeySecretArn. Off by default. See lib/litellm.ts.
+   *  Mirrors Terraform's litellm_* variables. */
+  litellmBaseUrl?: string;
+  litellmKeySecretArn?: string;
+
+  /** Organisation guardrails (lib/hardening.ts), all off by default: a permissions boundary
+   *  and a path for every role (`-c permissionsBoundaryArn`, `-c iamRolePath`), your own
+   *  host name on CloudFront (`-c customDomain`, `-c acmCertificateArn`), AWS WAF
+   *  (`-c enableWaf=true`, `-c wafRateLimit`). Mirrors terraform/hardening.tf. */
+  permissionsBoundaryArn?: string;
+  iamRolePath?: string;
+  customDomain?: string;
+  acmCertificateArn?: string;
+  enableWaf?: boolean;
+  wafRateLimit?: number;
 }
 
 // Repo layout: this file is orchestrator/cdk/lib/, so orchestrator/ is two levels up.
@@ -1391,6 +1474,8 @@ export class OrchestratorStack extends cdk.Stack {
     }
     const workflowPlane = consoleMode !== "builder";
     const enableGateway = props.enableGateway && workflowPlane;
+    // Checked here, before anything is made from them (lib/hardening.ts).
+    const guardrails = hardening.hardeningOf(props, cdk.Stack.of(this).region);
 
     // ---- workflow.json: the single source of truth for agents + topology ----
     // Overridable so the stack is a pure function of its props, like every other
@@ -1791,6 +1876,8 @@ export class OrchestratorStack extends cdk.Stack {
       statusTable: dynamodb.Table; eventsTable: dynamodb.Table; telemetryTable: dynamodb.Table;
       orchestratorArn: string; memoryId: string; imageUri: string;
       assetsBucket?: s3.Bucket; toolPlane?: ToolPlane;
+      // The long-term memories, for the memory inspector (never the checkpointer's).
+      longTerm: { semanticId: string; named: Record<string, string>; arns: string[] };
     } | undefined;
     if (workflowPlane) {
       // ---- Container image (ARM64) built from orchestrator/Dockerfile ----------
@@ -2004,14 +2091,15 @@ export class OrchestratorStack extends cdk.Stack {
       // awscc_bedrockagentcore_memory.named in terraform/evaluations.tf.
       const namedMemories: Record<string, string> = {};
       const namedMemoryArns: string[] = [];
+      const inspectedMemoryArns: string[] = [semanticMemoryArn];
       for (const [n, def] of Object.entries<any>(workflow.memories ?? {})) {
         const want: string[] = def?.strategies ?? [];
         const strategies = [
-          ...(want.includes("semantic") ? [{ SemanticMemoryStrategy: { Name: "insights", Namespaces: ["insights/{actorId}"] } }] : []),
-          ...(want.includes("summary") ? [{ SummaryMemoryStrategy: { Name: "summary", Namespaces: ["summary/{actorId}/{sessionId}"] } }] : []),
-          ...(want.includes("userPreference") ? [{ UserPreferenceMemoryStrategy: { Name: "preferences", Namespaces: ["preferences/{actorId}"] } }] : []),
-          ...(want.includes("episodic") ? [{ EpisodicMemoryStrategy: { Name: "episodes", Namespaces: ["episodes/{actorId}/{sessionId}"],
-            ReflectionConfiguration: { Namespaces: ["episodes/{actorId}"] } } }] : []),
+          ...(want.includes("semantic") ? [{ SemanticMemoryStrategy: { Name: "insights", NamespaceTemplates: ["/insights/{actorId}/"] } }] : []),
+          ...(want.includes("summary") ? [{ SummaryMemoryStrategy: { Name: "summary", NamespaceTemplates: ["/summary/{actorId}/{sessionId}/"] } }] : []),
+          ...(want.includes("userPreference") ? [{ UserPreferenceMemoryStrategy: { Name: "preferences", NamespaceTemplates: ["/preferences/{actorId}/"] } }] : []),
+          ...(want.includes("episodic") ? [{ EpisodicMemoryStrategy: { Name: "episodes", NamespaceTemplates: ["/episodes/{actorId}/{sessionId}/"],
+            ReflectionConfiguration: { NamespaceTemplates: ["/episodes/{actorId}/"] } } }] : []),
         ];
         const m = new cdk.CfnResource(this, `Memory-${n}`, {
           type: "AWS::BedrockAgentCore::Memory",
@@ -2025,6 +2113,7 @@ export class OrchestratorStack extends cdk.Stack {
         namedMemories[n] = m.getAtt("MemoryId").toString();
         const arn = m.getAtt("MemoryArn").toString();
         namedMemoryArns.push(arn, `${arn}/*`);
+        inspectedMemoryArns.push(arn);
       }
 
       // Identities agents reach directly (agentcore.identity.outbound names from
@@ -2080,10 +2169,15 @@ export class OrchestratorStack extends cdk.Stack {
       // always_on defeats the sampled=0 context the UI path propagates; the
       // bundled LangChain instrumentation is disabled because it emits a second,
       // token-less LLM span. (Same reasoning as terraform/main.tf.)
+      // The optional second trace destination (lib/otlp-export.ts): nothing when off.
+      const otlp = otlpExport(props);
+      // Non-Bedrock models through a LiteLLM proxy (lib/litellm.ts): nothing when off.
+      const litellm = litellmProxy(props);
       const observabilityEnv = {
         AGENT_OBSERVABILITY_ENABLED: "true",
         OTEL_TRACES_SAMPLER: "always_on",
         OTEL_PYTHON_DISABLED_INSTRUMENTATIONS: "aws_langchain",
+        ...otlp.env,
       };
       // Image agents (workflow.json `output: "image"`, app/common/images.py) store what they
       // render here; the BFF hands out short-lived links to it. Only when some agent draws,
@@ -2104,7 +2198,9 @@ export class OrchestratorStack extends cdk.Stack {
       // (bff/runfiles.py): uploads under uploads/ (expired after a day), and each run's
       // copy under runs/<session>/attachments/. Mirrors terraform/images.tf.
       const fileAgents = runFileAgents(agents);
-      const assetsBucket = imageAgents.length || fileAgents.length ? new s3.Bucket(this, "AssetsBucket", {
+      // ... or when the workflow keeps the files runs make (orchestrator.files, lib/run-files.ts).
+      const keepDays = filesRetentionDays(workflow);
+      const assetsBucket = imageAgents.length || fileAgents.length || keepDays !== null ? new s3.Bucket(this, "AssetsBucket", {
         bucketName: `agentcore-${agentName.replace(/_/g, "-")}-assets-${this.account}`,
         blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
         encryption: s3.BucketEncryption.S3_MANAGED,
@@ -2116,8 +2212,13 @@ export class OrchestratorStack extends cdk.Stack {
           abortIncompleteMultipartUploadAfter: cdk.Duration.days(1),
         }] } : {}),
       }) : undefined;
+      // A run's files are kept for orchestrator.files.retentionDays, then deleted together.
+      if (assetsBucket && keepDays !== null) {
+        assetsBucket.addLifecycleRule({ id: "expire-run-files", prefix: "runs/", expiration: cdk.Duration.days(keepDays) });
+      }
       const featureEnv = {
         ...observabilityEnv,
+        ...litellm.env,
         ...(assetsBucket ? { ASSETS_BUCKET: assetsBucket.bucketName } : {}),
         SEMANTIC_MEMORY_ID: semanticMemoryId,
         ...(Object.keys(customEvaluatorIds).length
@@ -2392,7 +2493,7 @@ export class OrchestratorStack extends cdk.Stack {
         image.repository.grantPull(subagentRole);
         // Unconditional: every dedicated container pulls the image, emits spans and metrics,
         // calls a model, and writes a telemetry row per model call.
-        [bedrockInvoke, priceListRead, ...observabilityPerms(`${agentName}*`)].forEach((s) =>
+        [bedrockInvoke, priceListRead, ...observabilityPerms(`${agentName}*`), ...otlp.statements, ...litellm.statements].forEach((s) =>
           subagentRole.addToPolicy(s)
         );
         // PutItem only — grantWriteData() would also add DeleteItem/UpdateItem and the
@@ -2401,6 +2502,17 @@ export class OrchestratorStack extends cdk.Stack {
           new iam.PolicyStatement({
             actions: ["dynamodb:PutItem"],
             resources: [telemetryTable.tableArn],
+          })
+        );
+        // Plus the running total behind orchestrator.limits.userDailyUsd, from this agent's own
+        // calls: UpdateItem on the reserved _limit# rows only. Mirrors LimitCounters in
+        // terraform/observability.tf.
+        subagentRole.addToPolicy(
+          new iam.PolicyStatement({
+            sid: "LimitCounters",
+            actions: ["dynamodb:UpdateItem"],
+            resources: [telemetryTable.tableArn],
+            conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [LIMIT_COUNTER_KEYS] } },
           })
         );
         // Feature-gated: granted only because THIS agent's config enables the feature.
@@ -2426,6 +2538,8 @@ export class OrchestratorStack extends cdk.Stack {
             sid: "ReadRunFiles", actions: ["s3:GetObject"], resources: [assetsBucket.arnForObjects("runs/*/attachments/*")],
           }));
         }
+        // Its own saved files and sandbox code (orchestrator.files). Mirrors subagent_save_files.
+        if (assetsBucket && keepDays !== null) subagentRole.addToPolicy(saveRunFilesStatement(assetsBucket.bucketArn));
         if ((ac.memory?.longTerm ?? []).length || ac.memory?.use) subagentRole.addToPolicy(longTermMemory);
         if ((ac.identity?.outbound ?? []).some((n: string) => agentIdentities.includes(n))) {
           identityPerms.forEach((st) => subagentRole.addToPolicy(st));
@@ -2546,6 +2660,16 @@ export class OrchestratorStack extends cdk.Stack {
         );
       }
 
+      // ---- AgentCore Harness agents (runtime "harness"; mirrors terraform/harness.tf) ----
+      const harnessPlane = harnessAgents(this, {
+        workflow, agentName, modelId, region: this.region, account: this.account, principal: agentcorePrincipal,
+        // A harness agent's `tool`: the Gateway, signed in as the agents are (harness.ts).
+        ...(toolPlane ? { gateway: { arn: toolPlane.gatewayArn, flow: gatewayFlow, discoveryUrl: gatewayDiscoveryUrl,
+          tokenUrl: gatewayTokenUrl, scope: gatewayAudience, clientId: gatewayClientId, clientSecret: gatewayClientSecret,
+          agentClients } } : {}),
+        tools: declaredTools, identitySecrets: props.identitySecrets ?? {}, namedMemories,
+      });
+
       // ---- Orchestrator runtime ----------------------------------------------
       const runtimeRole = new iam.Role(this, "RuntimeRole", {
         roleName: `AgentCoreRuntime-${agentName}`,
@@ -2562,6 +2686,8 @@ export class OrchestratorStack extends cdk.Stack {
         ...evaluationsScoped,
         evaluationsLogsWrite,
         ...(agentIdentities.length ? identityPerms : []),
+        ...otlp.statements,
+        ...litellm.statements,
       ].forEach((s) => runtimeRole.addToPolicy(s));
       if (assetsBucket) {
         // Read too, only when an in-process agent reads images (`vision`). Mirrors
@@ -2645,6 +2771,18 @@ export class OrchestratorStack extends cdk.Stack {
         })
       );
       runtimeRole.addToPolicy(
+        // The running total behind orchestrator.limits.userDailyUsd (features/observability/
+        // spend.py): each metered call adds its cost to one reserved row per user per day.
+        // UpdateItem only, and only on rows whose key starts _limit#, so the runtime still
+        // cannot edit a telemetry row. Mirrors LimitCounters in terraform/observability.tf.
+        new iam.PolicyStatement({
+          sid: "LimitCounters",
+          actions: ["dynamodb:UpdateItem"],
+          resources: [telemetryTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [LIMIT_COUNTER_KEYS] } },
+        })
+      );
+      runtimeRole.addToPolicy(
         new iam.PolicyStatement({
           sid: "InsightsFindingsStore",
           actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem",
@@ -2681,6 +2819,8 @@ export class OrchestratorStack extends cdk.Stack {
               A2A_TOKENS: a2aTokenEnv(agents, props.a2aTokens),
             }, runtimeRole),
             A2A_ENDPOINTS: JSON.stringify(a2aEndpoints),
+            // agent id -> harness ARN, only when a harness agent exists (harness.ts).
+            ...(Object.keys(harnessPlane.arns).length ? { HARNESS_ARNS: this.toJsonString(harnessPlane.arns) } : {}),
             ...featureEnv,
             ...gatewayEnv,
           },
@@ -2695,9 +2835,15 @@ export class OrchestratorStack extends cdk.Stack {
           resources: [`arn:aws:events:${this.region}:${this.account}:event-bus/default`],
         }));
       }
+      // Task steps (runtime "task"): the sandbox and Textract, only when a step uses them.
+      // Mirrors aws_iam_role_policy.runtime_tasks in terraform/tasks.tf.
+      taskStatements(workflow, this.region).forEach((s) => runtimeRole.addToPolicy(s));
+      // Harness agents: InvokeHarness on theirs only. Mirrors aws_iam_role_policy.runtime_harness.
+      harnessPlane.invoke.forEach((s) => runtimeRole.addToPolicy(s));
       const orchestratorArn = orchestrator.getAtt("AgentRuntimeArn").toString();
       plane = { statusTable, eventsTable, telemetryTable, orchestratorArn, memoryId, imageUri: image.imageUri,
-        assetsBucket, toolPlane };
+        assetsBucket, toolPlane,
+        longTerm: { semanticId: semanticMemoryId, named: namedMemories, arns: inspectedMemoryArns } };
     }
     const assetsBucket = plane?.assetsBucket;
     const toolPlane = plane?.toolPlane;
@@ -2773,11 +2919,50 @@ export class OrchestratorStack extends cdk.Stack {
         })
       );
       bff.addToRolePolicy(
+        // orchestrator.limits (bff/limits.py): read a user's total for the day and count the
+        // runs they start this hour. Only rows whose key starts _limit#.
+        new iam.PolicyStatement({
+          sid: "LimitCounters",
+          actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+          resources: [plane.telemetryTable.tableArn],
+          conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [LIMIT_COUNTER_KEYS] } },
+        })
+      );
+      // orchestrator.liveConfig (bff/liveconfig.py): its versions and pointer, which only the
+      // BFF reads or writes; the runtimes get nothing (the version rides in the start payload).
+      // Only rows whose key starts _liveconfig#, and only when the workflow turns it on.
+      // Mirrors terraform/liveconfig.tf.
+      if (workflow.orchestrator?.liveConfig === true) {
+        bff.addToRolePolicy(
+          new iam.PolicyStatement({
+            sid: "LiveConfig",
+            actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:Query"],
+            resources: [plane.telemetryTable.tableArn],
+            conditions: { "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [LIVE_CONFIG_KEYS] } },
+          })
+        );
+      }
+      bff.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["bedrock-agentcore:InvokeAgentRuntime"],
           resources: [plane.orchestratorArn, `${plane.orchestratorArn}/*`],
         })
       );
+      // The memory inspector (bff/memories.py): admins browse, search and delete long-term
+      // records. The memory ARNs only: these actions have no sub-resource. Delete is its own
+      // statement, so it is easy to remove. Mirrors terraform/memories.tf.
+      bff.addEnvironment("SEMANTIC_MEMORY_ID", plane.longTerm.semanticId);
+      bff.addEnvironment("MEMORIES", this.toJsonString(plane.longTerm.named));
+      bff.addToRolePolicy(new iam.PolicyStatement({
+        sid: "MemoryInspectorRead",
+        actions: ["bedrock-agentcore:ListActors", "bedrock-agentcore:ListMemoryRecords",
+          "bedrock-agentcore:RetrieveMemoryRecords", "bedrock-agentcore:GetMemoryRecord"],
+        resources: plane.longTerm.arns,
+      }));
+      bff.addToRolePolicy(new iam.PolicyStatement({
+        sid: "MemoryInspectorDelete", actions: ["bedrock-agentcore:DeleteMemoryRecord"],
+        resources: plane.longTerm.arns,
+      }));
       // A person who connected their account for a tool (auth "user") comes back to
       // the app, which binds that grant to them (POST /api/connect). Mirrors bff.tf.
       if (plane.toolPlane?.personGatewayUrl) {
@@ -2830,10 +3015,19 @@ export class OrchestratorStack extends cdk.Stack {
         resources: ["*"],
       })
     );
+    // GET /api/models/litellm (bff/litellm_models.py) reads the proxy's key: only when set.
+    const bffLitellm = litellmProxy(props);
+    for (const [k, v] of Object.entries(bffLitellm.env)) bff.addEnvironment(k, v);
+    bffLitellm.statements.forEach((s) => bff.addToRolePolicy(s));
 
     // ---- Builder control plane (builds store + deploy project) ----------------
     const builderPlane = props.builder === false ? undefined
-      : new BuilderPlane(this, "Builder", { agentName, orchRoot: ORCH_ROOT, logRetention: LOG_RETENTION, dataKey });
+      : new BuilderPlane(this, "Builder", {
+        agentName, orchRoot: ORCH_ROOT, logRetention: LOG_RETENTION, dataKey,
+        keepTableProtected: props.keepBuildsTableProtected,
+        permissionsBoundaryArn: guardrails.permissionsBoundaryArn, iamRolePath: guardrails.iamRolePath,
+        litellmEnv: bffLitellm.env,
+      });
     builderPlane?.grantConsole(bff);
     // s3:// paths in an AgentExpress Assistant message: read only these (bff/designer.py).
     const designerS3 = builderPlane ? (props.designerS3Buckets ?? []) : [];
@@ -2892,6 +3086,8 @@ export class OrchestratorStack extends cdk.Stack {
       bff.addToRolePolicy(new iam.PolicyStatement({
         actions: ["s3:GetObject"], resources: [assetsBucket.arnForObjects("runs/*")],
       }));
+      // The Files tab lists a run's folder (bff/runartifacts.py). Mirrors bff_list_run_files.
+      bff.addToRolePolicy(listRunFilesStatement(assetsBucket.bucketArn));
     }
     // A run's files (bff/runfiles.py): sign uploads, check them, copy each into the run,
     // and read the S3 locations a request may name. Mirrors aws_iam_role_policy.bff_assets.
@@ -3045,8 +3241,17 @@ export class OrchestratorStack extends cdk.Stack {
       // Who the caller is and which run actions they may take, so the UI can
       // disable controls instead of offering buttons that 403.
       { path: "/api/me", methods: [HttpMethod.GET] },
+      // The caller's use of orchestrator.limits, for the Start run box (bff/limits.py).
+      { path: "/api/limits", methods: [HttpMethod.GET] },
+      // Live config (bff/liveconfig.py): admins only, checked in the BFF; 404 while it is off.
+      { path: "/api/liveconfig", methods: [HttpMethod.GET] },
+      { path: "/api/liveconfig/versions", methods: [HttpMethod.GET, HttpMethod.POST] },
+      { path: "/api/liveconfig/versions/{version}", methods: [HttpMethod.GET] },
+      { path: "/api/liveconfig/active", methods: [HttpMethod.PUT] },
       // The Bedrock text models this account can invoke, for the Build view's picker.
       { path: "/api/models", methods: [HttpMethod.GET] },
+      // The models the LiteLLM proxy serves (bff/litellm_models.py); 404 while it is off.
+      { path: "/api/models/litellm", methods: [HttpMethod.GET] },
       { path: "/api/sessions", methods: [HttpMethod.GET, HttpMethod.POST] },
       // A person back from connecting their account for a tool (auth "user").
       { path: "/api/connect", methods: [HttpMethod.POST] },
@@ -3063,7 +3268,19 @@ export class OrchestratorStack extends cdk.Stack {
       { path: "/api/insights", methods: [HttpMethod.GET] },
       { path: "/api/insights/run", methods: [HttpMethod.POST] },
       { path: "/api/sessions/{id}/telemetry", methods: [HttpMethod.GET] },
+      { path: "/api/sessions/{id}/flow", methods: [HttpMethod.GET] },
+      // A run's files and 5-minute links to them; the caller's runs' files (bff/runartifacts.py).
+      { path: "/api/sessions/{id}/files", methods: [HttpMethod.GET] },
+      { path: "/api/sessions/{id}/files/url", methods: [HttpMethod.GET] },
+      { path: "/api/files", methods: [HttpMethod.GET] },
+      // Read-only links to one run (bff/runshares.py): its owner makes, lists and revokes
+      // them; any signed-in user opens one. Behind the JWT authorizer like every route here.
+      { path: "/api/sessions/{id}/shares", methods: [HttpMethod.GET, HttpMethod.POST] },
+      { path: "/api/sessions/{id}/shares/{shareId}", methods: [HttpMethod.DELETE] },
+      { path: "/api/shared/{shareId}", methods: [HttpMethod.GET] },
       { path: "/api/telemetry/aggregate", methods: [HttpMethod.GET] },
+      // Per tool and per agent error, denial and latency figures, for `admin` (bff/analytics.py).
+      { path: "/api/analytics", methods: [HttpMethod.GET] },
       // In-app assistant (bff/chatbot.py).
       { path: "/api/chat", methods: [HttpMethod.POST] },
       // Builder builds (bff/builds.py). Declared even with the builder plane off, where
@@ -3091,6 +3308,10 @@ export class OrchestratorStack extends cdk.Stack {
       // A tool written in the build: checked (bff/codecheck.py), and tested once deployed.
       { path: "/api/code/check", methods: [HttpMethod.POST] },
       { path: "/api/builds/{id}/test-tool", methods: [HttpMethod.POST] },
+      // A build's test suites, and runs of them (bff/suiteruns.py).
+      { path: "/api/builds/{id}/suites", methods: [HttpMethod.GET, HttpMethod.PUT] },
+      { path: "/api/builds/{id}/suite-runs", methods: [HttpMethod.POST] },
+      { path: "/api/builds/{id}/suite-runs/{run}", methods: [HttpMethod.GET] },
       // The policy library (bff/policies.py), and plain English -> Cedar.
       { path: "/api/policies", methods: [HttpMethod.GET, HttpMethod.POST] },
       { path: "/api/policies/generate", methods: [HttpMethod.POST] },
@@ -3108,6 +3329,10 @@ export class OrchestratorStack extends cdk.Stack {
       { path: "/api/builds/{id}/publish", methods: [HttpMethod.POST] },
       { path: "/api/groups", methods: [HttpMethod.GET] },
       { path: "/api/groups/{id}", methods: [HttpMethod.PUT, HttpMethod.DELETE] },
+      // Teams and their workspaces (bff/teams.py).
+      { path: "/api/teams", methods: [HttpMethod.GET, HttpMethod.POST] },
+      { path: "/api/teams/{id}", methods: [HttpMethod.GET, HttpMethod.PUT, HttpMethod.DELETE] },
+      { path: "/api/builds/{id}/team", methods: [HttpMethod.PUT] },
       // The audit log, and the sign-out the page reports before it signs out.
       { path: "/api/audit", methods: [HttpMethod.GET] },
       { path: "/api/audit/logout", methods: [HttpMethod.POST] },
@@ -3115,6 +3340,12 @@ export class OrchestratorStack extends cdk.Stack {
       { path: "/api/triggers", methods: [HttpMethod.GET] },
       { path: "/api/triggers/{name}/secret", methods: [HttpMethod.POST] },
       { path: "/api/triggers/{name}/test", methods: [HttpMethod.POST] },
+      // Long-term memory records, for admins (bff/memories.py).
+      { path: "/api/memory/agents", methods: [HttpMethod.GET] },
+      { path: "/api/memory/namespaces", methods: [HttpMethod.GET] },
+      { path: "/api/memory/records", methods: [HttpMethod.GET] },
+      { path: "/api/memory/search", methods: [HttpMethod.POST] },
+      { path: "/api/memory/records/{id}", methods: [HttpMethod.DELETE] },
     ];
     for (const r of routes) {
       api.addRoutes({ path: r.path, methods: r.methods, integration, authorizer });
@@ -3146,6 +3377,16 @@ export class OrchestratorStack extends cdk.Stack {
     };
     // The stage's settings name the route, which must exist first ("Unable to find Route").
     hookRoutes.forEach((r) => defaultStage.addDependency(r.node.defaultChild as cdk.CfnResource));
+    // Other teams' agents calling this workflow over A2A, behind their own authorizer and
+    // scope. Nothing at all unless -c exposeA2a=true. Mirrors terraform/a2a_server.tf.
+    if (props.exposeA2a) {
+      addA2aServer(this, {
+        api, integration, bff, agentName, region: this.region, authEnabled, workflowPlane,
+        createCognito: isCognito && Boolean(props.createCognito), userPoolId: cognitoUserPoolId,
+        domainPrefix: cognitoDomainPrefix, jwtIssuer, jwtAudience,
+        identity: props.a2aIdentity, approvers: props.a2aApprovers,
+      });
+    }
 
     // ---- Static UI: private S3 + CloudFront (OAC) --------------------------
     const uiBucket = new s3.Bucket(this, "UiBucket", {
@@ -3193,6 +3434,15 @@ export class OrchestratorStack extends cdk.Stack {
     });
     const distribution: cf.Distribution = new cf.Distribution(this, "Ui", {
       comment: "Multi-agent orchestrator UI",
+      // Organisation guardrails (lib/hardening.ts): your own host name, and AWS WAF. Unset:
+      // neither, and CloudFront's own certificate.
+      ...(guardrails.customDomain ? {
+        domainNames: [guardrails.customDomain],
+        certificate: acm.Certificate.fromCertificateArn(this, "UiCertificate", guardrails.acmCertificateArn),
+        minimumProtocolVersion: hardening.MIN_VIEWER_TLS,
+        sslSupportMethod: cf.SSLMethod.SNI,
+      } : {}),
+      ...(guardrails.enableWaf ? { webAclId: hardening.uiWebAcl(this, agentName, guardrails.wafRateLimit).attrArn } : {}),
       enableLogging: true,
       logBucket: uiLogsBucket,
       logFilePrefix: "cloudfront/",
@@ -3215,12 +3465,24 @@ export class OrchestratorStack extends cdk.Stack {
       },
     });
 
-    builderPlane?.allowUploadsFrom(`https://${distribution.distributionDomainName}`);
+    // Where people open the console: the CloudFront URL, and the custom domain when set.
+    const uiOrigins = [`https://${distribution.distributionDomainName}`,
+      ...(guardrails.customDomain ? [`https://${guardrails.customDomain}`] : [])];
+    builderPlane?.allowUploadsFrom(...uiOrigins);
     // The page uploads a run's files straight to the assets bucket (a presigned POST).
     if (assetsBucket && runFileAgents(workflow.agents ?? {}).length) {
       assetsBucket.addCorsRule({
         allowedMethods: [s3.HttpMethods.POST],
-        allowedOrigins: [`https://${distribution.distributionDomainName}`],
+        allowedOrigins: uiOrigins,
+        allowedHeaders: ["*"], maxAge: 3000,
+      });
+    }
+    // ... and reads a text file through its link to show it (Files tab). Mirrors the GET
+    // cors_rule in terraform/images.tf.
+    if (assetsBucket && (runFileAgents(workflow.agents ?? {}).length || filesRetentionDays(workflow) !== null)) {
+      assetsBucket.addCorsRule({
+        allowedMethods: [s3.HttpMethods.GET],
+        allowedOrigins: uiOrigins,
         allowedHeaders: ["*"], maxAge: 3000,
       });
     }
@@ -3237,8 +3499,8 @@ export class OrchestratorStack extends cdk.Stack {
       const uiOrigin = `https://${distribution.distributionDomainName}`;
       const extra = String(this.node.tryGetContext("extraCallbackUrls") ?? "")
         .split(",").map((u) => u.trim()).filter(Boolean);
-      spaClientL1.callbackUrLs = [uiOrigin, ...extra];
-      spaClientL1.logoutUrLs = [uiOrigin, ...extra];
+      spaClientL1.callbackUrLs = [uiOrigin, ...uiOrigins.slice(1), ...extra];
+      spaClientL1.logoutUrLs = [uiOrigin, ...uiOrigins.slice(1), ...extra];
       // Which sign-in the Hosted UI offers: COGNITO (its own users) by default, or a
       // federated provider you added to the pool, e.g. `-c hostedUiProviders=MyOidc`.
       // Set here, not by hand: a manual change is reverted whenever the client updates.
@@ -3368,29 +3630,30 @@ export class OrchestratorStack extends cdk.Stack {
       // ingestion into CloudWatch Logs) — normally a manual console step per new
       // account, provisioned here so a fresh-account deploy is self-contained.
 
-      // Resource policy letting X-Ray deliver spans to those log groups. Keyed by
-      // name and updated in place, so it is safe to manage declaratively.
-      const tsLogPolicy = new logs.CfnResourcePolicy(this, "TransactionSearchLogPolicy", {
-        policyName: `${agentName}-transaction-search`,
-        policyDocument: JSON.stringify({
-          Version: "2012-10-17",
-          Statement: [
-            {
-              Sid: "TransactionSearchXRayAccess",
-              Effect: "Allow",
-              Principal: { Service: "xray.amazonaws.com" },
-              Action: "logs:PutLogEvents",
-              Resource: [
-                `arn:aws:logs:${this.region}:${this.account}:log-group:aws/spans:*`,
-                `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/application-signals/data:*`,
-              ],
-              Condition: {
-                ArnLike: { "aws:SourceArn": `arn:aws:xray:${this.region}:${this.account}:*` },
-                StringEquals: { "aws:SourceAccount": this.account },
-              },
+      // The resource policy letting X-Ray deliver spans to those log groups is ONE per
+      // account and region, shared by every build, and the custom resource below puts
+      // it only when no policy already grants X-Ray. A policy per build used to be
+      // declared here, and CloudWatch Logs allows only 10 resource policies per
+      // region, so the eleventh build in an account failed with "Resource limit
+      // exceeded".
+      const tsPolicyDoc = JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [
+          {
+            Sid: "TransactionSearchXRayAccess",
+            Effect: "Allow",
+            Principal: { Service: "xray.amazonaws.com" },
+            Action: "logs:PutLogEvents",
+            Resource: [
+              `arn:aws:logs:${this.region}:${this.account}:log-group:aws/spans:*`,
+              `arn:aws:logs:${this.region}:${this.account}:log-group:/aws/application-signals/data:*`,
+            ],
+            Condition: {
+              ArnLike: { "aws:SourceArn": `arn:aws:xray:${this.region}:${this.account}:*` },
+              StringEquals: { "aws:SourceAccount": this.account },
             },
-          ],
-        }),
+          },
+        ],
       });
 
       // Enablement needs a READ-THEN-WRITE, so it is a small Lambda-backed custom
@@ -3421,6 +3684,31 @@ export class OrchestratorStack extends cdk.Stack {
         code: lambda.Code.fromInline(`
 import boto3
 
+def ensure_policy(props):
+    # One resource policy per account and region lets X-Ray write spans, shared by
+    # every build. Reuse any policy that already grants X-Ray on aws/spans (the one
+    # the console creates, or another build's), ignoring this build's own legacy
+    # per-build policy, which a stack update is about to delete. Put the shared one
+    # only when none exists. It is never deleted, like Transaction Search itself.
+    logs = boto3.client("logs")
+    try:
+        token = None
+        while True:
+            page = logs.describe_resource_policies(**({"nextToken": token} if token else {}))
+            for p in page.get("resourcePolicies", []):
+                doc = p.get("policyDocument", "")
+                if (p.get("policyName") != props["LegacyPolicyName"]
+                        and "xray.amazonaws.com" in doc and "aws/spans" in doc):
+                    return "reused " + p["policyName"]
+            token = page.get("nextToken")
+            if not token:
+                break
+        logs.put_resource_policy(policyName=props["PolicyName"],
+                                 policyDocument=props["PolicyDocument"])
+        return "put " + props["PolicyName"]
+    except Exception as e:
+        return "failed " + type(e).__name__ + ": " + str(e)[:160]
+
 def handler(event, context):
     # Deletion is a deliberate no-op: Transaction Search is account-wide and
     # other stacks or services may depend on it, so tearing it down on a
@@ -3428,11 +3716,20 @@ def handler(event, context):
     if event["RequestType"] == "Delete":
         return {"PhysicalResourceId": event["PhysicalResourceId"]}
 
-    pct = int(event["ResourceProperties"]["IndexingPercentage"])
+    props = event["ResourceProperties"]
+    pct = int(props["IndexingPercentage"])
     xray = boto3.client("xray")
 
     current = xray.get_trace_segment_destination().get("Destination")
     changed = False
+    policy = ensure_policy(props)
+    if current != "CloudWatchLogs" and policy.startswith("failed"):
+        return {
+            "PhysicalResourceId": "transaction-search",
+            "Data": {"Destination": current or "None", "Changed": "False",
+                     "Indexing": "skipped", "Policy": policy,
+                     "Warning": "Transaction Search NOT enabled: " + policy[:200]},
+        }
     if current != "CloudWatchLogs":
         # Enabling Transaction Search the FIRST time in an account makes X-Ray call
         # Application Signals and CloudTrail on your behalf, so it needs more than
@@ -3479,6 +3776,7 @@ def handler(event, context):
             "Destination": "CloudWatchLogs",
             "Changed": str(changed),
             "Indexing": indexing,
+            "Policy": policy,
         },
     }
   `),
@@ -3505,6 +3803,10 @@ def handler(event, context):
             // required on a first-time enable.
             "cloudtrail:CreateServiceLinkedChannel",
             "iam:CreateServiceLinkedRole",
+            // The shared span-delivery resource policy (ensure_policy). These
+            // actions have no resource type, so they can only be granted on "*".
+            "logs:DescribeResourcePolicies",
+            "logs:PutResourcePolicy",
           ],
           resources: ["*"],
         })
@@ -3528,18 +3830,24 @@ def handler(event, context):
       const tsProvider = new cr.Provider(this, "TransactionSearchProvider", {
         onEventHandler: tsHandler,
       });
-      const tsEnable = new cdk.CustomResource(this, "TransactionSearchEnable", {
+      new cdk.CustomResource(this, "TransactionSearchEnable", {
         serviceToken: tsProvider.serviceToken,
         properties: {
           // Included so a changed percentage triggers an Update.
           IndexingPercentage: props.transactionSearchIndexingPercentage,
+          PolicyName: "AgentExpress-TransactionSearch",
+          PolicyDocument: tsPolicyDoc,
+          LegacyPolicyName: `${agentName}-transaction-search`,
         },
       });
-      tsEnable.node.addDependency(tsLogPolicy);
     }
 
+    // Every role, CDK's own included, with the organisation's boundary and path (lib/hardening.ts).
+    hardening.applyIamGuardrails(this, guardrails);
+    hardening.denyFrameworkDataToCodeTools(this, guardrails);
+
     // ---- Outputs ------------------------------------------------------------
-    appUrl = `https://${distribution.distributionDomainName}`;
+    appUrl = uiOrigins[uiOrigins.length - 1];
     new cdk.CfnOutput(this, "uiUrl", { value: appUrl });
     new cdk.CfnOutput(this, "apiEndpoint", { value: api.apiEndpoint });
     new cdk.CfnOutput(this, "idp", { value: props.idp });

@@ -269,9 +269,9 @@ def test_the_memory_scope_decides_whose_memories_an_agent_reads():
     # Each strategy reads its own namespace; a custom strategy is this agent's own.
     c = ctx(None, custom={"base": "semantic", "instructions": "x"})
     assert c._longterm_strategies() == ["semantic", "episodic", "custom"]
-    assert c._namespace_for("episodic") == f"episodes/{alice}"
-    assert c._namespace_for("userPreference") == f"preferences/{alice}"
-    assert c._namespace_for("custom") == f"custom-analysis/{alice}"
+    assert c._namespace_for("episodic") == f"/episodes/{alice}/"
+    assert c._namespace_for("userPreference") == f"/preferences/{alice}/"
+    assert c._namespace_for("custom") == f"/custom-analysis/{alice}/"
 
 
 def test_a_long_subject_id_stays_a_legible_namespace_segment():
@@ -391,7 +391,7 @@ def test_a_recall_whose_every_record_is_dropped_is_not_reported_as_a_hit(monkeyp
 
     off_topic = "Agentic AI applications need a tool loop and a state machine."
 
-    async def fake_recall(query, namespace="", memory_id=""):
+    async def fake_recall(query, namespace="", memory_id="", namespace_path=""):
         return [off_topic]
 
     monkeypatch.setattr(memory_pkg, "recall", fake_recall)
@@ -416,7 +416,7 @@ def test_a_recall_that_survives_the_filter_records_no_extra_row(monkeypatch):
 
     on_topic = "Data lakes separate storage from compute across zones."
 
-    async def fake_recall(query, namespace="", memory_id=""):
+    async def fake_recall(query, namespace="", memory_id="", namespace_path=""):
         return [on_topic]
 
     monkeypatch.setattr(memory_pkg, "recall", fake_recall)
@@ -547,7 +547,7 @@ def test_the_timeline_says_how_many_recollections_left_the_deployment():
 
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = urlopen
+        mod._open = urlopen
         asyncio.run(imp("app.orchestrator.registry").load_agents()["partner"].run(ctx))
 
     assert any("carrying 2 recalled insight(s)" in m for m in logs), logs
@@ -558,7 +558,7 @@ def test_the_timeline_says_how_many_recollections_left_the_deployment():
     ctx.recalled_memory = []
     with workflow(defn) as imp:
         mod = imp("app.common.a2a_agent")
-        mod.urllib.request.urlopen = urlopen
+        mod._open = urlopen
         asyncio.run(imp("app.orchestrator.registry").load_agents()["partner"].run(ctx))
     assert any("Delegating 'partner'" in m for m in logs)
     assert not any("recalled insight" in m for m in logs), logs
@@ -623,3 +623,18 @@ def test_the_node_wrapper_honours_both_flags():
     # into the rest of the run, so it applies to every placement.
     guard = src.index('await ctx.guardrail(str(out), "OUTPUT")')
     assert "if agent." not in src[guard - 200:guard].split("\n")[-1]
+
+
+
+def test_summaries_are_recalled_across_the_actors_sessions_by_namespace_path():
+    """Summaries are written per session (/summary/<actor>/<session>/), so an exact read of
+    this run's namespace finds nothing on a new run. RetrieveMemoryRecords' namespacePath
+    reads every session's under /summary/<actor>/."""
+    from app.common.context import AgentContext
+    c = AgentContext.__new__(AgentContext)
+    c._memory_actor = lambda: "analysis-u1"
+    c.session_id = "s9"
+    c.agent_id = "analysis"
+    assert c._namespace_for("summary") == "/summary/analysis-u1/s9/"
+    assert c._recall_scope("summary") == ("namespacePath", "/summary/analysis-u1/")
+    assert c._recall_scope("semantic") == ("namespace", "/insights/analysis-u1/")

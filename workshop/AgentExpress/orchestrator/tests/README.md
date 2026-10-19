@@ -6,7 +6,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-1535 tests in under two minutes. No AWS credentials, no model calls, no network — so this
+No AWS credentials, no model calls, no network — so this
 belongs in a pre-commit hook or a CI step, not a nightly job.
 
 **The UI has its own suite**, because it is a TypeScript application and `pytest` is the
@@ -58,6 +58,8 @@ a tool that asks the framework to deploy a function — `app/tools/`, and nothin
 | `test_config_keys.py` | Every key in `workflow.json` is one something reads — a closed allow-list, so an unwired key fails here |
 | `test_foreign_use_case.py` | The framework names no shipped agent id (AST-checked), and a workflow from another domain still builds |
 | `test_a2a.py` | `runtime: "a2a"` — Agent Card discovery, the JSON-RPC shape against the published form, all four auth modes including SigV4, task polling and every terminal state, the asset envelope stamped on a structured reply, and the shipped stand-in driven by the real client with only Bedrock faked |
+| `test_netguard.py` | the SSRF guard (`app/common/netguard.py`, copied as `bff/netguard.py`): every non-public range refused, https only, no userinfo, the connection made to the checked address, every redirect checked again (a real TLS server on 127.0.0.1), and an inventory test that fails on any server-side fetch not routed through the guard or exempted with a reason |
+| `test_hardening.py` | the organisation guardrails (`terraform/hardening.tf`): every `aws_iam_role` carries the boundary and the path, `terraform test` plans them offline with mocked providers, Terraform and CDK agree on every value, and the deploy runner passes them on to each build |
 | `test_branching.py` | `branch` — every operator and near-miss, spec and topology validation, and a graph that is actually **invoked** to prove the chosen path ran and the other was marked skipped |
 | `test_tool_calls.py` | `_tool_arguments` (argument shape per tool type), `_select_tool` (Gateway naming), `_extract_chunks` (evidence + citations) |
 | `test_citations.py` | URL verification against the evidence; downgrading a `sourced-fact` that rested on an invented link |

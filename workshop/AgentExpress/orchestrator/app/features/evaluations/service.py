@@ -404,6 +404,10 @@ def _synth_span(session_id: str, agent_id: str, task_input: str, task_output: st
             "aws.genai.span_kind": "AGENT",
             "gen_ai.task.input": str(task_input)[:40000],
             "gen_ai.task.output": str(task_output)[:12000],
+            # Read from any scope: the documented fallback for a custom agent's turn.
+            # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/supported-frameworks-generic.html
+            "agentcore.invocation.user_prompt": str(task_input)[:40000],
+            "agentcore.invocation.agent_response": str(task_output)[:12000],
         },
     }
 

@@ -108,6 +108,20 @@
 .axn-links li.axn-divider-li + li.axn-heading { padding-top: 0; }
 .axn-links li.axn-indent { padding-left: 14px; }
 
+/* `fill` (a build's own app): the open groups (Runs, Observability) split the height the
+   links leave them equally, and each scrolls its own list, the way Build's list scrolls in
+   the console. The links never shrink, so Files, Activity, Analytics and the rest stay in
+   view. A collapsed group is just its title row. On a window too short even for that, the
+   pane itself scrolls rather than hiding anything. */
+.axn-fill { overflow-y: auto; }
+.axn-fill > .axn-groups { flex: 1 1 auto; overflow: visible; display: flex; flex-direction: column; }
+.axn-fill .axn-group { flex: 1 1 0; min-height: 128px; display: flex; flex-direction: column; }
+.axn-fill .axn-group.axn-closed { flex: none; min-height: 0; }
+.axn-fill .axn-group > * { flex: none; }
+.axn-fill .axn-group > .axn-entries { flex: 1 1 auto; min-height: 0; max-height: none; overflow-y: auto; }
+.axn-fill > .axn-divider { margin-top: 16px; }
+.axn-fill > .axn-links { flex: none; min-height: 0; overflow: visible; }
+
 /* The Runs group's workflow picker: indented to the entries it filters. */
 .axn-extra { padding: 4px 0 6px 28px; }
 /* A divider among the links spans the pane like the one above them: out of the links'
@@ -115,3 +129,6 @@
 .axn-divider-li { list-style: none; margin: 0 -28px; padding: 0 !important; }
 /* A long group's filter box: indented to its entries, and held above the list as it scrolls. */
 .axn-filter { padding: 4px 0 6px 28px; }
+
+/* A link's emoji (lib/emoji.ts): decoration, one width so the words line up. */
+.axn-links .axn-emoji { display: inline-block; width: 1.5em; }

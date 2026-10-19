@@ -108,10 +108,13 @@ resource "aws_iam_policy" "tool_code_boundary" {
   })
 }
 
+# A role has ONE boundary. With iam_permissions_boundary_arn set it is the organisation's (an
+# account rule usually refuses a role without it), and the Deny on the framework's data moves
+# into the role's own policy (aws_iam_role_policy.tool_code), where it still beats any Allow.
 resource "aws_iam_role" "tool_code" {
   for_each             = local.code_functions
   name                 = local.code_tool_fn[each.key]
-  permissions_boundary = aws_iam_policy.tool_code_boundary[each.key].arn
+  permissions_boundary = coalesce(local.iam_permissions_boundary, aws_iam_policy.tool_code_boundary[each.key].arn)
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
@@ -120,15 +123,19 @@ resource "aws_iam_role" "tool_code" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  path = var.iam_role_path
 }
 
 resource "aws_iam_role_policy" "tool_code" {
   for_each = local.code_functions
   name     = "grants"
   role     = aws_iam_role.tool_code[each.key].id
+  # Under the organisation's boundary only (see the role): its own boundary's Deny as well.
   policy = jsonencode({
-    Version   = "2012-10-17"
-    Statement = local.code_tool_statements[each.key]
+    Version = "2012-10-17"
+    Statement = concat(local.code_tool_statements[each.key],
+    [for d in local.code_boundary_deny : d if local.iam_permissions_boundary != null])
   })
 }
 

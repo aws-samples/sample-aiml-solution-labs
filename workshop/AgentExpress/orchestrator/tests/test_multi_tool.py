@@ -102,14 +102,33 @@ def test_an_agent_with_no_tool_gathers_nothing():
         assert ctx.calls == []
 
 
-def test_the_policy_deny_in_knowledge_research_clears_every_tool():
-    """It used to set `ctx.tool = None`. The gatherer reads `ctx.tools`, so clearing only
-    the first would have left retrieval running after a deny."""
-    path = ORCH_ROOT / "app" / "subagents" / "knowledge_research" / "agent.py"
-    if not path.is_file():
-        pytest.skip("the sample's knowledge_research agent was removed (scaffold.py reset)")
-    source = path.read_text()
-    assert "ctx.tools = []" in source
+def test_no_agent_calls_an_authorization_api_agentcore_does_not_have():
+    """ctx.policy_check used to call bedrock-agentcore-control.is_authorized, which does not
+    exist, so it always allowed. Cedar is evaluated at the Gateway only."""
+    import botocore.session
+    s = botocore.session.get_session()
+    ops = s.get_service_model("bedrock-agentcore-control").operation_names + s.get_service_model("bedrock-agentcore").operation_names
+    assert not [o for o in ops if "uthoriz" in o]
+    for f in (ORCH_ROOT / "app").rglob("*.py"):
+        assert ".is_authorized(" not in f.read_text(), f
+
+
+def test_policy_check_allows_and_says_the_key_does_nothing(capsys):
+    from app.common.context import AgentContext
+    ctx = AgentContext.__new__(AgentContext)
+    ctx._agentcore = {"policy": {"enabled": True}}
+    ctx.agent_id = "a"
+    assert asyncio.run(ctx.policy_check("x")) is True
+    assert "has no effect" in capsys.readouterr().out
+
+
+def test_the_per_agent_policy_key_warns_in_both_validators():
+    import validate_build
+    wf = json.loads((ORCH_ROOT / "app" / "workflow.json").read_text())
+    agent = next(iter(wf["agents"]))
+    wf["agents"][agent].setdefault("agentcore", {})["policy"] = {"enabled": True}
+    hits = [i for i in validate_build.validate(wf) if i["path"] == f"agents.{agent}.agentcore.policy.enabled"]
+    assert [i["severity"] for i in hits] == ["warning"] and "no effect" in hits[0]["message"]
 
 
 def test_the_schema_takes_a_key_or_a_list_of_keys():

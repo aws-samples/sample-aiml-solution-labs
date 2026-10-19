@@ -51,6 +51,8 @@ pytest.ini
 requirements-dev.txt
 format_workflow.py
 build_schema.py
+# Example builds, imported through the Builder; nothing in the container reads them.
+examples/
 # EDITOR-FACING, not runtime. app/keys.json describes which keys workflow.json may
 # contain and app/workflow.schema.json is generated from it for your editor — together
 # ~40 KB of documentation that nothing in the container reads (the runtime reads

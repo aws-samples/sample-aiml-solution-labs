@@ -286,7 +286,7 @@ describe("the framework vocabulary has ONE home", () => {
     expect(vocab.memoryStrategies.values).toEqual(["semantic", "summary", "userPreference", "episodic"]);
     expect(vocab.authorizationActions.values.sort()).toEqual([
       "admin", "audit", "cancel", "decision", "delete", "deploy", "destroy", "evaluate", "insights",
-      "rerun", "start",
+      "override", "rerun", "start",
     ]);
   });
 });

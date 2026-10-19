@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { AGENT_H, AGENT_W, hitTest, layout } from "./layout";
+import { AGENT_H, AGENT_W, COMP_ROW, hitTest, layout } from "./layout";
 import type { Workflow } from "./model";
 
 const WF: Workflow = {
@@ -21,6 +21,26 @@ describe("layout", () => {
     const [b, c] = l.agents.filter((x) => x.stage === 1);
     expect(c.x).toBeGreaterThan(b.x + AGENT_W);
     expect(l.end.y).toBeGreaterThan(l.stages[1].y);
+  });
+
+  it("makes an agent one row taller per component it shows, and still hits it at its last row", () => {
+    const rich: Workflow = {
+      agents: { a: { name: "A", tool: ["t1", "t2"], agentcore: { guardrails: { input: true } } }, b: { name: "B" } },
+      tools: { t1: { type: "mcp" }, t2: { type: "kb" } },
+      steps: [{ parallel: ["a", "b"] }],
+    };
+    const full = layout(rich);
+    const a = full.agents.find((x) => x.id === "a")!;
+    const b = full.agents.find((x) => x.id === "b")!;
+    expect(b.h).toBe(AGENT_H);
+    expect(a.h).toBe(AGENT_H + 3 * COMP_ROW + 8);
+    expect(full.stages[0].h).toBeGreaterThanOrEqual(a.h);
+    const s = full.stages[0];
+    expect(hitTest(full, s.x + a.x + 5, s.y + a.y + a.h - 4)).toEqual({ kind: "agent", id: "a" });
+    expect(layout(rich, false, ["tool"]).agents.find((x) => x.id === "a")!.h).toBe(AGENT_H + 2 * COMP_ROW + 8);
+    const editable = layout(rich, true);
+    expect(editable.agents.find((x) => x.id === "a")!.h).toBe(AGENT_H + 4 * COMP_ROW + 8);   // + Add row
+    expect(editable.agents.find((x) => x.id === "b")!.h).toBe(AGENT_H + COMP_ROW + 8);       // + Add on an empty agent too
   });
 
   it("hits an agent first, then its stage, then the nearest gap", () => {

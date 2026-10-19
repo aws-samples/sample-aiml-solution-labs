@@ -93,13 +93,40 @@ def test_the_projection_is_an_allow_list_not_a_blocklist(project):
     assert "somethingNobodyHasThoughtOfYet" not in out
     assert "privateNote" not in out["agents"]["a"]
     assert set(out) == {"agents", "steps", "evalAgents", "chatbot", "ui", "authorization", "attachments",
-                        "triggers"}
+                        "triggers", "liveConfig", "modelOverrides"}
 
 
 def test_an_agents_projected_keys_are_exactly_what_the_ui_reads(project):
     out = project(_wf())
     assert set(out["agents"]["a"]) == {
-        "name", "kind", "runtime", "tool", "corpus", "model", "source"}
+        "name", "kind", "runtime", "tool", "corpus", "model", "source", "components"}
+
+
+def test_an_agents_components_are_kinds_and_names_only(project):
+    """The run graph shows what is attached to each agent. Names and kinds reach the
+    page; where a tool lives, what a policy says and which words a guardrail blocks do not."""
+    workflow = _wf(
+        tools={"docs": {"type": "mcp", "endpoint": "https://internal.example/mcp", "policies": ["readOnly"],
+                        "approval": "person"}},
+        policies={"readOnly": {"statement": 'forbid(principal, action, resource) when { SECRET_RULE };'}},
+        guardrails={"strict": {"deniedWords": ["PROJECT_BLUEBIRD"]}},
+        memories={"notes": {"strategies": ["semantic", "summary"]}},
+        identities={"crm": {"type": "apikey", "apiKey": "hunter2"}},
+    )
+    workflow["agents"]["a"].update({
+        "tool": "docs", "skills": ["triage"], "askPerson": {"maxQuestions": 2},
+        "agentcore": {"guardrails": {"input": True, "use": "strict"}, "memory": {"use": "notes"},
+                      "evaluations": {"enabled": True, "evaluators": ["Builtin.Helpfulness"]},
+                      "identity": {"outbound": ["crm"]}}})
+    comps = project(workflow)["agents"]["a"]["components"]
+    assert [(c["kind"], c["name"]) for c in comps] == [
+        ("tool", "docs"), ("guardrail", "strict"), ("memory", "notes"), ("policy", "readOnly"),
+        ("skill", "triage"), ("evaluation", "Helpfulness"), ("identity", "crm"), ("human", "Asks questions")]
+    assert comps[0]["detail"] == "MCP server \u00b7 HITL approves each call"
+    assert comps[2]["detail"] == "semantic, summary"
+    shipped = json.dumps(comps)
+    for secret in ("internal.example", "SECRET_RULE", "PROJECT_BLUEBIRD", "hunter2", "apiKey"):
+        assert secret not in shipped
 
 
 # ---------------------------------------------------------------------------

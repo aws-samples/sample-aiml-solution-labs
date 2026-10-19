@@ -113,7 +113,8 @@ locals {
   # Where a build's tool API keys and A2A tokens live: <prefix><build id>.
   secrets_prefix    = "agentexpress/${var.agent_name}/builds/"
   terraform_version = "1.15.8"
-  deploy_policy     = jsondecode(file("${path.module}/deploy-role-policy.json"))
+  # Its role ARNs name roles at "/": with iam_role_path they live under that path instead.
+  deploy_policy = jsondecode(replace(file("${path.module}/deploy-role-policy.json"), ":role/", ":role${var.iam_role_path}"))
   # Same split as cdk/lib/builder-plane.ts DEPLOY_POLICY_CHUNK: one managed policy holds
   # at most 6,144 characters, and the whole file is more than that. Not chunklist(): the
   # statements differ in shape (a Resource string or list, a Condition or none), and
@@ -139,13 +140,28 @@ locals {
   console_mode_env = local.builder_enabled && var.console_mode == "builder" ? { CONSOLE_MODE = "builder" } : {}
 }
 
+variable "keep_builds_table_protected" {
+  type        = bool
+  default     = false
+  description = <<-EOT
+    The builds table is deletion-protected while the console runs, so no account clean-up
+    tool or stray DeleteTable can take it. By default `terraform destroy` clears that
+    protection just before it deletes the table, so a destroy you asked for completes in
+    one step. Set this true on a console that holds work you cannot lose: destroy then
+    stops at the table, and you clear the protection yourself on purpose
+    (`aws dynamodb update-table --table-name <agent_name>_builds --no-deletion-protection-enabled`).
+    Mirrors `-c keepBuildsTableProtected=true` on the CDK path.
+  EOT
+}
+
 resource "aws_dynamodb_table" "builds" {
   count        = local.builder_enabled ? 1 : 0
   name         = "${var.agent_name}_builds"
   billing_mode = "PAY_PER_REQUEST"
   # Every build, its versions, shares and the console's audit log live here, so no
-  # account clean-up tool or stray DeleteTable may take it: set it false on purpose
-  # before destroying the console. Mirrors the CDK BuildsTable.
+  # account clean-up tool or stray DeleteTable may take it. `terraform destroy` clears
+  # it for you at the last moment (terraform_data.builds_table_unprotect, below) unless
+  # keep_builds_table_protected is set. Mirrors the CDK BuildsTable.
   deletion_protection_enabled = true
   point_in_time_recovery {
     enabled = true
@@ -187,6 +203,43 @@ resource "aws_dynamodb_table" "builds" {
   server_side_encryption {
     enabled     = true
     kms_key_arn = aws_kms_key.data.arn
+  }
+}
+
+# Clears the table's deletion protection at the last moment of a `terraform destroy`, so
+# the destroy you asked for finishes instead of stopping at the table.
+#
+#   * It depends on the table (through `input`), so Terraform destroys it FIRST.
+#   * It acts only on destroy. Creating it, or changing the flag, runs nothing.
+#   * It is always in the plan when the Builder is on, and carries the flag as data.
+#     Were it `count = keep ? 0 : 1`, turning keep_builds_table_protected on would
+#     REMOVE the resource, and removing it runs the destroy step: the opposite of what
+#     the flag asks for.
+#   * A failure here is not fatal. Terraform goes on to delete the table, and AWS's own
+#     "protected against deletion" message is the error you see, with the fix printed.
+resource "terraform_data" "builds_table_unprotect" {
+  count = local.builder_enabled ? 1 : 0
+  input = {
+    table     = aws_dynamodb_table.builds[0].name
+    region    = var.region
+    unprotect = !var.keep_builds_table_protected
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    interpreter = ["/bin/bash", "-c"]
+    command     = <<-EOT
+      if [ "${self.input.unprotect}" != "true" ]; then
+        echo "builds table ${self.input.table} left protected (keep_builds_table_protected = true)"
+        exit 0
+      fi
+      if aws dynamodb update-table --region ${self.input.region} --table-name ${self.input.table} \
+           --no-deletion-protection-enabled >/dev/null; then
+        echo "deletion protection cleared on ${self.input.table}"
+      else
+        echo "could not clear deletion protection on ${self.input.table}; run: aws dynamodb update-table --region ${self.input.region} --table-name ${self.input.table} --no-deletion-protection-enabled   then destroy again" >&2
+      fi
+    EOT
   }
 }
 
@@ -234,7 +287,7 @@ resource "aws_s3_bucket_cors_configuration" "builds" {
   bucket = aws_s3_bucket.builds[0].id
   cors_rule {
     allowed_methods = ["POST"]
-    allowed_origins = ["https://${aws_cloudfront_distribution.ui.domain_name}"]
+    allowed_origins = local.ui_origins
     allowed_headers = ["*"]
     max_age_seconds = 3000
   }
@@ -300,6 +353,9 @@ resource "aws_iam_role" "deploy" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "deploy" {
@@ -353,6 +409,15 @@ resource "aws_iam_role_policy" "deploy" {
         Condition = { StringLike = { "aws:ResourceTag/agentexpress:app" = "${local.build_agent_prefix}*" } }
       },
       {
+        # A CDK build's destroy that a late CloudFront log delivery failed: the runner empties
+        # that build's UI logs bucket and destroys again (deployer/runner.py
+        # empty_late_log_buckets). Only buckets named after a build's stack.
+        Sid      = "LateLogBuckets"
+        Effect   = "Allow"
+        Action   = ["s3:ListBucketVersions", "s3:DeleteObject", "s3:DeleteObjectVersion"]
+        Resource = ["arn:aws:s3:::ax-*-stack-uilogsbucket*", "arn:aws:s3:::ax-*-stack-uilogsbucket*/*"]
+      },
+      {
         # After a destroy, the runner deletes the log groups neither tool owns (AgentCore's
         # runtime logs, CDK provider Lambdas), matched by the build's unique ax_ id.
         Sid    = "LeftoverLogGroups"
@@ -390,7 +455,7 @@ resource "aws_iam_role_policy" "deploy" {
           "iam:DeletePolicy"
         ]
         Resource = [
-          "arn:aws:iam::${local.account_id}:role/AgentCoreDeploy-${var.agent_name}",
+          aws_iam_role.deploy[0].arn,
           "arn:aws:iam::${local.account_id}:policy/AgentExpressDeploy-${var.agent_name}-*"
         ]
       }
@@ -465,6 +530,22 @@ resource "aws_codebuild_project" "deploy" {
     environment_variable {
       name  = "CONSOLE_NAME"
       value = var.agent_name
+    }
+    # The organisation's boundary and role path, for every build's roles (hardening.tf).
+    dynamic "environment_variable" {
+      for_each = local.build_guardrail_env
+      content {
+        name  = environment_variable.key
+        value = environment_variable.value
+      }
+    }
+    # This console's LiteLLM proxy and key, for every build's litellm/ agents (litellm.tf).
+    dynamic "environment_variable" {
+      for_each = local.litellm_build_env
+      content {
+        name  = environment_variable.key
+        value = environment_variable.value
+      }
     }
   }
 

@@ -181,8 +181,7 @@
           "enabled": true,
           "auto": false,
           "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
-        },
-        "policy": { "enabled": true }
+        }
       }
     },
     "web_search": {
@@ -197,8 +196,7 @@
           "enabled": true,
           "auto": false,
           "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
-        },
-        "policy": { "enabled": true }
+        }
       }
     },
     "documentation_search": {
@@ -213,8 +211,7 @@
           "enabled": true,
           "auto": false,
           "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
-        },
-        "policy": { "enabled": true }
+        }
       }
     },
     "cost_research": {
@@ -228,8 +225,7 @@
           "enabled": true,
           "auto": false,
           "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
-        },
-        "policy": { "enabled": true }
+        }
       }
     },
     "analysis": {
@@ -296,8 +292,7 @@
           "enabled": true,
           "auto": false,
           "evaluators": ["Builtin.Faithfulness", "Builtin.ResponseRelevance"]
-        },
-        "policy": { "enabled": true }
+        }
       }
     }
   },

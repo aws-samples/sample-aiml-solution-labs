@@ -31,12 +31,13 @@ locals {
   kb_existing_id = try(local.kb_spec.knowledgeBaseId, "")
   kb_s3_uri      = try(local.kb_spec.s3Uri, "")
   kb_kms_key     = try(local.kb_spec.kmsKeyArn, "")
-  kb_source      = local.kb_existing_id != "" ? "existing" : (local.kb_s3_uri != "" ? "s3" : "upload")
-  kb_create      = local.kb_enabled && local.kb_source != "existing"
-  kb_upload      = local.kb_enabled && local.kb_source == "upload"
-  kb_s3_bucket   = local.kb_s3_uri == "" ? "" : split("/", trimprefix(local.kb_s3_uri, "s3://"))[0]
-  kb_s3_rest     = local.kb_s3_uri == "" ? "" : trimprefix(trimprefix(local.kb_s3_uri, "s3://${local.kb_s3_bucket}"), "/")
-  kb_s3_prefix   = local.kb_s3_rest == "" || endswith(local.kb_s3_rest, "/") ? local.kb_s3_rest : "${local.kb_s3_rest}/"
+  #   connector - `dataSource`: a web crawl or a SaaS site (kb_data_source.tf); no bucket.
+  kb_source    = local.kb_existing_id != "" ? "existing" : (local.kb_s3_uri != "" ? "s3" : (local.kb_ds != null ? "connector" : "upload"))
+  kb_create    = local.kb_enabled && local.kb_source != "existing"
+  kb_upload    = local.kb_enabled && local.kb_source == "upload"
+  kb_s3_bucket = local.kb_s3_uri == "" ? "" : split("/", trimprefix(local.kb_s3_uri, "s3://"))[0]
+  kb_s3_rest   = local.kb_s3_uri == "" ? "" : trimprefix(trimprefix(local.kb_s3_uri, "s3://${local.kb_s3_bucket}"), "/")
+  kb_s3_prefix = local.kb_s3_rest == "" || endswith(local.kb_s3_rest, "/") ? local.kb_s3_rest : "${local.kb_s3_rest}/"
 
   # --- Embedding model + dimension, from config -----------------------------
   # Both were hardcoded here and in cdk/lib/tool-plane.ts. They are a PAIR: a model
@@ -59,7 +60,8 @@ locals {
   # The KB carries the SAME digest: its storage_configuration points at the index ARN
   # and is immutable, so replacing the index replaces the KB too. Matches
   # knowledgeBaseName() in cdk/lib/tool-plane.ts.
-  kb_name     = "${replace(var.agent_name, "_", "-")}-kb-${local.kb_storage_digest}"
+  # With `vectorStore`, a digest of YOUR store instead (kb_vector_store.tf).
+  kb_name     = local.kb_vs_set ? local.kb_vs_name : "${replace(var.agent_name, "_", "-")}-kb-${local.kb_storage_digest}"
   embed_model = "arn:aws:bedrock:${var.region}::foundation-model/${local.kb_embed_model_id}"
 
   # --- Retrieval settings passed to the KB Lambda ---------------------------
@@ -96,13 +98,13 @@ locals {
 # --- S3 Vectors store -----------------------------------------------------
 
 resource "aws_s3vectors_vector_bucket" "kb" {
-  count              = local.kb_create ? 1 : 0
+  count              = local.kb_s3vectors ? 1 : 0
   vector_bucket_name = "agentcore-${replace(var.agent_name, "_", "-")}-kb-${local.account_id}"
   force_destroy      = true
 }
 
 resource "aws_s3vectors_index" "kb" {
-  count              = local.kb_create ? 1 : 0
+  count              = local.kb_s3vectors ? 1 : 0
   vector_bucket_name = aws_s3vectors_vector_bucket.kb[0].vector_bucket_name
   # The name carries a digest of this index's IMMUTABLE properties (dimension +
   # the non-filterable key list), matching kbIndexName() in cdk/lib/tool-plane.ts.
@@ -201,6 +203,9 @@ resource "aws_iam_role" "kb" {
       Condition = { StringEquals = { "aws:SourceAccount" = local.account_id } }
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "kb" {
@@ -216,6 +221,7 @@ resource "aws_iam_role_policy" "kb" {
         Action   = ["bedrock:InvokeModel"]
         Resource = [local.embed_model]
       },
+      ], local.kb_s3vectors ? [
       {
         Sid    = "S3VectorsData"
         Effect = "Allow"
@@ -228,7 +234,7 @@ resource "aws_iam_role_policy" "kb" {
         ]
         Resource = [aws_s3vectors_vector_bucket.kb[0].vector_bucket_arn, "${aws_s3vectors_vector_bucket.kb[0].vector_bucket_arn}/*"]
       },
-      ], local.kb_upload ? [
+      ] : [], local.kb_upload ? [
       {
         Sid      = "DocsRead"
         Effect   = "Allow"
@@ -259,7 +265,7 @@ resource "aws_iam_role_policy" "kb" {
         Resource  = ["arn:aws:s3:::${local.kb_s3_bucket}"]
         Condition = { StringLike = { "s3:prefix" = ["${local.kb_s3_prefix}*"] } }
       }
-      ] : [], local.kb_kms_key == "" ? [] : [
+      ] : [], local.kb_parsing_statements, local.kb_graph_statements, local.kb_vs_statements, local.kb_ds_statements, local.kb_kms_key == "" ? [] : [
       {
         Sid      = "KmsDecrypt"
         Effect   = "Allow"
@@ -291,9 +297,106 @@ resource "aws_bedrockagent_knowledge_base" "kb" {
   }
 
   storage_configuration {
-    type = "S3_VECTORS"
-    s3_vectors_configuration {
-      index_arn = aws_s3vectors_index.kb[0].index_arn
+    type = local.kb_vs_set ? local.kb_vs_vocab.api[local.kb_vs_type] : "S3_VECTORS"
+    dynamic "s3_vectors_configuration" {
+      for_each = local.kb_s3vectors ? [1] : []
+      content {
+        index_arn = aws_s3vectors_index.kb[0].index_arn
+      }
+    }
+    # YOUR store (`vectorStore`, kb_vector_store.tf): one of these, the rest empty.
+    dynamic "opensearch_serverless_configuration" {
+      for_each = local.kb_vs_set && local.kb_vs_type == "opensearchServerless" ? [local.kb_vs_v] : []
+      content {
+        collection_arn    = opensearch_serverless_configuration.value.collectionArn
+        vector_index_name = opensearch_serverless_configuration.value.indexName
+        field_mapping {
+          vector_field   = opensearch_serverless_configuration.value.vectorField
+          text_field     = opensearch_serverless_configuration.value.textField
+          metadata_field = opensearch_serverless_configuration.value.metadataField
+        }
+      }
+    }
+    dynamic "opensearch_managed_cluster_configuration" {
+      for_each = local.kb_vs_set && local.kb_vs_type == "opensearchManaged" ? [local.kb_vs_v] : []
+      content {
+        domain_arn        = opensearch_managed_cluster_configuration.value.domainArn
+        domain_endpoint   = opensearch_managed_cluster_configuration.value.domainEndpoint
+        vector_index_name = opensearch_managed_cluster_configuration.value.indexName
+        field_mapping {
+          vector_field   = opensearch_managed_cluster_configuration.value.vectorField
+          text_field     = opensearch_managed_cluster_configuration.value.textField
+          metadata_field = opensearch_managed_cluster_configuration.value.metadataField
+        }
+      }
+    }
+    dynamic "rds_configuration" {
+      for_each = local.kb_vs_set && local.kb_vs_type == "aurora" ? [local.kb_vs_v] : []
+      content {
+        resource_arn           = rds_configuration.value.resourceArn
+        credentials_secret_arn = rds_configuration.value.credentialsSecretArn
+        database_name          = rds_configuration.value.databaseName
+        table_name             = rds_configuration.value.tableName
+        field_mapping {
+          primary_key_field     = rds_configuration.value.primaryKeyField
+          vector_field          = rds_configuration.value.vectorField
+          text_field            = rds_configuration.value.textField
+          metadata_field        = rds_configuration.value.metadataField
+          custom_metadata_field = rds_configuration.value.customMetadataField == "" ? null : rds_configuration.value.customMetadataField
+        }
+      }
+    }
+    dynamic "neptune_analytics_configuration" {
+      for_each = local.kb_vs_set && local.kb_vs_type == "neptuneAnalytics" ? [local.kb_vs_v] : []
+      content {
+        graph_arn = neptune_analytics_configuration.value.graphArn
+        field_mapping {
+          text_field     = neptune_analytics_configuration.value.textField
+          metadata_field = neptune_analytics_configuration.value.metadataField
+        }
+      }
+    }
+    dynamic "pinecone_configuration" {
+      for_each = local.kb_vs_set && local.kb_vs_type == "pinecone" ? [local.kb_vs_v] : []
+      content {
+        connection_string      = pinecone_configuration.value.connectionString
+        credentials_secret_arn = pinecone_configuration.value.credentialsSecretArn
+        namespace              = pinecone_configuration.value.namespace == "" ? null : pinecone_configuration.value.namespace
+        field_mapping {
+          text_field     = pinecone_configuration.value.textField
+          metadata_field = pinecone_configuration.value.metadataField
+        }
+      }
+    }
+    dynamic "mongo_db_atlas_configuration" {
+      for_each = local.kb_vs_set && local.kb_vs_type == "mongodbAtlas" ? [local.kb_vs_v] : []
+      content {
+        endpoint               = mongo_db_atlas_configuration.value.endpoint
+        credentials_secret_arn = mongo_db_atlas_configuration.value.credentialsSecretArn
+        database_name          = mongo_db_atlas_configuration.value.databaseName
+        collection_name        = mongo_db_atlas_configuration.value.collectionName
+        vector_index_name      = mongo_db_atlas_configuration.value.indexName
+        endpoint_service_name  = mongo_db_atlas_configuration.value.endpointServiceName == "" ? null : mongo_db_atlas_configuration.value.endpointServiceName
+        text_index_name        = mongo_db_atlas_configuration.value.textIndexName == "" ? null : mongo_db_atlas_configuration.value.textIndexName
+        field_mapping {
+          vector_field   = mongo_db_atlas_configuration.value.vectorField
+          text_field     = mongo_db_atlas_configuration.value.textField
+          metadata_field = mongo_db_atlas_configuration.value.metadataField
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.kb_vs_problems) == 0
+      error_message = "tools.${local.kb_tool_name}: ${join("; ", local.kb_vs_problems)}."
+    }
+    # `dataSource` (kb_data_source.tf): checked here because the data source resource is
+    # not the same one for every store.
+    precondition {
+      condition     = length(local.kb_ds_problems) == 0
+      error_message = "tools.${local.kb_tool_name}: ${join("; ", local.kb_ds_problems)}."
     }
   }
 
@@ -301,17 +404,239 @@ resource "aws_bedrockagent_knowledge_base" "kb" {
 }
 
 resource "aws_bedrockagent_data_source" "kb" {
-  count             = local.kb_create ? 1 : 0
+  # Neptune Analytics needs context enrichment, which this resource has no block for in
+  # hashicorp/aws 6.67; that one data source is awscc_bedrock_data_source.kb_graph below.
+  count             = local.kb_create && local.kb_graph_model == "" ? 1 : 0
   knowledge_base_id = aws_bedrockagent_knowledge_base.kb[0].id
-  name              = "docs"
+  # "docs" unless `chunking` or `parsing` is set; then a digest of them (kb_ingestion.tf).
+  name = local.kb_data_source_name
 
   data_source_configuration {
+    type = local.kb_ds_set ? local.kb_ds_vocab.api[local.kb_ds_type] : "S3"
+    dynamic "s3_configuration" {
+      for_each = local.kb_ds_set ? [] : [1]
+      content {
+        bucket_arn         = local.kb_upload ? aws_s3_bucket.kb_docs[0].arn : "arn:aws:s3:::${local.kb_s3_bucket}"
+        inclusion_prefixes = local.kb_s3_prefix == "" ? null : [local.kb_s3_prefix]
+      }
+    }
+    # `dataSource` (kb_data_source.tf): one of these, the rest empty. Mirrors kbConnector()
+    # in cdk/lib/kb-data-source.ts.
+    dynamic "web_configuration" {
+      for_each = local.kb_ds_set && local.kb_ds_type == "web" ? [1] : []
+      content {
+        source_configuration {
+          url_configuration {
+            dynamic "seed_urls" {
+              for_each = local.kb_ds_seed_urls
+              content {
+                url = seed_urls.value
+              }
+            }
+          }
+        }
+        dynamic "crawler_configuration" {
+          for_each = local.kb_ds_crawler ? [1] : []
+          content {
+            inclusion_filters = local.kb_ds_inclusions
+            exclusion_filters = local.kb_ds_exclusions
+            scope             = local.kb_ds_scope
+            user_agent        = local.kb_ds_user_agent
+            dynamic "crawler_limits" {
+              for_each = local.kb_ds_rate_limit == null && local.kb_ds_max_pages == null ? [] : [1]
+              content {
+                rate_limit = local.kb_ds_rate_limit
+                max_pages  = local.kb_ds_max_pages
+              }
+            }
+          }
+        }
+      }
+    }
+    dynamic "confluence_configuration" {
+      for_each = local.kb_ds_set && local.kb_ds_type == "confluence" ? [1] : []
+      content {
+        source_configuration {
+          host_url               = local.kb_ds_host_url
+          host_type              = "SAAS"
+          auth_type              = local.kb_ds_auth_type
+          credentials_secret_arn = local.kb_ds_secret
+        }
+        dynamic "crawler_configuration" {
+          for_each = length(local.kb_ds_filters) > 0 ? [1] : []
+          content {
+            filter_configuration {
+              type = "PATTERN"
+              pattern_object_filter {
+                dynamic "filters" {
+                  for_each = local.kb_ds_filters
+                  content {
+                    object_type       = filters.value.object_type
+                    inclusion_filters = filters.value.include
+                    exclusion_filters = filters.value.exclude
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    dynamic "share_point_configuration" {
+      for_each = local.kb_ds_set && local.kb_ds_type == "sharepoint" ? [1] : []
+      content {
+        source_configuration {
+          domain    = local.kb_ds_domain
+          site_urls = local.kb_ds_site_urls
+          tenant_id = local.kb_ds_tenant_id
+          # The only ones left: Microsoft retired SharePoint App-Only on April 2, 2026.
+          host_type              = "ONLINE"
+          auth_type              = "OAUTH2_CLIENT_CREDENTIALS"
+          credentials_secret_arn = local.kb_ds_secret
+        }
+        dynamic "crawler_configuration" {
+          for_each = length(local.kb_ds_filters) > 0 ? [1] : []
+          content {
+            filter_configuration {
+              type = "PATTERN"
+              pattern_object_filter {
+                dynamic "filters" {
+                  for_each = local.kb_ds_filters
+                  content {
+                    object_type       = filters.value.object_type
+                    inclusion_filters = filters.value.include
+                    exclusion_filters = filters.value.exclude
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    dynamic "salesforce_configuration" {
+      for_each = local.kb_ds_set && local.kb_ds_type == "salesforce" ? [1] : []
+      content {
+        source_configuration {
+          host_url               = local.kb_ds_host_url
+          auth_type              = "OAUTH2_CLIENT_CREDENTIALS"
+          credentials_secret_arn = local.kb_ds_secret
+        }
+        dynamic "crawler_configuration" {
+          for_each = length(local.kb_ds_filters) > 0 ? [1] : []
+          content {
+            filter_configuration {
+              type = "PATTERN"
+              pattern_object_filter {
+                dynamic "filters" {
+                  for_each = local.kb_ds_filters
+                  content {
+                    object_type       = filters.value.object_type
+                    inclusion_filters = filters.value.include
+                    exclusion_filters = filters.value.exclude
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  # Only when the tool sets `chunking` or `parsing`: otherwise Bedrock's defaults, as before.
+  # Mirrors kbIngestion() in cdk/lib/kb-ingestion.ts.
+  dynamic "vector_ingestion_configuration" {
+    for_each = local.kb_ingestion_set ? [1] : []
+    content {
+      dynamic "chunking_configuration" {
+        for_each = local.kb_chunk_strategy == "" ? [] : [1]
+        content {
+          chunking_strategy = local.vocab.kbChunkingStrategies.api[local.kb_chunk_strategy]
+          dynamic "fixed_size_chunking_configuration" {
+            for_each = local.kb_chunk_strategy == "fixedSize" ? [1] : []
+            content {
+              max_tokens         = local.kb_chunk.maxTokens
+              overlap_percentage = local.kb_chunk.overlapPercentage
+            }
+          }
+          dynamic "hierarchical_chunking_configuration" {
+            for_each = local.kb_chunk_strategy == "hierarchical" ? [1] : []
+            content {
+              # First the large (parent) layer, then the small (child) one: Bedrock's order.
+              level_configuration {
+                max_tokens = local.kb_chunk.parentMaxTokens
+              }
+              level_configuration {
+                max_tokens = local.kb_chunk.childMaxTokens
+              }
+              overlap_tokens = local.kb_chunk.overlapTokens
+            }
+          }
+          dynamic "semantic_chunking_configuration" {
+            for_each = local.kb_chunk_strategy == "semantic" ? [1] : []
+            content {
+              # `max_token`, singular, is the provider's spelling of maxTokens.
+              max_token                       = local.kb_chunk.maxTokens
+              buffer_size                     = local.kb_chunk.bufferSize
+              breakpoint_percentile_threshold = local.kb_chunk.breakpointPercentileThreshold
+            }
+          }
+        }
+      }
+      dynamic "parsing_configuration" {
+        for_each = local.kb_parse_strategy == "" ? [] : [1]
+        content {
+          parsing_strategy = local.vocab.kbParsingStrategies.api[local.kb_parse_strategy]
+          bedrock_foundation_model_configuration {
+            model_arn = local.kb_parse_model_arn
+            dynamic "parsing_prompt" {
+              for_each = local.kb_parse_prompt == "" ? [] : [1]
+              content {
+                parsing_prompt_string = local.kb_parse_prompt
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.kb_ingestion_problems) == 0
+      error_message = "tools.${local.kb_tool_name}: ${join("; ", local.kb_ingestion_problems)}."
+    }
+  }
+}
+
+# The data source for a Neptune Analytics store (GraphRAG): the same settings as
+# aws_bedrockagent_data_source.kb, plus the graph construction model as context
+# enrichment, which only awscc can express. Absent for every other store.
+resource "awscc_bedrock_data_source" "kb_graph" {
+  count             = local.kb_create && local.kb_graph_model != "" ? 1 : 0
+  knowledge_base_id = aws_bedrockagent_knowledge_base.kb[0].id
+  name              = local.kb_data_source_name
+
+  data_source_configuration = {
     type = "S3"
-    s3_configuration {
+    s3_configuration = {
       bucket_arn         = local.kb_upload ? aws_s3_bucket.kb_docs[0].arn : "arn:aws:s3:::${local.kb_s3_bucket}"
       inclusion_prefixes = local.kb_s3_prefix == "" ? null : [local.kb_s3_prefix]
     }
   }
+  vector_ingestion_configuration = local.kb_ingestion_awscc
+
+  lifecycle {
+    precondition {
+      condition     = length(local.kb_ingestion_problems) == 0
+      error_message = "tools.${local.kb_tool_name}: ${join("; ", local.kb_ingestion_problems)}."
+    }
+  }
+}
+
+locals {
+  kb_data_source_id = try(aws_bedrockagent_data_source.kb[0].data_source_id, awscc_bedrock_data_source.kb_graph[0].data_source_id, "")
 }
 
 # Trigger ingestion when the corpus changes. No declarative equivalent exists for
@@ -323,17 +648,17 @@ resource "null_resource" "kb_ingest" {
   triggers = {
     docs_hash = local.kb_upload ? sha1(join(",", [for f in sort(local.kb_files) : filemd5("${path.module}/../kb_docs/${f}")])) : timestamp()
     meta_hash = sha1(jsonencode({ for f in local.kb_files : f => split("/", f)[0] }))
-    ds_id     = aws_bedrockagent_data_source.kb[0].data_source_id
+    ds_id     = local.kb_data_source_id
   }
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     command     = <<-EOT
       aws bedrock-agent start-ingestion-job --region ${var.region} \
         --knowledge-base-id ${aws_bedrockagent_knowledge_base.kb[0].id} \
-        --data-source-id ${aws_bedrockagent_data_source.kb[0].data_source_id}
+        --data-source-id ${local.kb_data_source_id}
     EOT
   }
-  depends_on = [aws_s3_object.kb_docs, aws_s3_object.kb_docs_metadata]
+  depends_on = [aws_s3_object.kb_docs, aws_s3_object.kb_docs_metadata, aws_bedrockagent_data_source.kb, awscc_bedrock_data_source.kb_graph]
 }
 
 locals {
@@ -362,6 +687,9 @@ resource "aws_iam_role" "kb_lambda" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "kb_lambda" {

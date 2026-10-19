@@ -97,6 +97,9 @@ resource "aws_iam_role" "bff" {
       Action    = "sts:AssumeRole"
     }]
   })
+
+  path                 = var.iam_role_path
+  permissions_boundary = local.iam_permissions_boundary
 }
 
 resource "aws_iam_role_policy" "bff" {
@@ -204,7 +207,7 @@ resource "aws_lambda_function" "bff" {
       # about eleven agents' worth of it.
       # Where image agents' images are (images.tf), for GET /api/images.
       ASSETS_BUCKET = local.assets_bucket
-    }, local.bff_run_env, local.workflow_plane ? local.bff_version_env : {}, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env) # builder.tf, audit.tf, triggers.tf
+    }, local.bff_run_env, local.workflow_plane ? local.bff_version_env : {}, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env, local.memory_bff_env, local.a2a_bff_env, local.litellm_env) # builder.tf, audit.tf, triggers.tf, memories.tf, a2a_server.tf, litellm.tf
   }
   # The log group must exist BEFORE the function, or Lambda creates
   # /aws/lambda/<name> itself and Terraform's CreateLogGroup then fails with
@@ -268,6 +271,16 @@ resource "aws_apigatewayv2_route" "routes" {
     "GET /api/me",
     # The Bedrock text models this account can invoke, for the Build view's picker.
     "GET /api/models",
+    # The models the LiteLLM proxy serves (bff/litellm_models.py); 404 while it is off.
+    "GET /api/models/litellm",
+    # The caller's use of orchestrator.limits, for the Start run box (bff/limits.py).
+    "GET /api/limits",
+    # Live config (bff/liveconfig.py): admins only, checked in the BFF; 404 while it is off.
+    "GET /api/liveconfig",
+    "GET /api/liveconfig/versions",
+    "POST /api/liveconfig/versions",
+    "GET /api/liveconfig/versions/{version}",
+    "PUT /api/liveconfig/active",
     "POST /api/sessions",
     # One file a run will bring, for agents with `attachments` (bff/runfiles.py).
     "POST /api/sessions/attachments",
@@ -281,7 +294,20 @@ resource "aws_apigatewayv2_route" "routes" {
     "POST /api/insights/run",
     "GET /api/insights",
     "GET /api/sessions/{id}/telemetry",
+    "GET /api/sessions/{id}/flow",
+    # A run's files and 5-minute links to them; the caller's runs' files (bff/runartifacts.py).
+    "GET /api/sessions/{id}/files",
+    "GET /api/sessions/{id}/files/url",
+    "GET /api/files",
+    # Read-only links to one run (bff/runshares.py): its owner makes, lists and revokes
+    # them; any signed-in user opens one. Behind the JWT authorizer like every route here.
+    "POST /api/sessions/{id}/shares",
+    "GET /api/sessions/{id}/shares",
+    "DELETE /api/sessions/{id}/shares/{shareId}",
+    "GET /api/shared/{shareId}",
     "GET /api/telemetry/aggregate",
+    # Per tool and per agent error, denial and latency figures, for `admin` (bff/analytics.py).
+    "GET /api/analytics",
     "POST /api/chat",
     # Builder builds (bff/builds.py). Declared even with the builder plane off, where
     # the BFF answers 404 — so the route set is the same on every deployment.
@@ -317,6 +343,11 @@ resource "aws_apigatewayv2_route" "routes" {
     # A tool written in the build: checked (bff/codecheck.py), and tested once deployed.
     "POST /api/code/check",
     "POST /api/builds/{id}/test-tool",
+    # A build's test suites, and runs of them (bff/suiteruns.py).
+    "GET /api/builds/{id}/suites",
+    "PUT /api/builds/{id}/suites",
+    "POST /api/builds/{id}/suite-runs",
+    "GET /api/builds/{id}/suite-runs/{run}",
     # The policy library (bff/policies.py), and plain English -> Cedar.
     "GET /api/policies",
     "POST /api/policies",
@@ -339,6 +370,13 @@ resource "aws_apigatewayv2_route" "routes" {
     "GET /api/groups",
     "PUT /api/groups/{id}",
     "DELETE /api/groups/{id}",
+    # Teams and their workspaces (bff/teams.py).
+    "GET /api/teams",
+    "POST /api/teams",
+    "GET /api/teams/{id}",
+    "PUT /api/teams/{id}",
+    "DELETE /api/teams/{id}",
+    "PUT /api/builds/{id}/team",
     # The audit log, and the sign-out the page reports before it signs out.
     "GET /api/audit",
     "POST /api/audit/logout",
@@ -348,6 +386,12 @@ resource "aws_apigatewayv2_route" "routes" {
     "POST /api/connect",
     "POST /api/triggers/{name}/secret",
     "POST /api/triggers/{name}/test",
+    # Long-term memory records, for admins (bff/memories.py, memories.tf).
+    "GET /api/memory/agents",
+    "GET /api/memory/namespaces",
+    "GET /api/memory/records",
+    "POST /api/memory/search",
+    "DELETE /api/memory/records/{id}",
   ])
   api_id             = aws_apigatewayv2_api.bff.id
   route_key          = each.value

@@ -29,6 +29,8 @@ locals {
     [for id, c in local.memory_customs : try(c.model, "")],
     flatten([for id, a in local.agents_def : [for c in try(a.agentcore.evaluations.custom, []) : try(c.model, "")]]),
     [for n, c in local.shared_evaluator_defs : try(c.model, "")],
+    # A harness agent's model is set on its harness here, not resolved by the app (harness.tf).
+    [for id, a in local.harness_agents : try(a.model, "")],
   )))
   regional_model = {
     for m in local._named_models : m => (
