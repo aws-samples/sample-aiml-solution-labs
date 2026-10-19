@@ -129,6 +129,24 @@ def test_an_agents_components_are_kinds_and_names_only(project):
         assert secret not in shipped
 
 
+def test_a_custom_policy_shows_on_every_agent_that_calls_the_tool_it_names(project):
+    """orchestrator.policy.custom applies at the Gateway to every call of the tools it names, so
+    each agent using one of them lists it; an agent that does not, does not. Its text never ships."""
+    workflow = _wf(tools={"webSearch": {"type": "websearch"}, "kb": {"type": "kb"}})
+    workflow["orchestrator"] = {"policy": {"enabled": True, "custom": [
+        {"name": "noAcme", "statement": 'forbid(principal, action == AgentCore::Action::"webSearch___WebSearch", '
+                                        'resource == AgentCore::Gateway::"{{gateway}}") when { SECRET_RULE };'}]}}
+    workflow["agents"]["a"]["tool"] = "webSearch"
+    workflow["agents"]["b"] = {"name": "B", "tool": "kb"}
+    workflow["steps"] = [{"agent": "a"}, {"agent": "b"}]
+    agents = project(workflow)["agents"]
+    pol = [{k: v for k, v in c.items() if k != "resources"} for c in agents["a"]["components"] if c["kind"] == "policy"]
+    assert pol == [{"kind": "policy", "name": "noAcme", "tool": "webSearch", "detail": "on webSearch \u00b7 every agent",
+                    "custom": True}]
+    assert not [c for c in agents["b"]["components"] if c["kind"] == "policy"]
+    assert "SECRET_RULE" not in json.dumps(agents)
+
+
 # ---------------------------------------------------------------------------
 # No ceiling
 # ---------------------------------------------------------------------------

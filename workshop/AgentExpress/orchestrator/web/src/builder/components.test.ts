@@ -75,6 +75,25 @@ describe("componentsOf", () => {
   });
 });
 
+describe("a custom Cedar policy (orchestrator.policy.custom)", () => {
+  const wf = {
+    agents: { a: { name: "A", tool: "webSearch" }, b: { name: "B", tool: "kb" } },
+    tools: { webSearch: { type: "websearch" }, kb: { type: "kb" } },
+    steps: [{ agent: "a" }, { agent: "b" }],
+    orchestrator: { policy: { enabled: true, custom: [{ name: "noAcme",
+      statement: 'forbid(principal, action == AgentCore::Action::"webSearch___WebSearch", resource == AgentCore::Gateway::"{{gateway}}");' }] } },
+  } as unknown as Workflow;
+  it("shows on every agent that calls the tool it names, marked as the Gateway's, and on no other", () => {
+    expect(componentsOf(wf, "a").filter((c) => c.kind === "policy")).toEqual([
+      { kind: "policy", name: "noAcme", detail: "on webSearch · every agent", tool: "webSearch", ref: "noAcme", custom: true }]);
+    expect(componentsOf(wf, "b").filter((c) => c.kind === "policy")).toEqual([]);
+  });
+  it("is not taken off from one agent: removing the row changes nothing", () => {
+    const c = componentsOf(wf, "a").find((x) => x.custom)!;
+    expect(c.custom).toBe(true);
+  });
+});
+
 describe("kindCounts", () => {
   it("counts agents, not rows", () => {
     const n = kindCounts(wf);

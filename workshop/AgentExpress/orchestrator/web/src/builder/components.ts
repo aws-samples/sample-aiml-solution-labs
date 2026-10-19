@@ -45,6 +45,9 @@ export interface Component {
    *  memory picked ("" for the deployment guardrail), the policy, skill or identity name,
    *  the evaluator id ("Builtin.Faithfulness"). Unset for what is only switched on. */
   ref?: string;
+  /** A policy from orchestrator.policy.custom: it applies at the Gateway to every agent that calls
+   *  its tool, so it is shown on each and taken off on the Policies tab, not from one agent. */
+  custom?: boolean;
 }
 
 /** A row's identity within its agent, stable across edits that do not remove it. */
@@ -73,6 +76,18 @@ const evaluatorName = (e: string): { name: string; detail: string } => {
   }
   return { name: e, detail: "" };
 };
+
+/** orchestrator.policy.custom entries and the tool keys their statement names
+ *  (AgentCore::Action::"<key>" or "<key>___<tool>"). */
+export function customPolicies(wf: Workflow): { name: string; tools: string[] }[] {
+  const list = obj(obj(obj(wf.orchestrator).policy)).custom;
+  if (!Array.isArray(list)) return [];
+  return list.filter(isObj).filter((c) => typeof c.name === "string" && c.name && typeof c.statement === "string")
+    .map((c) => ({
+      name: c.name as string,
+      tools: [...new Set([...(c.statement as string).matchAll(/AgentCore::Action::"([A-Za-z][A-Za-z0-9]*)(?:___[^"]*)?"/g)].map((m) => m[1]))],
+    }));
+}
 
 /** Every component attached to agent `id`, in COMPONENT_TYPES order, tools in their own order. */
 export function componentsOf(wf: Workflow, id: string): Component[] {
@@ -107,6 +122,16 @@ export function componentsOf(wf: Workflow, id: string): Component[] {
 
   for (const key of toolsOf(spec.tool)) {
     for (const p of strings(obj(wf.tools?.[key]).policies)) out.push({ kind: "policy", name: p, detail: `on ${key}`, tool: key, ref: p });
+  }
+
+  // orchestrator.policy.custom: a statement that names one of this agent's tools governs every call
+  // to that tool, whichever agent makes it, so it is listed here too (bff/workflow.py does the same).
+  for (const cp of customPolicies(wf)) {
+    for (const key of toolsOf(spec.tool)) {
+      if (cp.tools.includes(key) && !out.some((r) => r.kind === "policy" && r.tool === key && r.ref === cp.name)) {
+        out.push({ kind: "policy", name: cp.name, detail: `on ${key} · every agent`, tool: key, ref: cp.name, custom: true });
+      }
+    }
   }
 
   for (const s of strings(spec.skills)) out.push({ kind: "skill", name: s, ref: s });

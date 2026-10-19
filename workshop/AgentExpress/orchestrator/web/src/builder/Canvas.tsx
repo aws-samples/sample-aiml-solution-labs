@@ -148,8 +148,8 @@ function AgentNode({ data }: NodeProps<Node<AgentData>>) {
               <li key={key}
                   className={`axb-comp${isTool && data.dropTools?.includes(c.tool!) ? " axb-drop-ok" : ""}${data.selectedRow === key ? " axb-comp-selected" : ""}`}
                   data-kind={c.kind} {...(isTool ? { "data-axb-tool": c.tool } : {})}
-                  draggable={data.editable}
-                  onDragStart={data.editable ? (e) => {
+                  draggable={data.editable && !c.custom}
+                  onDragStart={data.editable && !c.custom ? (e) => {
                     e.stopPropagation();
                     const payload: DragPayload = { kind: "attached", agent: data.id, key };
                     e.dataTransfer.setData(DND_MIME, JSON.stringify(payload));
@@ -166,7 +166,7 @@ function AgentNode({ data }: NodeProps<Node<AgentData>>) {
                   aria-label={`${label}, settings`}
                   onClick={(e) => { e.stopPropagation(); data.onRow?.(key); }}>{c.name}</button>
                 {c.detail ? <span className="axb-comp-detail">{c.detail}</span> : null}
-                {data.editable && data.onRemove ? (
+                {data.editable && data.onRemove && !c.custom ? (
                   <button type="button" className="axb-chip-x" aria-label={`Remove ${label} from ${data.name}`}
                     title={`Remove from ${data.name}`}
                     onClick={(e) => { e.stopPropagation(); data.onRemove?.(key); }}>×</button>

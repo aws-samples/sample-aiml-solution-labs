@@ -719,6 +719,10 @@ function Editor({
   const removeRow = useCallback((agent: string, key: string) => {
     const c = findComponent(project, agent, key);
     if (!c) return;
+    if (c.custom) {
+      notify("info", `${c.name} applies at the Gateway to every agent that calls ${c.tool}. Change or remove it on the Policies tab.`);
+      return;
+    }
     if (c.kind === "policy" && c.tool) {
       const users = Object.values(project.workflow.agents).filter((a) => toolsOf(a.tool).includes(c.tool!)).length;
       if (users > 1 && !window.confirm(`${c.name} is on the tool ${c.tool}, which ${users} agents call. Taking it off changes the tool for all of them. Continue?`)) return;

@@ -229,6 +229,19 @@ def _strs(v) -> list[str]:
     return [str(x) for x in v if isinstance(x, str) and x] if isinstance(v, list) else []
 
 
+_CEDAR_ACTION = re.compile(r'AgentCore::Action::"([A-Za-z][A-Za-z0-9]*)(?:___[^"]*)?"')
+
+
+def _custom_policies(workflow: dict) -> list[dict]:
+    """orchestrator.policy.custom entries and the tool keys their statement names."""
+    pol = ((workflow.get("orchestrator") or {}).get("policy") or {}) if isinstance(workflow.get("orchestrator"), dict) else {}
+    out = []
+    for c in (pol.get("custom") if isinstance(pol, dict) and isinstance(pol.get("custom"), list) else []):
+        if isinstance(c, dict) and isinstance(c.get("name"), str) and c["name"] and isinstance(c.get("statement"), str):
+            out.append({"name": c["name"], "tools": list(dict.fromkeys(_CEDAR_ACTION.findall(c["statement"])))})
+    return out
+
+
 def components(workflow: dict, agent_id: str) -> list[dict]:
     """What is attached to one agent, as the run graph shows it: {kind, name, detail, tool?}
     per tool, guardrail, memory, Cedar policy (on one of its tools), skill, evaluator,
@@ -269,6 +282,13 @@ def components(workflow: dict, agent_id: str) -> list[dict]:
     for key in tool_keys:
         for p in _strs((tools_cfg.get(key) or {}).get("policies") if isinstance(tools_cfg.get(key), dict) else None):
             out.append({"kind": "policy", "name": p, "tool": key, "detail": f"on {key}"})
+    # orchestrator.policy.custom: a statement naming one of this agent's tools governs every call to
+    # that tool, so it is listed here too (web/src/builder/components.ts does the same).
+    for cp in _custom_policies(workflow):
+        for key in tool_keys:
+            if key in cp["tools"] and not any(r["kind"] == "policy" and r.get("tool") == key and r["name"] == cp["name"] for r in out):
+                out.append({"kind": "policy", "name": cp["name"], "tool": key, "detail": f"on {key} \u00b7 every agent",
+                            "custom": True})
     for sk in _strs(agent.get("skills")):
         out.append({"kind": "skill", "name": sk, "detail": ""})
     ev = core.get("evaluations") if isinstance(core.get("evaluations"), dict) else {}
