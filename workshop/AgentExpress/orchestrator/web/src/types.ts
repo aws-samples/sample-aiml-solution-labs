@@ -199,6 +199,8 @@ export interface Me {
   audit?: boolean;
   /** The caller's email: what a share names them by. */
   email?: string;
+  /** A control-plane console's link to a product demo video (lib/demoVideo.ts). */
+  demoVideoUrl?: string;
 }
 
 /** The mutating actions `authorization` in workflow.json can gate. */

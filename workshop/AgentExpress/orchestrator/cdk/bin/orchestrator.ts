@@ -129,6 +129,9 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   // "builder": a control-plane console (design, build, deploy; runs live in each build's
   // app). "app" (the default): this workflow's own app.
   consoleMode: String(ctx("consoleMode", "app")),
+  // A link to a product demo video, shown on a control-plane console (consoleMode=builder):
+  // -c demoVideoUrl=https://... An https URL or empty (the default: no link).
+  demoVideoUrl: ctx("demoVideoUrl", ""),
   // A destroy of this stack clears the builds table's deletion protection just before
   // deleting it. -c keepBuildsTableProtected=true makes a destroy stop at the table
   // instead. Mirrors var.keep_builds_table_protected in terraform/builder.tf.

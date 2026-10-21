@@ -130,6 +130,9 @@ REGION = os.environ.get("AWS_REGION", "us-east-1")
 #: uiUrl), so this BFF refuses the run routes for its own workflow as well as for builds.
 #: "app" (the default): a workflow's app, with the Builder beside it when it is enabled.
 CONSOLE_MODE = os.environ.get("CONSOLE_MODE", "app")
+#: A link to a product demo video, shown on a control-plane console only (the About panel
+#: and the first-run view). Set by -c demoVideoUrl / var.demo_video_url; an https URL or empty.
+DEMO_VIDEO_URL = os.environ.get("DEMO_VIDEO_URL", "").strip()
 #: AgentCore stopped accepting new batch Insights jobs on 16 October 2026 (it is being
 #: redesigned); earlier findings stay readable. Mirrors app/features/optimization/insights.py.
 #: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html
@@ -1613,7 +1616,7 @@ def _route(event: dict, context) -> dict:
                                      lambda action, **d: _audit_run(event, action, "", **d)))
 
     # The activity log (bff/audit.py): your own, or — with the `audit` permission —
-    # everyone's on one day. Sign-ins are logged by the Cognito trigger; sign-outs here,
+    # everyone else's over a range of days (yours are under "mine", not repeated there). Sign-ins are logged by the Cognito trigger; sign-outs here,
     # called by the page just before it signs out. On a console AND in a build's app.
     if route_key == "GET /api/audit":
         qs = event.get("queryStringParameters") or {}
@@ -1688,7 +1691,9 @@ def _route(event: dict, context) -> dict:
                            "permittedActions": authz.permitted_actions(event),
                            "authzEnabled": authz.ENABLED, "builder": builds.ENABLED,
                            "email": str(authz.claims(event).get("email") or ""),
-                           "consoleMode": _console_mode(), "audit": audit.enabled()})
+                           "consoleMode": _console_mode(), "audit": audit.enabled(),
+                           **({"demoVideoUrl": DEMO_VIDEO_URL}
+                              if _console_mode() == "builder" and DEMO_VIDEO_URL.startswith("https://") else {})})
 
     # Live config (bff/liveconfig.py): agents' prompts and model settings changed on this
     # running deployment. Admins only, each change in the activity log; 404 while it is off.

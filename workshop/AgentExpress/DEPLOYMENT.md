@@ -346,12 +346,14 @@ All commands run from `orchestrator/terraform/`.
 3. Apply:
 
    ```bash
-   terraform apply -target=null_resource.ui_build   # first apply of a NEW stack only
+   terraform apply -target=null_resource.ui_build   # a new stack, or any apply after the web code (web/) changed
    terraform apply
    ```
 
-   The targeted apply builds the UI once; until then the file list `ui.tf` uploads is unknown and
-   a fresh stack's plan is refused. Later applies are one command. Allow several minutes.
+   The targeted apply builds the UI; until it runs, the file list `ui.tf` uploads is unknown and
+   the plan is refused. That happens on a new stack and again whenever the web code (`web/`) has
+   changed since the last apply, for example after you pull a new version. Otherwise one
+   `terraform apply` is enough. Allow several minutes.
 
 4. Outputs (`terraform output`): `ui_url` (the app on CloudFront), `api_endpoint` (HTTP API),
    `cognito_user_pool_id` (with `idp = "cognito"`), `knowledge_base_id` (with a `kb` tool).
@@ -387,6 +389,7 @@ telemetry still work.
 | `transactionSearchIndexingPercentage` | `100` | Span indexing (1% is free) |
 | `builder` | `true` | Builder control plane |
 | `consoleMode` | `app` | `builder` for a [Builder console](#deploy-a-builder-console) |
+| `demoVideoUrl` | empty | An `https://` link to a demo video, shown in a Builder console's About panel and first-run view; empty shows none (Terraform `demo_video_url`) |
 | `tags` | | JSON object of extra tags |
 | Others | off | [Organisation guardrails](#organisation-guardrails), [A2A](#serving-the-workflow-over-a2a), [Export to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others), [OTLP](#sending-traces-to-another-otlp-backend), [LiteLLM](#using-non-bedrock-models-through-litellm), [teardown](#tear-down); every flag is in [cdk/README.md](orchestrator/cdk/README.md#configuration-context-keys) |
 

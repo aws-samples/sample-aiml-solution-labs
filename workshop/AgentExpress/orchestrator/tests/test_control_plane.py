@@ -67,6 +67,22 @@ def test_it_still_builds_and_keeps_its_log(console):
     assert [e["action"] for e in call(console, "GET /api/audit")[1]] == ["logout"]
 
 
+def test_me_names_the_demo_video_on_a_control_plane_only(console, monkeypatch):
+    assert "demoVideoUrl" not in call(console, "GET /api/me")[1]
+    monkeypatch.setattr(console.handler, "DEMO_VIDEO_URL", "https://videos.example.com/demo")
+    assert call(console, "GET /api/me")[1]["demoVideoUrl"] == "https://videos.example.com/demo"
+    # A link with a #fragment is returned whole.
+    hashed = ("https://amazon.awsapps.com/workdocs-amazon/index.html"
+              "#/document/599976615066782999eeb979bf63d7fa2b7eed78bf6e20390b414d6d4cd0b9db")
+    monkeypatch.setattr(console.handler, "DEMO_VIDEO_URL", hashed)
+    assert call(console, "GET /api/me")[1]["demoVideoUrl"] == hashed
+    monkeypatch.setattr(console.handler, "DEMO_VIDEO_URL", "http://videos.example.com/demo")
+    assert "demoVideoUrl" not in call(console, "GET /api/me")[1]
+    monkeypatch.setattr(console.handler, "DEMO_VIDEO_URL", "https://videos.example.com/demo")
+    monkeypatch.setattr(console.handler, "CONSOLE_MODE", "app")
+    assert "demoVideoUrl" not in call(console, "GET /api/me")[1]
+
+
 def test_builder_mode_needs_the_builder(console, monkeypatch):
     monkeypatch.setattr(console.builds, "ENABLED", False)
     assert call(console, "GET /api/me")[1]["consoleMode"] == "app"
@@ -119,9 +135,13 @@ def test_an_app_keeps_its_own_log_of_runs_and_sign_outs(app):
     assert call(app, "GET /api/audit", sub="u2")[1] == []
     # Everyone's needs the `audit` permission.
     assert call(app, "GET /api/audit", qs={"scope": "all", "day": "2026-09-09"})[0] == 403
-    status, day = call(app, "GET /api/audit", groups=("auditors",),
+    status, day = call(app, "GET /api/audit", groups=("auditors",), sub="u2",
                        qs={"scope": "all", "day": mine[0]["ts"][:10]})
     assert status == 200 and len(day) == 2
+    # Everyone is everyone else: the caller's own are under Mine only.
+    status, day = call(app, "GET /api/audit", groups=("auditors",),
+                       qs={"scope": "all", "day": mine[0]["ts"][:10]})
+    assert status == 200 and day == []
     # The Builder's routes are not here.
     assert call(app, "GET /api/builds")[0] == 404
 

@@ -1052,13 +1052,39 @@ def test_everyones_activity_takes_the_audit_permission(env):
     status, body = call(env, "GET /api/audit", qs={"scope": "all", "day": day})
     assert status == 403 and body["error"] == "not authorized to perform 'audit'"
     status, events = call(env, "GET /api/audit", qs={"scope": "all", "day": day},
-                          groups=("auditors",))
+                          sub="u3", groups=("auditors",))
     assert status == 200
     assert {(e["owner"], e["action"]) for e in events} == {("u1", "build.created"),
                                                            ("u1", "deploy.requested"),
                                                            ("u2", "logout")}
     assert call(env, "GET /api/audit", qs={"scope": "all", "day": "yesterday"},
                 groups=("auditors",))[0] == 400
+
+
+def test_everyone_is_the_other_users_activity_and_mine_is_the_callers(env):
+    """"Everyone" leaves out the caller's own events — exactly those "mine" lists, matched
+    on the same `owner` (the caller's sub) — so the two never repeat an event."""
+    save(env)                                                     # u1: build.created
+    call(env, "POST /api/audit/logout")                           # u1
+    call(env, "POST /api/audit/logout", sub="u2")
+    call(env, "POST /api/audit/logout", sub="u3")
+    day = env.builds.buildstore.now()[:10]
+    auditor = {"groups": ("auditors",)}
+    status, everyone = call(env, "GET /api/audit", qs={"scope": "all", "day": day}, **auditor)
+    assert status == 200
+    assert sorted((e["owner"], e["action"]) for e in everyone) == [("u2", "logout"), ("u3", "logout")]
+    # Mine is unchanged: only the caller's, with or without the permission.
+    status, mine = call(env, "GET /api/audit", **auditor)
+    assert status == 200
+    assert sorted((e["owner"], e["action"]) for e in mine) == [("u1", "build.created"), ("u1", "logout")]
+    assert {e["id"] for e in mine}.isdisjoint(e["id"] for e in everyone)
+    assert sorted(e["action"] for e in call(env, "GET /api/audit")[1]) == ["build.created", "logout"]
+    # Another auditor's Everyone has u1's events and not their own.
+    status, theirs = call(env, "GET /api/audit", qs={"scope": "all", "day": day}, sub="u2", **auditor)
+    assert sorted((e["owner"], e["action"]) for e in theirs) == [
+        ("u1", "build.created"), ("u1", "logout"), ("u3", "logout")]
+    # The permission check is unchanged.
+    assert call(env, "GET /api/audit", qs={"scope": "all", "day": day}, sub="u2")[0] == 403
 
 
 def test_everyones_activity_over_a_range_of_days_newest_first(env):
@@ -1069,8 +1095,12 @@ def test_everyones_activity_over_a_range_of_days_newest_first(env):
             env.table.put_item(Item=item)
     auditor = {"groups": ("auditors",)}
     status, events = call(env, "GET /api/audit",
-                          qs={"scope": "all", "from": "2026-09-01", "to": "2026-09-04"}, **auditor)
+                          qs={"scope": "all", "from": "2026-09-01", "to": "2026-09-04"}, sub="u3", **auditor)
     assert status == 200 and [e["owner"] for e in events] == ["u2", "u1"]
+    # The caller's own (u1's) are not among everyone else's.
+    status, events = call(env, "GET /api/audit",
+                          qs={"scope": "all", "from": "2026-09-01", "to": "2026-09-04"}, **auditor)
+    assert status == 200 and [e["owner"] for e in events] == ["u2"]
     # Only an auditor, the range in order, and at most 31 days.
     assert call(env, "GET /api/audit", qs={"scope": "all", "from": "2026-09-01", "to": "2026-09-04"})[0] == 403
     assert call(env, "GET /api/audit", qs={"scope": "all", "from": "2026-09-04", "to": "2026-09-01"},
@@ -1477,9 +1507,16 @@ def _late_log_world(resources):
     """A session whose CloudFormation reports `resources` and whose S3 records deletes."""
     s3_calls = {"deleted": [], "listed": []}
 
+    class StackPages:
+        def paginate(self, StackName):
+            # ListStackResources pages at 100, as the real API does.
+            for i in range(0, max(len(resources), 1), 100):
+                yield {"StackResourceSummaries": resources[i:i + 100]}
+
     class Cfn:
-        def describe_stack_resources(self, StackName):
-            return {"StackResources": resources}
+        def get_paginator(self, name):
+            assert name == "list_stack_resources"
+            return StackPages()
 
     class Pages:
         def paginate(self, Bucket):
@@ -1501,6 +1538,20 @@ def _late_log_world(resources):
 LOGS = {"LogicalResourceId": "UiLogsBucket361AB5FF", "ResourceType": "AWS::S3::Bucket",
         "ResourceStatus": "DELETE_FAILED", "PhysicalResourceId": "ax-8686bcef-stack-uilogsbucket361ab5ff-piyu",
         "ResourceStatusReason": 'Resource handler returned message: "The bucket you tried to delete is not empty"'}
+#: As seen live: CloudFormation's handler gave up on a Runtime's delete after about 5m20s.
+RUNTIME = {"LogicalResourceId": "Subagentfactchecker", "ResourceType": "AWS::BedrockAgentCore::Runtime",
+           "ResourceStatus": "DELETE_FAILED", "PhysicalResourceId": "ax_8686bcef_fact_checker-AbCdEf1234",
+           "ResourceStatusReason": 'Resource handler returned message: "Request timed out while deleting '
+                                   'AWS::BedrockAgentCore::Runtime" (RequestToken: 0551c788-c171, '
+                                   'HandlerErrorCode: NotStabilized)'}
+
+
+@pytest.fixture
+def waits(runner, monkeypatch):
+    """The runner's waits before destroying again, recorded instead of slept."""
+    seen = []
+    monkeypatch.setattr(runner.time, "sleep", seen.append)
+    return seen
 
 
 def test_a_destroy_a_late_cloudfront_log_failed_empties_that_bucket_and_destroys_again(runner, monkeypatch):
@@ -1521,27 +1572,221 @@ def test_a_destroy_a_late_cloudfront_log_failed_empties_that_bucket_and_destroys
     assert s3["deleted"] == [("ax-8686bcef-stack-uilogsbucket361ab5ff-piyu", 1)]
 
 
-@pytest.mark.parametrize("resource", [
-    {**LOGS, "ResourceStatusReason": "Access Denied"},                     # failed for another reason
-    {**LOGS, "LogicalResourceId": "UiBucket6890E4C3"},                       # another bucket
-    {**LOGS, "PhysicalResourceId": "someone-elses-bucket-uilogsbucket"},     # not this stack's name
-    {**LOGS, "ResourceStatus": "DELETE_COMPLETE"},                           # not what failed
-    {**LOGS, "ResourceType": "AWS::Lambda::Function"},
-], ids=["other-reason", "other-bucket", "other-name", "not-failed", "not-a-bucket"])
-def test_any_other_destroy_failure_is_reported_as_it_is_and_nothing_is_emptied(runner, monkeypatch, resource):
-    session, s3 = _late_log_world([resource])
+def test_a_stack_of_more_than_100_resources_is_read_to_its_last_page(runner, monkeypatch, capsys, waits):
+    """Seen live: a build's stack has more than 100 resources, and DescribeStackResources
+    returned the first 100 without the DELETE_FAILED ones."""
+    done = [{"LogicalResourceId": f"R{i}", "ResourceType": "AWS::IAM::Role",
+             "ResourceStatus": "DELETE_COMPLETE", "PhysicalResourceId": f"r{i}"} for i in range(120)]
+    runtime = {"LogicalResourceId": "Orchestrator", "ResourceType": "AWS::BedrockAgentCore::Runtime",
+               "ResourceStatus": "DELETE_FAILED", "PhysicalResourceId": "ax_8686bcef-abc",
+               "ResourceStatusReason": "Request timed out while deleting"}
+    session, s3 = _late_log_world([*done, runtime, LOGS])
     monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 1)
+    assert runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"}) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 2
+    assert s3["deleted"] == [("ax-8686bcef-stack-uilogsbucket361ab5ff-piyu", 1)]
+    out = capsys.readouterr().out
+    assert "Orchestrator (ax_8686bcef-abc) is DELETE_FAILED" in out and "not an S3 bucket" in out
+    assert waits == [runner.RUNTIME_DELETE_PAUSE]     # its Runtime timed out too
+
+
+def _failing_destroys(runner, monkeypatch, failures):
+    """`run` whose first `failures` cdk destroys fail; returns the commands it ran."""
     ran = []
 
     def run(cmd, cwd, env=None, keep=60):
         ran.append(cmd[:3])
-        if cmd[:3] == ["npx", "cdk", "destroy"]:
+        if cmd[:3] == ["npx", "cdk", "destroy"] and ran.count(["npx", "cdk", "destroy"]) <= failures:
             raise runner.StepFailed("`npx cdk destroy` failed (exit 1)")
         return []
     monkeypatch.setattr(runner, "run", run)
+    return ran
+
+
+@pytest.mark.parametrize("resource", [
+    {**LOGS, "ResourceStatusReason": "Resource handler returned message: \"Status Code: 409\""},
+    {**LOGS, "PhysicalResourceId": "ax-3f00ba11-stack-UiLogsBucket361AB5FF-x1y2"},
+    {**LOGS, "ResourceStatusReason": "", "PhysicalResourceId": "other-prefix-uilogsbucket361ab5ff-z9"},
+], ids=["reason-without-not-empty", "name-in-another-case", "no-reason-other-prefix"])
+def test_a_connected_account_destroy_empties_the_logs_bucket_whatever_the_reason_or_name_prefix(
+        runner, monkeypatch, capsys, resource):
+    """A connected account's destroy goes through the target's session, and the bucket is
+    matched on its resource, type and status, not on the reason's words or a guessed name."""
+    session, s3 = _late_log_world([resource])
+    target = runner.Target("444455556666", "us-east-1", "arn:aws:iam::444455556666:role/x", "ext", "b1")
+    monkeypatch.setattr(runner.Target, "session", lambda self: session)
+    monkeypatch.setattr(runner, "local_session", lambda: pytest.fail("not the console's account"))
+    ran = _failing_destroys(runner, monkeypatch, 1)
+    assert runner.deploy_cdk("destroy", "ax_3f00ba11", False, {"AWS_REGION": "eu-west-1"},
+                             target=target) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 2
+    assert s3["deleted"] == [(resource["PhysicalResourceId"], 1)]
+    assert "refilled after it was emptied" in capsys.readouterr().out
+
+
+def test_a_second_late_delivery_is_emptied_again_and_the_destroy_retried(runner, monkeypatch, capsys):
+    session, s3 = _late_log_world([LOGS])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 2)
+    assert runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"}) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 3
+    assert s3["deleted"] == [("ax-8686bcef-stack-uilogsbucket361ab5ff-piyu", 1)] * 2
+    assert "attempt 2 of 3" in capsys.readouterr().out
+
+
+def test_a_destroy_that_keeps_failing_on_the_logs_bucket_stops_after_three_attempts(runner, monkeypatch):
+    session, s3 = _late_log_world([LOGS])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 99)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
+    assert ran.count(["npx", "cdk", "destroy"]) == 1 + runner.DESTROY_RETRIES
+    assert len(s3["deleted"]) == runner.DESTROY_RETRIES
+
+
+@pytest.mark.parametrize("resource,why", [
+    ({**LOGS, "LogicalResourceId": "UiBucket6890E4C3"}, "not the UiLogsBucket resource"),
+    ({**LOGS, "PhysicalResourceId": "someone-elses-bucket"}, "does not contain 'uilogsbucket'"),
+    ({**LOGS, "ResourceStatus": "DELETE_COMPLETE"}, "0 DELETE_FAILED"),
+    ({**LOGS, "ResourceType": "AWS::Lambda::Function"}, "not an S3 bucket"),
+], ids=["other-bucket", "other-name", "not-failed", "not-a-bucket"])
+def test_any_other_destroy_failure_is_reported_as_it_is_and_nothing_is_emptied(
+        runner, monkeypatch, capsys, resource, why):
+    session, s3 = _late_log_world([resource])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 99)
     with pytest.raises(runner.StepFailed):
         runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
     assert ran.count(["npx", "cdk", "destroy"]) == 1 and s3["deleted"] == [] and s3["listed"] == []
+    out = capsys.readouterr().out
+    assert why in out
+    assert "no UiLogsBucket bucket to empty and no timed-out AgentCore Runtime in ax-8686bcef-stack" in out
+
+
+def test_a_runtime_whose_delete_timed_out_is_destroyed_again_after_a_wait(runner, monkeypatch, capsys, waits):
+    """Seen live: a large build's destroy failed twice, each time on one Runtime whose delete
+    CloudFormation gave up on while AgentCore went on with it; the third destroy succeeded."""
+    session, s3 = _late_log_world([RUNTIME])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 1)
+    assert runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"}) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 2
+    assert waits == [runner.RUNTIME_DELETE_PAUSE] and s3["deleted"] == [] and s3["listed"] == []
+    out = capsys.readouterr().out
+    assert "AgentCore Runtime Subagentfactchecker (ax_8686bcef_fact_checker-AbCdEf1234) timed out" in out
+    assert "waiting 60s for the delete of Subagentfactchecker" in out and "attempt 1 of 3" in out
+
+
+def test_a_runtime_that_keeps_timing_out_stops_after_the_shared_budget(runner, monkeypatch, waits):
+    session, _ = _late_log_world([RUNTIME])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 99)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
+    assert ran.count(["npx", "cdk", "destroy"]) == 1 + runner.DESTROY_RETRIES
+    assert waits == [runner.RUNTIME_DELETE_PAUSE] * runner.DESTROY_RETRIES
+
+
+@pytest.mark.parametrize("resource", [
+    {**RUNTIME, "ResourceStatusReason": 'Resource handler returned message: "User is not authorized to perform: '
+                                        'bedrock-agentcore:DeleteAgentRuntime" (HandlerErrorCode: AccessDenied)'},
+    {**RUNTIME, "ResourceStatusReason": ""},
+    {**RUNTIME, "ResourceType": "AWS::BedrockAgentCore::Memory"},
+    {**RUNTIME, "ResourceStatus": "DELETE_COMPLETE"},
+], ids=["access-denied", "no-reason", "not-a-runtime", "not-failed"])
+def test_a_runtime_failure_that_is_not_a_timeout_is_reported_as_it_is(runner, monkeypatch, capsys, waits, resource):
+    session, _ = _late_log_world([resource])
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 99)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
+    assert ran.count(["npx", "cdk", "destroy"]) == 1 and waits == []
+    out = capsys.readouterr().out
+    assert "no timed-out AgentCore Runtime in ax-8686bcef-stack" in out and "timed out while deleting (" not in out
+
+
+def test_a_late_log_and_a_runtime_timeout_in_the_same_failure_are_both_handled_each_attempt(
+        runner, monkeypatch, capsys, waits):
+    session, s3 = _late_log_world([RUNTIME, LOGS])
+    target = runner.Target("444455556666", "us-east-1", "arn:aws:iam::444455556666:role/x", "ext", "b1")
+    monkeypatch.setattr(runner.Target, "session", lambda self: session)
+    ran = _failing_destroys(runner, monkeypatch, 2)
+    assert runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"}, target=target) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 3
+    assert s3["deleted"] == [("ax-8686bcef-stack-uilogsbucket361ab5ff-piyu", 1)] * 2
+    assert waits == [runner.RUNTIME_DELETE_PAUSE] * 2
+    out = capsys.readouterr().out
+    assert "refilled after it was emptied" in out and "timed out while deleting" in out
+
+
+#: A `terraform destroy -no-color` failure on a Runtime whose delete timed out (awscc, Cloud
+#: Control running the same handler as CloudFormation).
+TF_RUNTIME_TIMEOUT = """\
+Error: waiting for Cloud Control API service DeleteResource operation completion: \
+StatusMessage: Request timed out while deleting AWS::BedrockAgentCore::Runtime, ErrorCode: NotStabilized
+
+  with awscc_bedrockagentcore_runtime.subagent["fact_checker"],
+  on subagent_runtimes.tf line 237, in resource "awscc_bedrockagentcore_runtime" "subagent":
+ 237: resource "awscc_bedrockagentcore_runtime" "subagent" {
+"""
+
+
+def _terraform_destroys(runner, monkeypatch, tmp_path, failures, output=TF_RUNTIME_TIMEOUT):
+    """deploy_terraform's commands, with its first `failures` destroys failing with `output`."""
+    monkeypatch.setattr(runner, "ROOT", tmp_path)
+    monkeypatch.setattr(runner, "WORK", tmp_path)
+    (tmp_path / "terraform").mkdir()
+    monkeypatch.setattr(runner, "ensure_terraform", lambda v: "terraform")
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: type("R", (), {"stdout": ""})())
+    ran = []
+
+    def run(cmd, cwd, env=None, keep=60):
+        ran.append(cmd[1] if cmd[1] != "apply" else "ui" if "-target=null_resource.ui_build" in cmd else "apply")
+        if ran[-1] == "destroy" and ran.count("destroy") <= failures:
+            raise runner.StepFailed(f"`terraform destroy -auto-approve` failed (exit 1):\n{output}")
+        return []
+    monkeypatch.setattr(runner, "run", run)
+    return ran
+
+
+TF_ENV = {"BUILDS_BUCKET": "b", "STATE_PREFIX": "tfstate/u1/p1/", "AWS_REGION": "us-east-1"}
+
+
+def test_a_terraform_runtime_timeout_rebuilds_the_ui_step_and_destroys_again(
+        runner, monkeypatch, tmp_path, capsys, waits):
+    """A Terraform build's Runtime can time out the same way. The UI build step runs again
+    before the retry: the failed destroy can have removed it from state (DEPLOYMENT.md)."""
+    ran = _terraform_destroys(runner, monkeypatch, tmp_path, 1)
+    assert runner.deploy_terraform("destroy", "ax_12345678", False, TF_ENV) == {}
+    assert ran == ["init", "ui", "destroy", "ui", "destroy"]
+    assert waits == [runner.RUNTIME_DELETE_PAUSE]
+    out = capsys.readouterr().out
+    assert 'AgentCore Runtime awscc_bedrockagentcore_runtime.subagent["fact_checker"] timed out' in out
+
+
+def test_a_terraform_runtime_that_keeps_timing_out_stops_after_the_shared_budget(
+        runner, monkeypatch, tmp_path, waits):
+    ran = _terraform_destroys(runner, monkeypatch, tmp_path, 99)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_terraform("destroy", "ax_12345678", False, TF_ENV)
+    assert ran.count("destroy") == 1 + runner.DESTROY_RETRIES and "apply" not in ran
+    assert waits == [runner.RUNTIME_DELETE_PAUSE] * runner.DESTROY_RETRIES
+
+
+@pytest.mark.parametrize("output", [
+    TF_RUNTIME_TIMEOUT.replace("Request timed out while deleting", "Access denied deleting")
+                      .replace("NotStabilized", "AccessDenied"),
+    TF_RUNTIME_TIMEOUT.replace("awscc_bedrockagentcore_runtime.subagent", "awscc_bedrockagentcore_memory.m"),
+    # A timeout on another resource, and a Runtime that failed for another reason.
+    ("Error: timed out\n\n  with aws_lambda_function.bff,\n\n"
+     "Error: Access denied\n\n  with awscc_bedrockagentcore_runtime.orchestrator,\n"),
+], ids=["not-a-timeout", "not-a-runtime", "two-other-errors"])
+def test_any_other_terraform_destroy_failure_is_reported_as_it_is(runner, monkeypatch, tmp_path, waits, output):
+    ran = _terraform_destroys(runner, monkeypatch, tmp_path, 99, output)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_terraform("destroy", "ax_12345678", False, TF_ENV)
+    assert ran == ["init", "ui", "destroy"] and waits == []
 
 
 def test_the_late_log_grant_is_the_same_on_both_paths_and_in_connected_accounts():

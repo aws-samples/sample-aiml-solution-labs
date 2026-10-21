@@ -52,7 +52,8 @@ def test_both_paths_leave_the_same_things_out_of_the_source():
           re.findall(r'"([^"]+)"', re.search(r"excludes = \[(.*?)\]", TF, re.DOTALL).group(1))}
     assert ts == tf
     # The ones that matter most: a developer's own settings, which may carry secrets.
-    assert {"terraform.tfvars", "backend.hcl", ".env", "*.tfstate"} <= ts
+    # A plan file holds planned values too.
+    assert {"terraform.tfvars", "backend.hcl", ".env", "*.tfstate", "tfplan", "*.tfplan"} <= ts
 
 
 def test_the_deploy_policy_splits_into_policies_that_can_be_attached():

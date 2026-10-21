@@ -15,6 +15,8 @@ vi.mock("../api", () => {
     return r instanceof Error ? Promise.reject(r) : Promise.resolve(r);
   };
   return {
+    // builder/models.ts checks errors against it.
+    ApiError: class extends Error {},
     api: {
       get: (p: string) => answer("GET", p),
       post: (p: string, b?: unknown) => answer("POST", p, b),
@@ -236,6 +238,34 @@ describe("the AgentExpress Assistant tab", () => {
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").at(-1)?.body)
       .toEqual({ message: "Add a fraud check" }));
     expect(box.value).toBe("");
+  });
+  it("offers the demo video only to someone who owns no builds yet", async () => {
+    const url = "https://videos.example.com/demo";
+    replies = { "GET /api/builds/pclaims01/design": [doc()] };
+    const sharedBuild: BuildSummary = { ...summary, id: "pteam0001", name: "Shared", shared: true,
+      ownerEmail: "someone@example.com", shares: { emails: [], groups: [], everyone: true } };
+    // Someone who owns a build (one shared with them besides): the start view of the
+    // chat, but no welcome.
+    const owns = { ...serverStore({ project: stored, saves: [] }), list: async () => [sharedBuild, summary] };
+    const { unmount } = await act(async () => render(
+      <Builder notify={vi.fn()} store={owns} demoUrl={url} request={{ id: stored.id, nonce: 1 }} />));
+    expect(screen.getByText("What would you like to build?")).toBeTruthy();
+    expect(screen.queryByTestId("design-demo-video")).toBeNull();
+    unmount();
+    // Only builds shared with them or with everyone: someone else's, so still the welcome.
+    const onlyShared = { ...serverStore({ project: stored, saves: [] }), list: async () => [sharedBuild] };
+    const second = await act(async () => render(
+      <Builder notify={vi.fn()} store={onlyShared} demoUrl={url} request={{ id: stored.id, nonce: 1 }} />));
+    await waitFor(() => expect(screen.getByTestId("design-demo-video").textContent).toMatch(/^New here\?/));
+    second.unmount();
+    // No builds when the view opened (the build shown is the one being started): the
+    // welcome, with the link.
+    const empty = { ...serverStore({ project: stored, saves: [] }), list: async () => [] };
+    await act(async () => {
+      render(<Builder notify={vi.fn()} store={empty} demoUrl={url} request={{ id: stored.id, nonce: 1 }} />);
+    });
+    await waitFor(() => expect(screen.getByTestId("design-demo-video").textContent).toMatch(/^New here\?/));
+    expect(screen.getByRole("link", { name: /Watch the 10-minute demo/ }).getAttribute("href")).toBe(url);
   });
   it("opens the chat of a build made a moment ago, once its first save lands", async () => {
     const state = { project: stored, saves: [] as Project[] };

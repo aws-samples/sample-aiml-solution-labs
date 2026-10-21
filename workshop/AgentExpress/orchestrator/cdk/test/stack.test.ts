@@ -931,6 +931,16 @@ describe("self sign-up", () => {
     expect(() => synth({ consoleMode: "builder", builder: false })).toThrow(/needs the Builder/);
     expect(() => synth({ consoleMode: "console" })).toThrow(/"app" or "builder"/);
   });
+  it("gives a control plane's BFF the demo video link, and refuses one that is not https", () => {
+    const bffEnv = (t: Template) => Object.values<any>(t.findResources("AWS::Lambda::Function"))
+      .find((f) => f.Properties.FunctionName === "AgentCoreBFF-multiagent_orchestrator").Properties.Environment.Variables;
+    const url = "https://videos.example.com/demo";
+    expect(bffEnv(synth({ consoleMode: "builder", demoVideoUrl: url })).DEMO_VIDEO_URL).toBe(url);
+    expect(bffEnv(synth({ consoleMode: "builder" })).DEMO_VIDEO_URL).toBeUndefined();
+    expect(() => synth({ consoleMode: "builder", demoVideoUrl: "http://videos.example.com/demo" }))
+      .toThrow(/demoVideoUrl must be an https:\/\/ URL/);
+    expect(() => synth({ consoleMode: "builder", demoVideoUrl: "javascript:alert(1)" })).toThrow(/demoVideoUrl/);
+  });
 
   it("opened, puts every confirmed user in the default group", () => {
     const t = synth({ selfSignUp: true, selfSignUpGroup: "members" });

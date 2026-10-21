@@ -53,6 +53,7 @@ import { RunsTable } from "./views/RunsTable";
 import { StartRunModal, type RunTarget } from "./views/StartRunModal";
 import { StepPanel } from "./views/StepPanel";
 import { FEATURE_EMOJI } from "./lib/emoji";
+import { demoVideoUrl } from "./lib/demoVideo";
 
 
 /** The product name, and the mark it is shown with, on every build's own app. */
@@ -103,6 +104,8 @@ export default function App() {
   const controlPlane = me.consoleMode === "builder";
   /** Where the home link goes. */
   const home = controlPlane ? "#build" : "#runs";
+  /** The console's demo video link; undefined on a build's own app. */
+  const demoUrl = demoVideoUrl(me);
   const [runs, setRuns] = useState<SessionSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [openRun, setOpenRun] = useState<string | null>(null);
@@ -710,7 +713,7 @@ export default function App() {
     ? (
       <Suspense fallback={<Spinner size="large" />}>
         <Builder notify={notify} request={buildRequest} onCurrent={setCurrentBuild}
-          store={store} can={can} onRun={controlPlane ? undefined : runBuild} />
+          store={store} can={can} onRun={controlPlane ? undefined : runBuild} demoUrl={demoUrl} />
       </Suspense>
     )
     : view === "observability"
@@ -841,7 +844,7 @@ export default function App() {
             ]}
           />
         }
-        tools={<AboutPanel workflow={workflow} heading={heading} console={controlPlane} />}
+        tools={<AboutPanel workflow={workflow} heading={heading} console={controlPlane} demoUrl={demoUrl} />}
         toolsOpen={toolsOpen}
         onToolsChange={({ detail }) => setToolsOpen(detail.open)}
         /* Without these, AppLayout's own open/close controls ship with no accessible

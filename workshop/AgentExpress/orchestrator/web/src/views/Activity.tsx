@@ -3,10 +3,10 @@
  *  re-run, evaluate, cancel, delete). Filter by kind of action and by text (a user,
  *  a build, a run id).
  *
- *  Your own activity, or with the `audit` permission (workflow.json
- *  authorization.actions) everyone's over a range of up to 31 days, the last 7 by
- *  default — the server enforces that; the toggle is only hidden from those who would
- *  get a 403. */
+ *  Your own activity ("Mine"), or with the `audit` permission (workflow.json
+ *  authorization.actions) everyone else's ("Everyone": the server leaves out yours) over
+ *  a range of up to 31 days, the last 7 by default — the server enforces that; the toggle
+ *  is only hidden from those who would get a 403. */
 import Box from "@cloudscape-design/components/box";
 import Button from "@cloudscape-design/components/button";
 import DatePicker from "@cloudscape-design/components/date-picker";
@@ -261,7 +261,7 @@ export function Activity({ canSeeEveryone }: { canSeeEveryone: boolean }) {
           variant="awsui-h1-sticky"
           counter={loading ? undefined : shown.length === events.length ? `(${events.length})` : `(${shown.length}/${events.length})`}
           description={everyone
-            ? (rangeError || `Every user's sign-ins, builds, library items, policies, accounts, deploys and runs from ${from} to ${to} (UTC), newest first.`)
+            ? (rangeError || `Other people's sign-ins, builds, library items, policies, accounts, deploys and runs from ${from} to ${to} (UTC), newest first.`)
             : "Your sign-ins, and what you built, deployed, ran, approved or deleted — newest first."}
           actions={
             <SpaceBetween direction="horizontal" size="xs">

@@ -298,10 +298,13 @@ resource "aws_bedrockagent_knowledge_base" "kb" {
 
   storage_configuration {
     type = local.kb_vs_set ? local.kb_vs_vocab.api[local.kb_vs_type] : "S3_VECTORS"
+    # Present whenever type is S3_VECTORS, also when this resource has count = 0 (no
+    # Knowledge Base): Terraform still validates that config, and the provider refuses
+    # type S3_VECTORS with no s3_vectors_configuration. Never sent to AWS then.
     dynamic "s3_vectors_configuration" {
-      for_each = local.kb_s3vectors ? [1] : []
+      for_each = local.kb_vs_set ? [] : [1]
       content {
-        index_arn = aws_s3vectors_index.kb[0].index_arn
+        index_arn = local.kb_s3vectors ? aws_s3vectors_index.kb[0].index_arn : null
       }
     }
     # YOUR store (`vectorStore`, kb_vector_store.tf): one of these, the rest empty.
@@ -621,7 +624,10 @@ resource "awscc_bedrock_data_source" "kb_graph" {
   data_source_configuration = {
     type = "S3"
     s3_configuration = {
-      bucket_arn         = local.kb_upload ? aws_s3_bucket.kb_docs[0].arn : "arn:aws:s3:::${local.kb_s3_bucket}"
+      # With no Knowledge Base (count = 0) the config is still validated, and awscc
+      # refuses "arn:aws:s3:::" and null alike: a placeholder, never sent to AWS.
+      bucket_arn = local.kb_upload ? aws_s3_bucket.kb_docs[0].arn : (
+      "arn:aws:s3:::${local.kb_s3_bucket == "" ? "no-kb-bucket" : local.kb_s3_bucket}")
       inclusion_prefixes = local.kb_s3_prefix == "" ? null : [local.kb_s3_prefix]
     }
   }

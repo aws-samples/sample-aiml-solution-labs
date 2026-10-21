@@ -189,15 +189,17 @@ def audit_of(table, pk: str, limit: int) -> list[dict]:
     return [_audit_public(i) for i in items]
 
 
-def audit_all(table, pk: str, limit: int) -> list[dict]:
+def audit_all(table, pk: str, limit: int, skip_owner: str = "") -> list[dict]:
     """Newest first, every page of the partition, at most `limit`: one busy day holds
-    more than a single Query returns."""
+    more than a single Query returns. `skip_owner`: leave out that user's events (those
+    in their own AUDIT#<sub>), so `limit` counts only the events returned."""
     from boto3.dynamodb.conditions import Key
     out: list[dict] = []
     kw = {"KeyConditionExpression": Key("pk").eq(pk), "ScanIndexForward": False}
     while len(out) < limit:
         page = table.query(**kw, Limit=limit - len(out))
-        out += [_audit_public(i) for i in page.get("Items", [])]
+        out += [_audit_public(i) for i in page.get("Items", [])
+                if not skip_owner or str(i.get("owner") or "") != skip_owner]
         if "LastEvaluatedKey" not in page:
             break
         kw["ExclusiveStartKey"] = page["LastEvaluatedKey"]

@@ -46,6 +46,9 @@ describe("the view", () => {
     await waitFor(() => expect(get).toHaveBeenCalled());
     expect(get).toHaveBeenCalledWith(`/api/audit?scope=all&from=${dayBefore(6)}&to=${dayBefore(0)}`);
     expect(screen.getByText("Last 7 days")).toBeTruthy();
+    // The server leaves out the caller's own events; the page says so.
+    expect(screen.getByText(/^Other people's sign-ins, builds/)).toBeTruthy();
+    expect(screen.queryByText(/Every user's/)).toBeNull();
   });
 });
 

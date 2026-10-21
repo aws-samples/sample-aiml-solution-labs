@@ -201,6 +201,7 @@ Set in `cdk.json` or via `-c key=value`:
 | `selfSignUpGroup` | `members` | The group each self-signed-up user joins |
 | `builder` | `true` | Deploy the Builder control plane; the deploy runner sets `false` for every build stack |
 | `consoleMode` | `app` | `app` (this workflow's own app) or `builder` (control plane only: no image, runtime, memory, guardrail, Gateway, KB, run tables or Transaction Search; needs `builder`) |
+| `demoVideoUrl` | `""` | An `https://` link to a demo video, shown in the About panel and first-run view of a `consoleMode=builder` console; empty shows none. Any other value fails the synth |
 | `tags` | `""` | JSON object of extra tags for every resource, beside `agentexpress:app` |
 | `allowUnauthenticated` | `false` | Required (`true`) with `idp=none`: the acknowledgement that the console has no sign-in |
 | `extraCallbackUrls` | `""` | Further Hosted UI callback/logout URLs (comma-separated), e.g. for local development |

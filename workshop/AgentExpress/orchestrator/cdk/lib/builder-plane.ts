@@ -50,7 +50,7 @@ export const TERRAFORM_VERSION = "1.15.8";
 export const SOURCE_EXCLUDES = [
   "node_modules", "cdk.out", "dist", ".vite", ".terraform", ".terraform.lock.hcl",
   ".build", "__pycache__", ".pytest_cache", ".ruff_cache", ".venv", ".DS_Store",
-  "terraform.tfvars", "backend.hcl", "tfplan", "*.tfstate", "*.tfstate.*", ".env", ".env.*",
+  "terraform.tfvars", "backend.hcl", "tfplan", "*.tfplan", "*.tfstate", "*.tfstate.*", ".env", ".env.*",
   "zz_builder_backend_override.tf", "builder.auto.tfvars.json",
 ];
 

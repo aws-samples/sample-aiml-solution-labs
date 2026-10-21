@@ -57,9 +57,10 @@ def _day(value: str, name: str) -> _dt.date:
 
 def activity(owner: str, everyone: bool = False, day: str = "", limit: int = 500,
              day_to: str = "") -> list[dict]:
-    """The caller's own events, or with `everyone` all users' from `day` to `day_to`
-    (UTC, both included; `day_to` defaults to `day`), newest first. A range reads every
-    event of each day in it, up to MAX_EVENTS in all."""
+    """The caller's own events, or with `everyone` every OTHER user's from `day` to
+    `day_to` (UTC, both included; `day_to` defaults to `day`), newest first. "Everyone"
+    leaves out exactly what "mine" shows: events logged under the caller's `owner`. A
+    range reads every event of each day in it, up to MAX_EVENTS in all."""
     import builds
     table = _table()
     if table is None:
@@ -75,6 +76,7 @@ def activity(owner: str, everyone: bool = False, day: str = "", limit: int = 500
     out: list[dict] = []
     d = end
     while d >= start and len(out) < MAX_EVENTS:
-        out += buildstore.audit_all(table, f"AUDIT_DAY#{d.isoformat()}", MAX_EVENTS - len(out))
+        out += buildstore.audit_all(table, f"AUDIT_DAY#{d.isoformat()}", MAX_EVENTS - len(out),
+                                    skip_owner=str(owner))
         d -= _dt.timedelta(days=1)
     return out

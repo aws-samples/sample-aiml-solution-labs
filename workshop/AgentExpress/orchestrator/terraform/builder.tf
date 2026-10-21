@@ -35,6 +35,19 @@ variable "console_mode" {
   }
 }
 
+# A link to a product demo video, shown on a control-plane console (console_mode =
+# "builder") in the About panel and the first-run view. Empty: no link. Mirrors
+# -c demoVideoUrl in cdk/bin/orchestrator.ts.
+variable "demo_video_url" {
+  description = "An https:// link to a product demo video, shown on a control-plane console (console_mode = \"builder\"). Empty (default): no link."
+  type        = string
+  default     = ""
+  validation {
+    condition     = var.demo_video_url == "" || can(regex("^https://[^\\s/?#]+[^\\s]*$", var.demo_video_url))
+    error_message = "demo_video_url must be an https:// URL or empty."
+  }
+}
+
 # Buckets, or bucket/prefix, the AgentExpress Assistant may read when a message names an
 # s3:// path (bff/designer.py). Mirrors -c designerS3Buckets in cdk/bin/orchestrator.ts.
 variable "designer_s3_buckets" {
@@ -137,7 +150,8 @@ locals {
     }, var.designer_model == "" ? {} : { DESIGNER_MODEL = var.designer_model },
     var.designer_summary_model == "" ? {} : { DESIGNER_SUMMARY_MODEL = var.designer_summary_model },
   var.designer_effort == "" ? {} : { DESIGNER_EFFORT = var.designer_effort }) : {}
-  console_mode_env = local.builder_enabled && var.console_mode == "builder" ? { CONSOLE_MODE = "builder" } : {}
+  console_mode_env = local.builder_enabled && var.console_mode == "builder" ? merge({ CONSOLE_MODE = "builder" },
+  var.demo_video_url == "" ? {} : { DEMO_VIDEO_URL = var.demo_video_url }) : {}
 }
 
 variable "keep_builds_table_protected" {
@@ -323,7 +337,7 @@ data "archive_file" "builder_source" {
     "**/node_modules/**", "**/cdk.out/**", "**/dist/**", "**/.vite/**", "**/.terraform/**",
     "**/.terraform.lock.hcl", "**/.build/**", "**/__pycache__/**", "**/.pytest_cache/**",
     "**/.ruff_cache/**", "**/.venv/**", "**/.DS_Store", "**/terraform.tfvars",
-    "**/backend.hcl", "**/tfplan", "**/*.tfstate", "**/*.tfstate.*", "**/.env", "**/.env.*",
+    "**/backend.hcl", "**/tfplan", "**/*.tfplan", "**/*.tfstate", "**/*.tfstate.*", "**/.env", "**/.env.*",
     "**/zz_builder_backend_override.tf", "**/builder.auto.tfvars.json",
   ]
 }

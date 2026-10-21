@@ -305,7 +305,7 @@ function inTabOrder<T extends { id: string; content: ReactNode; actions?: ReactN
   } : t));
 }
 
-export function Builder({ notify, request, onCurrent, store = defaultStore, can = () => true, onRun }: {
+export function Builder({ notify, request, onCurrent, store = defaultStore, can = () => true, onRun, demoUrl }: {
   notify: (type: "success" | "error" | "info", msg: string) => void;
   request?: BuildRequest | null;
   /** Told which build is open, so the navigation can highlight it. */
@@ -315,6 +315,8 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
   can?: (a: Action) => boolean;
   /** Start a run of this (deployed) build. */
   onRun?: (buildId: string) => void;
+  /** The console's demo video (lib/demoVideo.ts), offered to someone who owns no builds yet. */
+  demoUrl?: string;
 }) {
   // The project and its undo history, as one value: every change goes through `record`.
   const [hist, setHist] = useState<History<Project> | null>(null);
@@ -348,6 +350,11 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
     library.list().then(setLib, () => setLib([]));
   }, [store.server]);
   const [builds, setBuilds] = useState<BuildSummary[]>([]);
+  /** The person owned no builds when this view opened: their first visit. Builds shared
+   *  with them or with everyone (`shared`: the server found someone else is the owner) do
+   *  not count. Kept while the fresh build saves, so its first autosave does not take the
+   *  welcome away. */
+  const [firstRun, setFirstRun] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   /** The JSON last written, so opening a build does not re-save it unchanged. */
@@ -361,6 +368,7 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
     const list = await store.list().catch(() => [] as BuildSummary[]);
     if (mine !== opening.current) return;
     setBuilds(list);
+    setFirstRun(!list.some((b) => !b.shared));
     const fresh = () => {
       lastSaved.current = "";
       setHist(start(freshProject(list.map((b) => b.name))));
@@ -535,7 +543,7 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
       onReload={() => void open({ id: project.id, nonce: Date.now() })} notify={notify}
       onUndo={hist?.past.length ? () => setHist((h) => (h ? undo(h) : h)) : undefined}
       onRedo={hist?.future.length ? () => setHist((h) => (h ? redo(h) : h)) : undefined}
-      onApplied={reload} flush={flush}
+      onApplied={reload} flush={flush} demoUrl={firstRun ? demoUrl : undefined}
       server={store.server} savedAt={savedAt} saveError={saveError}
       onNew={() => void open({ id: "new", nonce: Date.now() })}
       onOpen={(id) => void open({ id, nonce: Date.now() })}
@@ -562,7 +570,10 @@ export function Builder({ notify, request, onCurrent, store = defaultStore, can 
 function Editor({
   project, setProject, notify, server, savedAt, saveError, onNew, onDelete, deployment, deployed = false,
   onUndo, onRedo, onApplied, flush, raw, setRaw, refs, addRefs, build, onShared, onReload, onPublishSkills, testsBlock,
+  demoUrl,
 }: {
+  /** The demo video the Assistant's start view offers (a first visit only), if any. */
+  demoUrl?: string;
   /** Why the Tests tab cannot run a suite here (a control-plane console, a permission), if so. */
   testsBlock?: string;
   /** Admins: publish skills to an Agent Registry (RegistryPublish.tsx). */
@@ -1148,7 +1159,7 @@ function Editor({
             {
               id: "ai", label: "AgentExpress Assistant",
               content: <DesignChat project={project} issues={issues} onApplied={onApplied} flush={flush}
-                onShowProblems={() => setShowProblems(true)} />,
+                onShowProblems={() => setShowProblems(true)} demoUrl={demoUrl} />,
             },
             { id: "manual", label: "Build manually", content: manual },
           ]}

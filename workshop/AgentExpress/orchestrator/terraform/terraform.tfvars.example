@@ -131,6 +131,7 @@ region = "us-east-1"
 # model_id                 = ""   # empty: workflow.json orchestrator.defaultModel, else Claude Haiku 4.5
 # designer_model           = ""   # the Assistant's models in order, "model[:effort],..."; empty: Sonnet 5.5, then Sonnet 5
 # designer_effort          = ""   # low | medium (default) | high | model
+# demo_video_url           = ""   # https:// link to a demo video, shown on a console_mode = "builder" console; empty: none
 # container_engine         = "finch"                     # or "docker" / "podman"
 # memory_event_expiry_days = 30
 # log_retention_days       = 365

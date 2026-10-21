@@ -5,11 +5,13 @@
  *      govern. Fixed prose, short, one line per capability.
  *    - A BUILD'S OWN APP: what the framework does for a run, plus "This deployment",
  *      derived from the workflow actually loaded (stages, agents, gates, tools) so it
- *      never drifts from workflow.json. */
+ *      never drifts from workflow.json.
+ *  The console's text opens with a link to the demo video when one is configured. */
 
 import Box from "@cloudscape-design/components/box";
 import HelpPanel from "@cloudscape-design/components/help-panel";
 import KeyValuePairs from "@cloudscape-design/components/key-value-pairs";
+import Link from "@cloudscape-design/components/link";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { useMemo } from "react";
 
@@ -81,8 +83,10 @@ function Features({ items }: { items: Item[] }) {
   );
 }
 
-export function AboutPanel({ workflow, heading, console: isConsole = false }: {
+export function AboutPanel({ workflow, heading, console: isConsole = false, demoUrl }: {
   workflow: Workflow; heading: string; console?: boolean;
+  /** The console's demo video (lib/demoVideo.ts). Shown on the console only. */
+  demoUrl?: string;
 }) {
   const facts = useMemo(() => {
     const steps = workflow.steps ?? [];
@@ -103,6 +107,7 @@ export function AboutPanel({ workflow, heading, console: isConsole = false }: {
     return (
       <HelpPanel header={<h2>{`About ${heading}`}</h2>}>
         <SpaceBetween size="l">
+          {demoUrl ? <Link href={demoUrl} external variant="primary">Watch the 10-minute demo</Link> : null}
           <Box variant="p">
             AgentExpress turns a description of a business process into a working
             multi-agent application on Amazon Bedrock AgentCore, with no code to write.

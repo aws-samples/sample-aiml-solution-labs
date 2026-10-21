@@ -16,6 +16,7 @@ import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import FileInput from "@cloudscape-design/components/file-input";
 import FileTokenGroup from "@cloudscape-design/components/file-token-group";
 import Header from "@cloudscape-design/components/header";
+import Link from "@cloudscape-design/components/link";
 import PromptInput from "@cloudscape-design/components/prompt-input";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
@@ -164,7 +165,7 @@ export function defaultsUsed(changes: DesignChange[]): string[] {
   return out;
 }
 
-export function DesignChat({ project, issues, onApplied, flush, onShowProblems }: {
+export function DesignChat({ project, issues, onApplied, flush, onShowProblems, demoUrl }: {
   project: Project;
   issues: Issue[];
   /** A change landed on the server: reload the build. */
@@ -172,6 +173,8 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
   /** Save any edit still waiting for autosave, so the designer sees it. */
   flush: () => Promise<void>;
   onShowProblems: () => void;
+  /** A demo video to offer before the first message (Builder: a first visit to a console). */
+  demoUrl?: string;
 }) {
   const [doc, setDoc] = useState<DesignDoc | null>(null);
   const [text, setText] = useState("");
@@ -355,6 +358,11 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems }
                     Describe the work in your own words: what comes in, what should come out, and where a person
                     should check it. Anything you leave open gets a sensible default, and it tells you which.
                   </Box>
+                  {demoUrl ? (
+                    <Box fontSize="body-s" data-testid="design-demo-video">
+                      New here? <Link href={demoUrl} external variant="primary" fontSize="body-s">Watch the 10-minute demo</Link>
+                    </Box>
+                  ) : null}
                   <SupportPromptGroup
                     ariaLabel="Starting points"
                     alignment="vertical"

@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -551,11 +552,77 @@ def clear_failed_create(session, stack: str, region: str, attempts: int = 4,
 
 
 #: The one bucket a CDK build's destroy can find refilled: CloudFront's access logs
-#: (UiLogsBucket in lib/orchestrator-stack.ts). Its physical name starts with the stack's.
+#: (UiLogsBucket in lib/orchestrator-stack.ts). Its physical name contains "uilogsbucket".
 LATE_LOG_BUCKET = "UiLogsBucket"
+#: Destroys run again after the first fails, shared by both retryable failures: a logs
+#: bucket refilled late (CloudFront can deliver again while a destroy is running, so each
+#: attempt empties the bucket afresh) and an AgentCore Runtime whose delete timed out.
+DESTROY_RETRIES = 3
+#: The type of every AgentCore Runtime a CDK build's stack holds: the orchestrator and each
+#: dedicated agent (lib/orchestrator-stack.ts).
+RUNTIME_TYPE = "AWS::BedrockAgentCore::Runtime"
+#: Seconds to wait before destroying again after a Runtime's delete timed out: the delete
+#: goes on in AgentCore after CloudFormation's handler gives up, so a later attempt finds it
+#: further along or done.
+RUNTIME_DELETE_PAUSE = 60.0
 
 
-def empty_late_log_buckets(session, stack: str, region: str) -> list[str]:
+def stack_resources(session, stack: str, region: str) -> list[dict] | None:
+    """Every resource of the stack, read with ListStackResources, paged: DescribeStackResources
+    returns only the first 100, and a build's stack has more (seen live: 100 read, the failed
+    resource not among them). None when it cannot be read."""
+    cfn = session.client("cloudformation", region_name=region)
+    try:
+        return [r for page in cfn.get_paginator("list_stack_resources").paginate(StackName=stack)
+                for r in page.get("StackResourceSummaries") or []]
+    except Exception as e:  # noqa: BLE001 - nothing to look at: report the destroy's own failure
+        print(f"runner: could not read {stack}'s resources: {type(e).__name__}: {e}", flush=True)
+        return None
+
+
+def timed_out_runtimes(stack: str, resources: list[dict]) -> list[str]:
+    """After a failed `cdk destroy`: the stack's AgentCore Runtimes whose delete failed on a
+    timeout, by logical id, each printed.
+
+    Seen live: on a large build's stack, CloudFormation's handler gave up on deleting a
+    Runtime after about 5m20s ("Request timed out while deleting
+    AWS::BedrockAgentCore::Runtime", HandlerErrorCode NotStabilized), twice in a row on
+    two different Runtimes, while AgentCore went on deleting it; the third destroy
+    succeeded. Any other Runtime failure is not one a later attempt can get past."""
+    out = []
+    for r in resources:
+        reason = str(r.get("ResourceStatusReason") or "")
+        if r.get("ResourceStatus") != "DELETE_FAILED" or r.get("ResourceType") != RUNTIME_TYPE \
+                or not ("notstabilized" in reason.lower() or "timed out" in reason.lower()):
+            continue
+        logical = str(r.get("LogicalResourceId") or "")
+        print(f"runner: {stack}'s AgentCore Runtime {logical} "
+              f"({r.get('PhysicalResourceId') or 'no physical id'}) timed out while deleting "
+              f"({reason}); its delete goes on in AgentCore", flush=True)
+        out.append(logical)
+    return out
+
+
+#: A Terraform build's AgentCore Runtimes (main.tf, subagent_runtimes.tf), named in an error.
+TF_RUNTIME = re.compile(r"with (awscc_bedrockagentcore_runtime\.[^\s,]+)")
+
+
+def timed_out_tf_runtimes(output: str) -> list[str]:
+    """After a failed `terraform destroy`: the AgentCore Runtimes whose delete timed out, by
+    address, from the tail of its output. awscc deletes through Cloud Control, which runs the
+    same handler as CloudFormation and gives up the same way (NotStabilized; DEPLOYMENT.md,
+    "When a destroy fails"). Each error is read on its own: a Runtime counts only when its
+    own error says it timed out."""
+    out = []
+    for block in re.split(r"^[^\w\n]*Error: ", output, flags=re.MULTILINE)[1:]:
+        m = TF_RUNTIME.search(block)
+        low = block.lower()
+        if m and ("notstabilized" in low or "timed out" in low) and m.group(1) not in out:
+            out.append(m.group(1))
+    return out
+
+
+def empty_late_log_buckets(session, stack: str, region: str, resources: list[dict]) -> list[str]:
     """After a failed `cdk destroy`: empty the stack's CloudFront logs bucket when that is
     what failed, and return its name ([] when it was not, so the failure is reported as is).
 
@@ -564,23 +631,31 @@ def empty_late_log_buckets(session, stack: str, region: str) -> list[str]:
     and the destroy ends DELETE_FAILED, "The bucket you tried to delete is not empty".
     Running the destroy again cannot help (the stack empties a bucket only once), and the
     person destroying from the console has no way to empty it. Only that bucket is touched:
-    it must be the stack's UiLogsBucket resource, DELETE_FAILED as not empty, and its name
-    must start with the stack's, which nothing else in the account carries."""
-    cfn = session.client("cloudformation", region_name=region)
-    try:
-        resources = cfn.describe_stack_resources(StackName=stack)["StackResources"]
-    except Exception as e:  # noqa: BLE001 - nothing to look at: report the destroy's own failure
-        print(f"runner: could not read {stack}'s resources: {type(e).__name__}: {e}")
-        return []
+    it must be the stack's UiLogsBucket resource, an S3 bucket, DELETE_FAILED, and the
+    name CloudFormation reports for it must contain "uilogsbucket". The reason text is not
+    required: it is worded differently across accounts and handlers. The deploy role's
+    IAM (LateLogBuckets) limits the deletes to ax-*-stack-uilogsbucket* in any case.
+    Every DELETE_FAILED resource left alone is printed with why. `resources` is
+    stack_resources()."""
     s3 = session.client("s3", region_name=region)
     emptied = []
     for r in resources:
+        if r.get("ResourceStatus") != "DELETE_FAILED":
+            continue
+        logical = str(r.get("LogicalResourceId") or "")
         name = str(r.get("PhysicalResourceId") or "")
-        # CloudFormation names it <stack>-uilogsbucket<hash>-<suffix>, lowercased.
-        if (r.get("ResourceType") != "AWS::S3::Bucket" or r.get("ResourceStatus") != "DELETE_FAILED"
-                or not str(r.get("LogicalResourceId") or "").startswith(LATE_LOG_BUCKET)
-                or "not empty" not in str(r.get("ResourceStatusReason") or "")
-                or not name.startswith(f"{stack.lower()}-{LATE_LOG_BUCKET.lower()}")):
+        if r.get("ResourceType") != "AWS::S3::Bucket":
+            skip = f"it is a {r.get('ResourceType')}, not an S3 bucket"
+        elif not logical.startswith(LATE_LOG_BUCKET):
+            skip = f"it is not the {LATE_LOG_BUCKET} resource"
+        elif LATE_LOG_BUCKET.lower() not in name.lower():
+            skip = f"its name {name!r} does not contain {LATE_LOG_BUCKET.lower()!r}"
+        else:
+            skip = ""
+        if skip:
+            print(f"runner: {stack}'s {logical} ({name or 'no physical id'}) is DELETE_FAILED "
+                  f"({r.get('ResourceStatusReason') or 'no reason given'}); not emptied: {skip}",
+                  flush=True)
             continue
         n = 0
         for page in s3.get_paginator("list_object_versions").paginate(Bucket=name):
@@ -613,15 +688,34 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
                  *flags], cdk, env)
     if action == "destroy":
         destroy = ["npx", "cdk", "destroy", stack, "--force", *flags]
-        try:
-            run(destroy, cdk, env)
-        except StepFailed:
-            region = target.region if target else env.get("AWS_REGION") or "us-east-1"
-            session = target.session() if target else local_session()
-            if not empty_late_log_buckets(session, stack, region):
-                raise
-            run(destroy, cdk, env)          # once more; a second failure is reported as is
-        return {}
+        region = target.region if target else env.get("AWS_REGION") or "us-east-1"
+        for attempt in range(DESTROY_RETRIES + 1):
+            if attempt:
+                print(f"runner: destroying {stack} again (attempt {attempt} of "
+                      f"{DESTROY_RETRIES})", flush=True)
+            try:
+                run(destroy, cdk, env)
+                return {}
+            except StepFailed:
+                if attempt == DESTROY_RETRIES:
+                    raise                   # the last attempt's failure is reported as is
+                # A fresh session each time: a target's lasts 15 minutes, a destroy longer.
+                session = target.session() if target else local_session()
+                resources = stack_resources(session, stack, region)
+                if resources is None:
+                    raise
+                emptied = empty_late_log_buckets(session, stack, region, resources)
+                runtimes = timed_out_runtimes(stack, resources)
+                if not emptied and not runtimes:
+                    failed = sum(r.get("ResourceStatus") == "DELETE_FAILED" for r in resources)
+                    print(f"runner: no {LATE_LOG_BUCKET} bucket to empty and no timed-out "
+                          f"AgentCore Runtime in {stack}: {len(resources)} resource(s) read, "
+                          f"{failed} DELETE_FAILED; reporting the destroy's own failure", flush=True)
+                    raise
+                if runtimes:
+                    print(f"runner: waiting {RUNTIME_DELETE_PAUSE:.0f}s for the delete of "
+                          f"{', '.join(runtimes)} to go on, then destroying {stack} again", flush=True)
+                    time.sleep(RUNTIME_DELETE_PAUSE)
     clear_failed_create(target.session() if target else local_session(), stack,
                         target.region if target else env.get("AWS_REGION") or "us-east-1")
     out = WORK / "cdk-outputs.json"
@@ -671,7 +765,27 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
             build_ui.append("-replace=null_resource.ui_build")
     run(build_ui, tf_dir, sub_env)
     if action == "destroy":
-        run([tf, "destroy", "-auto-approve", "-input=false", "-no-color"], tf_dir, sub_env)
+        destroy = [tf, "destroy", "-auto-approve", "-input=false", "-no-color"]
+        for attempt in range(DESTROY_RETRIES + 1):
+            if attempt:
+                print(f"runner: destroying {agent} again (attempt {attempt} of {DESTROY_RETRIES})",
+                      flush=True)
+                # The failed destroy can have removed the UI build step from state; rebuilding
+                # it makes ui.tf's files known again. web/dist/ exists now, so no -replace.
+                run([c for c in build_ui if not c.startswith("-replace=")], tf_dir, sub_env)
+            try:
+                run(destroy, tf_dir, sub_env)
+                return {}
+            except StepFailed as e:
+                if attempt == DESTROY_RETRIES:
+                    raise                   # the last attempt's failure is reported as is
+                runtimes = timed_out_tf_runtimes(str(e))
+                if not runtimes:
+                    raise
+                print(f"runner: AgentCore Runtime {', '.join(runtimes)} timed out while deleting; "
+                      f"its delete goes on in AgentCore: waiting {RUNTIME_DELETE_PAUSE:.0f}s, then "
+                      f"destroying again", flush=True)
+                time.sleep(RUNTIME_DELETE_PAUSE)
         return {}
     run([tf, "apply", "-auto-approve", "-input=false", "-no-color"], tf_dir, sub_env)
     raw = subprocess.run([tf, "output", "-json"], cwd=tf_dir,  # noqa: S603  # nosec B603  # nosemgrep

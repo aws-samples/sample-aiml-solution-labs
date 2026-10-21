@@ -1388,6 +1388,10 @@ export interface OrchestratorStackProps extends cdk.StackProps {
    * `-c consoleMode=builder`. Mirrors var.console_mode in terraform/builder.tf.
    */
   consoleMode?: string;
+  /** A link to a product demo video, shown on a control-plane console (consoleMode
+   *  "builder") in the About panel and the first-run view. An https URL or empty (the
+   *  default: no link). `-c demoVideoUrl`. Mirrors var.demo_video_url in terraform/builder.tf. */
+  demoVideoUrl?: string;
   /** Leave the builds table deletion-protected when this stack is destroyed, so a destroy
    *  stops at the table. Default false: destroy clears the protection just before it
    *  deletes the table. `-c keepBuildsTableProtected=true`. Mirrors
@@ -1475,6 +1479,11 @@ export class OrchestratorStack extends cdk.Stack {
     }
     if (consoleMode === "builder" && props.builder === false) {
       throw new Error("consoleMode=builder needs the Builder: drop -c builder=false");
+    }
+    // Same rule as var.demo_video_url's validation in terraform/builder.tf.
+    const demoVideoUrl = String(props.demoVideoUrl ?? "");
+    if (demoVideoUrl && !/^https:\/\/[^\s/?#]+[^\s]*$/.test(demoVideoUrl)) {
+      throw new Error(`demoVideoUrl must be an https:// URL or empty, not "${demoVideoUrl}"`);
     }
     const workflowPlane = consoleMode !== "builder";
     const enableGateway = props.enableGateway && workflowPlane;
@@ -3075,6 +3084,9 @@ export class OrchestratorStack extends cdk.Stack {
     }
     // A control-plane console (see consoleMode): the BFF refuses the run routes.
     if (consoleMode === "builder") bff.addEnvironment("CONSOLE_MODE", "builder");
+    // The demo video link a console shows (GET /api/me demoVideoUrl). Mirrors
+    // local.console_mode_env in terraform/builder.tf.
+    if (consoleMode === "builder" && demoVideoUrl) bff.addEnvironment("DEMO_VIDEO_URL", demoVideoUrl);
     // A build's own app keeps its own activity log (bff/audit.py): who signed in, and who
     // started, decided, cancelled, re-ran or deleted a run. A console keeps it with its
     // builds. Mirrors aws_dynamodb_table.audit in terraform/audit.tf.
