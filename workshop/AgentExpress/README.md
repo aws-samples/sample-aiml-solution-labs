@@ -7,9 +7,11 @@ Terraform or CDK turns it into a running system with a web console, and the cons
 designs and deploys new workflows. It is a **reference pattern**, not a finished product:
 replace the prompts, contracts and documents with your own.
 
-## See it
+## Watch the demo
 
 https://github.com/user-attachments/assets/6893daa6-ec41-4ec2-952c-9861b973cc45
+
+## Inside AgentExpress
 
 ### AgentExpress Assistant
 Describe your process in plain English. The Assistant drafts the agents, their prompts, tools,
