@@ -9,7 +9,7 @@ replace the prompts, contracts and documents with your own.
 
 ## Watch the demo
 
-https://github.com/user-attachments/assets/6893daa6-ec41-4ec2-952c-9861b973cc45
+https://github.com/user-attachments/assets/c0e1e8a5-a397-4f68-ba9b-e1346109e002
 
 ## Inside AgentExpress
 
