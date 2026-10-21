@@ -1,5 +1,3 @@
-
-
 # AgentExpress: Multi-Agent Orchestrator (LangGraph + Amazon Bedrock AgentCore)
 
 AgentExpress is a configuration-driven multi-agent orchestrator built on **LangGraph** and
@@ -10,6 +8,8 @@ designs and deploys new workflows. It is a **reference pattern**, not a finished
 replace the prompts, contracts and documents with your own.
 
 ## See it
+
+https://github.com/user-attachments/assets/6893daa6-ec41-4ec2-952c-9861b973cc45
 
 ### AgentExpress Assistant
 Describe your process in plain English. The Assistant drafts the agents, their prompts, tools,
