@@ -164,6 +164,23 @@ def test_a_turn_runs_in_the_background_and_edits_the_build(env, model):
     assert "inferenceConfig" in script.calls[0] and "temperature" not in script.calls[0]["inferenceConfig"]
 
 
+def test_a_list_the_model_sends_as_a_json_string_is_read_as_a_list(env, model):
+    """Seen live: the model sent defaults_used as '["model: ...", ...]', a string, and the
+    change recorded one character per default."""
+    save(env)
+    model(tool_use(add_fraud(defaults_used='["model: Claude Haiku 4.5", "temperature 0"]',
+                             needs_input='[{"path": "tools.crm.endpoint", "question": "Which URL?"}]')),
+          says("Added it."))
+    send(env, "Add a fraud check after intake")
+    assert run_background(env) == {"ok": True}
+    change = conversation(env)[1]["turns"][-1]["changes"][0]
+    assert change["defaultsUsed"] == ["model: Claude Haiku 4.5", "temperature 0"]
+    assert change["needsInput"] == [{"path": "tools.crm.endpoint", "question": "Which URL?"}]
+    as_list = env.handler.designer._as_list
+    assert as_list("one plain default") == ["one plain default"]
+    assert as_list("[not json") == ["[not json"] and as_list(None) == [] and as_list({"a": 1}) == []
+
+
 def test_an_edit_that_breaks_the_rules_goes_back_to_the_model_to_fix(env, model):
     save(env)
     broken = ("apply_changes", {"summary": "Added a fraud check", "ops": [

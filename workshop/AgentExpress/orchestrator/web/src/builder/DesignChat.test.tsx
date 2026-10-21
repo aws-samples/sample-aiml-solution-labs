@@ -93,6 +93,18 @@ describe("what the designer asked for", () => {
       .toEqual(["temperature 0", "maxTokens 1500"]);
   });
 
+  it("reads a change stored one character per default as the list it was", () => {
+    const broken = change({ defaultsUsed: [...'["model: Claude Haiku 4.5", "temperature 0"]'] });
+    expect(defaultsUsed([change({ defaultsUsed: ["image agent: 1:1 png"] }), broken]))
+      .toEqual(["model: Claude Haiku 4.5", "temperature 0", "image agent: 1:1 png"]);
+    expect(defaultsUsed([change({ defaultsUsed: "maxTokens 1500" as unknown as string[] })])).toEqual(["maxTokens 1500"]);
+    // Cut off after 30 characters: the whole items stay, the unfinished one ends in an ellipsis.
+    expect(defaultsUsed([change({ defaultsUsed: [...'["model: Claude Haiku 4.5 defa'] })]))
+      .toEqual(["model: Claude Haiku 4.5 defa…"]);
+    expect(defaultsUsed([change({ defaultsUsed: [...'["temperature 0", "maxTok'] })]))
+      .toEqual(["temperature 0", "maxTok…"]);
+  });
+
   it("renders its Markdown as text, never as markup", () => {
     const { container } = render(<Markdown text={"**Built** it:\n- one `a`\n- two\n\n<img src=x onerror=alert(1)>"} />);
     expect(container.querySelector("strong")?.textContent).toBe("Built");

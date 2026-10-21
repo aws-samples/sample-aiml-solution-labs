@@ -548,6 +548,25 @@ class OpError(ValueError):
     pass
 
 
+def _as_list(v) -> list:
+    """A tool argument the schema declares as an array. Models sometimes send the array as a
+    JSON string ('["a", "b"]'); iterating that string would yield one character per item.
+    A string that is not a JSON array is one item; anything else that is not a list is none."""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        if s.startswith("["):
+            try:
+                parsed = json.loads(s)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
+        return [s] if s else []
+    return []
+
+
 def _obj(v, what: str) -> dict:
     if not isinstance(v, dict):
         raise OpError(f"{what} must be an object")
@@ -1635,7 +1654,7 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
     current = builds._draft(build_id)
     if not current.get("workflow"):
         return {"status": "error", "error": "the build has no draft to change"}, None
-    needs = [n for n in args.get("needs_input") or [] if isinstance(n, dict)]
+    needs = [n for n in _as_list(args.get("needs_input")) if isinstance(n, dict)]
     try:
         new, changed = apply_ops(current, args.get("ops"))
     except OpError as e:
@@ -1667,10 +1686,10 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
     doc["revision"] = revision
     record = {"summary": unescape(str(args.get("summary") or ""))[:300], "revision": revision,
               "changed": changed,
-              "defaultsUsed": [str(d)[:200] for d in args.get("defaults_used") or []][:30],
+              "defaultsUsed": [str(d)[:200] for d in _as_list(args.get("defaults_used")) if str(d).strip()][:30],
               "needsInput": [{"path": str(n.get("path"))[:120],
                               "question": str(n.get("question"))[:300]} for n in needs][:30],
-              "secretsNeeded": _secrets_needed(args.get("secrets_needed"), new["workflow"]),
+              "secretsNeeded": _secrets_needed(_as_list(args.get("secrets_needed")), new["workflow"]),
               "problems": [{"path": e["path"], "message": e["message"]} for e in errors[:20]]}
     return {"status": "applied", "revision": revision,
             # What THIS call changed, so the reply describes what was saved and not what

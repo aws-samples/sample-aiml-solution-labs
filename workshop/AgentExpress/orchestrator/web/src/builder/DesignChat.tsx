@@ -158,10 +158,41 @@ export function secretsNeeded(changes: DesignChange[], tools: Record<string, unk
   return out;
 }
 
+/** A change's defaults as a list of lines. An older server stored a JSON-array STRING from
+ *  the model one character per item; such a record is put back together and read here. */
+function defaultLines(v: unknown): string[] {
+  const parse = (s: string): string[] => {
+    const t = s.trim();
+    if (t.startsWith("[")) {
+      try {
+        const p: unknown = JSON.parse(t);
+        if (Array.isArray(p)) return p.map(String);
+      } catch {
+        // A JSON array cut off part-way (the old server kept only its first 30 characters):
+        // keep each whole "…" item, and the last unfinished one with an ellipsis.
+        const out: string[] = [];
+        const rest = t.slice(1).replace(/"((?:[^"\\]|\\.)*)"\s*,?\s*/g, (_m, s: string) => {
+          out.push(s.replace(/\\(.)/g, "$1"));
+          return "";
+        }).trim();
+        const tail = rest.replace(/^"/, "").replace(/\]$/, "").trim();
+        if (tail) out.push(`${tail}…`);
+        return out.filter((s) => s.trim());
+      }
+    }
+    return t ? [t] : [];
+  };
+  if (typeof v === "string") return parse(v);
+  if (!Array.isArray(v)) return [];
+  const items = v.map(String);
+  if (items.length > 1 && items.every((s) => s.length <= 1)) return parse(items.join(""));
+  return items.filter((s) => s.trim());
+}
+
 /** The defaults the designer chose, newest first, without repeats. */
 export function defaultsUsed(changes: DesignChange[]): string[] {
   const out: string[] = [];
-  for (const c of [...changes].reverse()) for (const d of c.defaultsUsed ?? []) if (!out.includes(d)) out.push(d);
+  for (const c of [...changes].reverse()) for (const d of defaultLines(c.defaultsUsed)) if (!out.includes(d)) out.push(d);
   return out;
 }
 
