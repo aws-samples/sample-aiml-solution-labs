@@ -59,7 +59,7 @@ def test_terraform_grants_the_secret_only_when_on_and_only_on_that_arn():
     blocks = {name: tf.split(f'resource "aws_iam_role_policy" "{name}"')[1].split("\n}\n")[0]
               for name in ("runtime_litellm", "subagent_litellm", "bff_litellm")}
     assert "count  = local.workflow_plane && local.litellm_enabled ? 1 : 0" in blocks["runtime_litellm"]
-    assert "for_each = local.litellm_enabled ? local.dedicated_agents : {}" in blocks["subagent_litellm"]
+    assert "for_each = { for id, a in local.dedicated_agents : id => id if local.litellm_enabled }" in blocks["subagent_litellm"]
     assert "count  = local.litellm_enabled ? 1 : 0" in blocks["bff_litellm"]
     assert "role   = aws_iam_role.bff.id" in blocks["bff_litellm"]
     policy = tf.split("litellm_policy = ")[1].split("\n  })\n")[0]

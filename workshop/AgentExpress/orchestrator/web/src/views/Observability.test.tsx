@@ -68,6 +68,43 @@ describe("legacy/observability.js", () => {
     expect(src).toContain("const meta = (wfDef.agents || {})[id]");
   });
 
+  it("shows prompt caching in the run's per-agent breakdown, its cards and each call", () => {
+    // Run detail: Cache read / Cache write / Cache saving columns from the BFF's byAgent
+    // rollup, and the expanded calls row spans every column.
+    expect(src).toContain(">Cache read</th>");
+    expect(src).toContain(">Cache write</th>");
+    expect(src).toContain(">Cache saving</th>");
+    expect(src).toContain("${fmtInt(a.cacheReadTokens)}");
+    expect(src).toContain("${fmtInt(a.cacheWriteTokens)}");
+    expect(src).toContain('style="display:none"><td colspan="10">');
+    // Summary cards on Overview and Run detail.
+    expect(src.match(/\+ cacheKpi\(/g)?.length).toBe(2);
+    // Prompts & I/O: per-call cache tokens, cost, saving and a hit/miss badge.
+    expect(src).toContain('kv("Cache read", fmtInt(read))');
+    expect(src).toContain('kv("Cache cost"');
+    expect(src).toContain("cache hit</span>");
+    expect(src).toContain("cache miss</span>");
+    expect(src).toContain("${badge(c.status)}${cacheBadge(c)}");
+    // A missing published rate is shown as unknown, never as a number.
+    expect(src).toContain("c.cache_cost_known === false");
+  });
+  it("shows the prompt caching insights on the Insights tab, over the Overview range", () => {
+    // bff/cache_insights.py kinds, read from the aggregate route with the Overview dates.
+    expect(src).toContain('<div id="obsCacheInsBody">');
+    expect(src).toContain("/api/telemetry/aggregate?by=date&from=${from}&to=${to}");
+    expect(src).toContain("data.cacheInsights");
+    expect(src).toContain('i.kind === "rarely_read"');
+    expect(src).toContain('i.kind === "nothing_cached"');
+    expect(src).toContain("Cache written but rarely read");
+    expect(src).toContain("Caching requested but nothing cached");
+    expect(src).toContain("Caching is paying off");
+    // The threshold is stated, the model minimum comes from the table, and a cost that
+    // was not recorded reads "unknown".
+    expect(src).toContain("Cache read tokens are below cache write tokens over this range");
+    expect(src).toContain("tokens per checkpoint");
+    expect(src).toContain('v == null ? "unknown"');
+    expect(src).toContain("loadCacheInsights();");
+  });
   it("takes the workflow as the third argument to mount", () => {
     expect(src).toContain("function mount(el, token, wf, opts)");
     expect(src).toContain("wfDef = wf || {}");

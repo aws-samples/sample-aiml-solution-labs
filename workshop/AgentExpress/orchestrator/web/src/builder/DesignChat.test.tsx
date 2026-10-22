@@ -27,11 +27,11 @@ vi.mock("../api", () => {
 });
 
 import { Builder } from "./Builder";
-import { defaultsUsed, openInputs, secretsNeeded, when } from "./DesignChat";
+import { defaultsUsed, openInputs, REVIEW_HELP, REVIEW_LABEL, reviewLine, secretsNeeded, when } from "./DesignChat";
 import { record, redo, start, undo } from "./history";
 import { Markdown } from "./markdown";
 import { addAgent, migrateFramework, newProject, replaceWorkflow, type Project } from "./model";
-import type { BuildStore, BuildSummary, DesignChange, DesignDoc } from "./storage";
+import type { BuildStore, BuildSummary, DesignChange, DesignDoc, DesignTurn } from "./storage";
 import { validate } from "./validate";
 
 beforeAll(() => {
@@ -194,7 +194,7 @@ describe("the AgentExpress Assistant tab", () => {
     await act(async () => { render(<Builder notify={vi.fn()} store={serverStore(state)} />); });
     expect(screen.getByText("What would you like to build?")).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByText("Claims triage")); });
-    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ message: "Triage claims" });
+    expect(calls.find((c) => c.method === "POST")?.body).toEqual({ message: "Triage claims", review: "auto" });
     expect(screen.getByText("Thinking…")).toBeTruthy();
 
     state.project = withFraud;                 // what the designer saved on the server
@@ -248,8 +248,40 @@ describe("the AgentExpress Assistant tab", () => {
     await act(async () => { fireEvent.change(box, { target: { value: "Add a fraud check" } }); });
     await act(async () => { fireEvent.keyDown(box, { key: "Enter", keyCode: 13 }); });
     await waitFor(() => expect(calls.filter((c) => c.method === "POST").at(-1)?.body)
-      .toEqual({ message: "Add a fraud check" }));
+      .toEqual({ message: "Add a fraud check", review: "auto" }));
     expect(box.value).toBe("");
+  });
+  it("offers Review changes as Off, Auto and Always, remembers the choice, sends it, and never names the reviewer", async () => {
+    const state = { project: stored, saves: [] as Project[] };
+    const path = "/api/builds/pclaims01/design";
+    const user = { id: "u1", role: "user" as const, text: "Add a fraud check", at: "" };
+    const reviewed = (r: DesignTurn["review"], id: string) => ({ id, role: "assistant" as const, text: "Added it.", at: "", status: "done" as const, review: r });
+    replies = { [`GET ${path}`]: [doc({ turns: [user, reviewed({ status: "applied", count: 2 }, "a1"),
+      { ...user, id: "u2" }, reviewed({ status: "skipped" }, "a2"),
+      { ...user, id: "u3" }, reviewed({ status: "unavailable" }, "a3")] })],
+    [`POST ${path}`]: [doc({ status: "thinking", turns: [user] })] };
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<Builder notify={vi.fn()} store={serverStore(state)} />); });
+    await waitFor(() => expect(screen.getAllByText(REVIEW_LABEL).length).toBeGreaterThan(0));
+    expect(REVIEW_LABEL).toBe("Review changes");
+    expect(screen.getByText(REVIEW_HELP)).toBeTruthy();
+    const control = createWrapper(view.container).findSegmentedControl()!;
+    expect(control.findSegments().map((s) => s.getElement().textContent)).toEqual(["Off", "Auto", "Always"]);
+    expect(control.findSelectedSegment()!.getElement().textContent).toBe("Auto");   // the default
+    // One muted line per reviewed reply.
+    expect(screen.getAllByTestId("design-review").map((e) => e.textContent))
+      .toEqual(["Reviewed: 2 suggestions applied", "Review skipped (small change)", "Review unavailable"]);
+    await act(async () => { control.findSegments()[2].click(); });
+    expect(localStorage.getItem("agentexpress.assistant.review")).toBe("always");
+    const prompt = createWrapper(view.container).findPromptInput()!;
+    await act(async () => { prompt.setTextareaValue("Add a fraud check"); });
+    await act(async () => { prompt.findActionButton().click(); });
+    expect(calls.filter((c) => c.method === "POST").at(-1)?.body).toEqual({ message: "Add a fraud check", review: "always" });
+    // No reviewer model, by name or id, anywhere on the page.
+    expect(view.container.textContent).not.toMatch(/gpt|openai|sol\b/i);
+    expect(reviewLine({ status: "noted", count: 1 })).toBe("Reviewed: 1 suggestion noted");
+    expect(reviewLine({ status: "ok" })).toBe("Reviewed: no issues");
+    expect(reviewLine(undefined)).toBe("");
   });
   it("offers the demo video only to someone who owns no builds yet", async () => {
     const url = "https://videos.example.com/demo";
@@ -330,7 +362,7 @@ describe("the AgentExpress Assistant tab", () => {
     await act(async () => { prompt.setTextareaValue("Use the spec"); });
     await act(async () => { prompt.findActionButton().click(); });
     expect(calls.find((c) => c.method === "POST" && c.path === path)!.body)
-      .toEqual({ message: "Use the spec", attachments: [{ key: "builds/pclaims01/attachments/ab-spec.md", name: "spec.md" }] });
+      .toEqual({ message: "Use the spec", attachments: [{ key: "builds/pclaims01/attachments/ab-spec.md", name: "spec.md" }], review: "auto" });
     await waitFor(() => expect(view.container.querySelector(".axd-attached-item")?.textContent).toContain("spec.md"));
     globalThis.fetch = realFetch;
   });

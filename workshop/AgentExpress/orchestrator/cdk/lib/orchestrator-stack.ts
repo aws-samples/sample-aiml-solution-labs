@@ -35,6 +35,7 @@ import { A2aIdentity, addA2aServer } from "./a2a-server";
 import { BuilderPlane } from "./builder-plane";
 import * as hardening from "./hardening";
 import * as vocab from "./vocabulary";
+import { runtimeNetwork, validateAgentNetworks } from "./runtime-network";
 import { keyDefault, keyDefaultFor } from "./defaults";
 import { filesRetentionDays, listRunFilesStatement, saveRunFilesStatement } from "./run-files";
 import { otlpExport } from "./otlp-export";
@@ -153,7 +154,24 @@ export function validateTools(
     if (!TOOL_TYPES.includes(t?.type)) {
       throw new Error(`workflow.json tools.${name} needs "type" = ${TOOL_TYPES.join(" | ")}.`);
     }
-    if (t.type === "mcp" && !t.endpoint) {
+    // --- type=mcp, hosted: AgentExpress runs the server (lib/hosted-mcp.ts). Mirrors
+    // bff/validate_build.py hosted_mcp_problems and terraform/tools_hosted_mcp.tf.
+    if (t.hosted !== undefined) {
+      const h = t.hosted;
+      const bad = h && typeof h === "object" && !Array.isArray(h)
+        ? Object.keys(h).filter((k) => k !== "code" && k !== "network") : ["hosted"];
+      const code = h?.code;
+      const image = code && typeof code === "object" ? code.image : undefined;
+      if (t.type !== "mcp" || bad.length || t.endpoint !== undefined
+          || (t.auth !== undefined && t.auth !== "sigv4") || (t.service !== undefined && t.service !== "bedrock-agentcore")
+          || (image !== undefined && (typeof image !== "string" || !/^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com\//.test(image)))) {
+        throw new Error(
+          `workflow.json tools.${name}.hosted: a hosted MCP server is type "mcp" with hosted = { code?, network? }, ` +
+            `no "endpoint" (it is the server's own Runtime), auth "sigv4" or unset, and code.image, when set, a private ECR image URI.`
+        );
+      }
+    }
+    if (t.type === "mcp" && !t.endpoint && t.hosted === undefined) {
       throw new Error(
         `workflow.json tools.${name} has type="mcp" and so requires "endpoint" (your MCP server's Streamable HTTP URL).`
       );
@@ -946,6 +964,7 @@ export function validateWorkflow(workflow: any, orchRoot: string, agentName: str
 
   validateBranches(steps);
   validateRuntimes(agents);
+  validateAgentNetworks(agents);
 
   // The id becomes part of the AgentCore Runtime name, which only accepts
   // [a-zA-Z][a-zA-Z0-9_]* — a hyphen fails at DEPLOY time with an opaque error.
@@ -1401,6 +1420,10 @@ export interface OrchestratorStackProps extends cdk.StackProps {
    *  message names an s3:// path. `-c designerS3Buckets=a,b/prefix`. Mirrors
    *  var.designer_s3_buckets in terraform/builder.tf. */
   designerS3Buckets?: string[];
+  /** Buckets an S3 code source (codeSource.s3) may name when a build deploys into this
+   *  console's own account; empty (the default): S3 code sources need a connected account.
+   *  `-c codeSourceBuckets=a,b`. Mirrors var.code_source_buckets in terraform/builder.tf. */
+  codeSourceBuckets?: string[];
   /** The AgentExpress Assistant's model (`-c designerModel`) and its conversation-summary
    *  model (`-c designerSummaryModel`). Empty = bff/designer.py's defaults. Mirrors
    *  Terraform's designer_model / designer_summary_model. */
@@ -1409,6 +1432,10 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   /** The Assistant's reasoning effort: medium (the default) | low | high | model. Mirrors
    *  Terraform's designer_effort. */
   designerEffort?: string;
+  /** The model that reviews the Assistant's changes when Review changes is on
+   *  (`-c designerReviewModel`). Empty = bff/review.py's default (us.openai.gpt-6.1-sol).
+   *  Mirrors Terraform's designer_review_model. */
+  designerReviewModel?: string;
   /** Serve this workflow over A2A (lib/a2a-server.ts): `-c exposeA2a=true`, the A2A callers'
    *  identity without a created pool (`-c a2aIdentity`), and who decides their runs' gates
    *  (`-c a2aApprovers`). Mirror Terraform's expose_a2a / a2a_identity / a2a_approvers. */
@@ -2572,7 +2599,8 @@ export class OrchestratorStack extends cdk.Stack {
             Description: `Dedicated runtime for agent ${id} (${agents[id].name})`,
             RoleArn: subagentRole.roleArn,
             AgentRuntimeArtifact: { ContainerConfiguration: { ContainerUri: image.imageUri } },
-            NetworkConfiguration: { NetworkMode: "PUBLIC" },
+            // agents.<id>.network: PUBLIC unless this agent sets its own (lib/runtime-network.ts).
+            NetworkConfiguration: runtimeNetwork(agents[id].network, `agents.${id}.network`),
             EnvironmentVariables: {
               AWS_REGION: this.region,
               BEDROCK_MODEL_ID: modelId,
@@ -2820,7 +2848,8 @@ export class OrchestratorStack extends cdk.Stack {
           Description: "Multi-agent LangGraph orchestrator (CDK-managed)",
           RoleArn: runtimeRole.roleArn,
           AgentRuntimeArtifact: { ContainerConfiguration: { ContainerUri: image.imageUri } },
-          NetworkConfiguration: { NetworkMode: "PUBLIC" },
+          // orchestrator.network, for every main and task agent: PUBLIC unless set (lib/runtime-network.ts).
+          NetworkConfiguration: runtimeNetwork(workflow.orchestrator?.network, "orchestrator.network"),
           EnvironmentVariables: {
             AWS_REGION: this.region,
             BEDROCK_MODEL_ID: modelId,
@@ -3050,7 +3079,10 @@ export class OrchestratorStack extends cdk.Stack {
         keepTableProtected: props.keepBuildsTableProtected,
         permissionsBoundaryArn: guardrails.permissionsBoundaryArn, iamRolePath: guardrails.iamRolePath,
         litellmEnv: bffLitellm.env,
+        codeSourceBuckets: props.codeSourceBuckets,
       });
+    // The same list for the deploy check (bff/builds.py deploy).
+    if (builderPlane) bff.addEnvironment("CODE_SOURCE_BUCKETS", (props.codeSourceBuckets ?? []).join(","));
     builderPlane?.grantConsole(bff);
     // s3:// paths in an AgentExpress Assistant message: read only these (bff/designer.py).
     const designerS3 = builderPlane ? (props.designerS3Buckets ?? []) : [];
@@ -3081,6 +3113,12 @@ export class OrchestratorStack extends cdk.Stack {
         throw new Error(`designerEffort must be low, medium, high or model, not "${props.designerEffort}"`);
       }
       bff.addEnvironment("DESIGNER_EFFORT", props.designerEffort);
+    }
+    // The model that reviews the Assistant's changes (bff/review.py). Its inference profile
+    // and the foundation model in each Region it routes to are covered by the BFF's
+    // Bedrock grant above (this region's inference-profile/*, foundation-model/* in any).
+    if (builderPlane && props.designerReviewModel) {
+      bff.addEnvironment("DESIGNER_REVIEW_MODEL", props.designerReviewModel);
     }
     // A control-plane console (see consoleMode): the BFF refuses the run routes.
     if (consoleMode === "builder") bff.addEnvironment("CONSOLE_MODE", "builder");

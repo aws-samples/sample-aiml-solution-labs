@@ -90,29 +90,57 @@ def record_llm(*, model: str, input_tokens: int, output_tokens: int,
                user_input: str = "", output_text: str = "",
                temperature: float = 0.0, max_tokens: int = 0,
                finish_reason: str = "", prompt: str = "",
-               cost_usd=None, rates_source: str = "") -> None:
+               cost_usd=None, rates_source: str = "",
+               cache: dict | None = None, cache_plan=None, cache_priced: bool = True) -> None:
     """One Bedrock model call: exact tokens, rates, cost, and the captured I/O the
     "Prompts & I/O" inspector (and AgentCore Evaluations) read back.
 
     `cost_usd` and `rates_source` replace the price lookup for a call priced elsewhere: a
     LiteLLM proxy call carries the proxy's own cost ("proxy"), or 0 when it sent none
-    ("none", so rates_known is false and nobody reads the 0 as measured)."""
+    ("none", so rates_known is false and nobody reads the 0 as measured).
+
+    `cache` is the call's prompt-cache counts (prompt_cache.usage_of) and `cache_plan` the
+    cache points it sent; the cache tokens are priced at their own rates (pricing.call_cost).
+    `cache_priced=False` (AgentCore Harness) records the cache tokens without pricing them:
+    cost stays tokens x rates as reported, and the row says cache cost unknown."""
     try:
         s = get_scope()
+        extra: dict = {}
         # One lookup: the rates, and which source priced them. Carried onto the row so a
         # reader can tell a listed price from the built-in snapshot or the fallback guess
         # — the fallback was silent, which made every figure for an unrecognised model
         # look measured.
+        cache = cache or {"read": 0, "write": 0, "write5m": 0, "write1h": 0}
+        if not cache_priced:
+            extra = {"cache_read_tokens": cache["read"], "cache_write_tokens": cache["write"],
+                     "cache_cost_known": not (cache["read"] or cache["write"])}
         if cost_usd is not None:
             in_rate = out_rate = pricing.Decimal("0")
             source, known = rates_source or "none", rates_source == "proxy"
             cost = pricing.Decimal(str(cost_usd))
         else:
-            in_rate, out_rate, source = pricing.price(model)
+            from app.common import prompt_cache
+            plan = cache_plan or prompt_cache.OFF
+            w5, w1, w30, wu = prompt_cache.split_ttl(cache, model, plan)
+            if not cache_priced:
+                w5 = w1 = w30 = wu = 0
+            priced = pricing.call_cost(model, int(input_tokens or 0), int(output_tokens or 0),
+                                       read=cache["read"] if cache_priced else 0,
+                                       write5m=w5, write1h=w1, write30m=w30, write_unknown=wu)
+            in_rate, out_rate, source = priced["in_rate"], priced["out_rate"], priced["rates_source"]
             known = source != "fallback"
             # A failed call ("error") consumed no billable tokens.
-            cost = (pricing.Decimal("0") if mode == "error"
-                    else pricing.cost_at(in_rate, out_rate, input_tokens, output_tokens))
+            cost = pricing.Decimal("0") if mode == "error" else priced["cost_usd"]
+            extra = {**extra, "cache_read_tokens": cache["read"], "cache_write_tokens": cache["write"],
+                     "cache_write_5m_tokens": w5, "cache_write_1h_tokens": w1,
+                     "cache_write_30m_tokens": w30,
+                     "cache_requested": ",".join(plan.sections),
+                     "cache_min_text": (prompt_cache.support(model) or {}).get("minTokensText", "")}
+            if mode != "error" and cache_priced:
+                extra.update({k: priced[k] for k in (
+                    "cache_read_cost_usd", "cache_write_cost_usd", "cache_saving_usd",
+                    "cache_cost_known", "cache_read_rate", "cache_write_5m_rate",
+                    "cache_write_1h_rate", "cache_write_30m_rate", "cache_rates_source")})
         sys_tokens, sys_exact = _system_tokens(model, system_text, mode)
         store.put(CallRecord(
             session_id=s.session_id, agent_id=s.agent_id, user=s.user,
@@ -126,7 +154,7 @@ def record_llm(*, model: str, input_tokens: int, output_tokens: int,
             finish_reason=finish_reason or "", status=("error" if mode == "error" else "ok"),
             system_prompt=_truncate(system_text), user_input=_truncate(user_input),
             output_text=_truncate(output_text), version=s.version, prompt=prompt or "",
-            chosen_by=_chosen_by(),
+            chosen_by=_chosen_by(), **extra,
         ))
     except Exception as e:  # noqa: BLE001
         print(f"[observability] record_llm skipped: {type(e).__name__}: {e}")

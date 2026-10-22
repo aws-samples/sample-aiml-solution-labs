@@ -1,0 +1,373 @@
+{
+ "$comment": "Hosted MCP server cases (tools.<key>.hosted), run by both validators on the base of validation_cases.json: web/src/builder/hostedMcp.parity.test.ts and tests/test_hosted_mcp.py. Regenerate expect with AX_WRITE_HOSTED_MCP_CASES=1 npx vitest run hostedMcp.parity",
+ "cases": [
+  {
+   "name": "a hosted server with an image, a VPC network and nothing else is accepted",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "code": {
+        "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/orders-mcp:1.2"
+       },
+       "network": {
+        "mode": "VPC",
+        "subnetIds": [
+         "subnet-0123456789abcdef0"
+        ],
+        "securityGroupIds": [
+         "sg-0123456789abcdef0"
+        ]
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a hosted server written in the build needs no code key",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {}
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "hosted and endpoint together are refused",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "endpoint": "https://mcp.example.com/mcp",
+      "hosted": {}
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp",
+     "message": "set exactly one of `endpoint` / `hosted` (found endpoint and hosted). endpoint = an MCP server you already run, by its URL. hosted = one AgentExpress runs on its own AgentCore Runtime, whose URL it derives."
+    }
+   ]
+  },
+  {
+   "name": "a hosted server takes no other auth or signing service",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "auth": "apikey",
+      "service": "execute-api",
+      "hosted": {}
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.auth",
+     "message": "a hosted MCP server is reached with SigV4 as the Gateway role: leave auth unset or set \"sigv4\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.service",
+     "message": "a hosted MCP server is signed for \"bedrock-agentcore\": leave service unset"
+    }
+   ]
+  },
+  {
+   "name": "a hosted server's image must be private ECR and its network the Runtime shape",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "code": {
+        "image": "docker.io/library/orders:1"
+       },
+       "network": {
+        "mode": "VPC"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.network.subnetIds",
+     "message": "mode \"VPC\" needs 1-16 ids, each subnet-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.network.securityGroupIds",
+     "message": "mode \"VPC\" needs 1-16 ids, each sg-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.code.image",
+     "message": "must be an Amazon ECR image URI, <account>.dkr.ecr.<region>.amazonaws.com/<repository>[:tag][@digest]"
+    }
+   ]
+  },
+  {
+   "name": "a hosted server's image may be a private ECR image by sha256 digest",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "code": {
+        "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/orders-mcp@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "a hosted server's image may not be on public ECR (the IaC pull grant cannot parse it)",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "code": {
+        "image": "public.ecr.aws/acme/orders-mcp:1"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.code.image",
+     "message": "a hosted MCP server's image must be a private ECR image URI, <account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag | @sha256:<digest>]"
+    }
+   ]
+  },
+  {
+   "name": "a hosted server's image may not be in the aws-cn partition (the IaC pull grant cannot parse it)",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "code": {
+        "image": "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/team/orders-mcp:1"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.code.image",
+     "message": "a hosted MCP server's image must be a private ECR image URI, <account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag | @sha256:<digest>]"
+    }
+   ]
+  },
+  {
+   "name": "a hosted server's image may not carry both a tag and a digest (the IaC pull grant cannot parse it)",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "code": {
+        "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/orders-mcp:1.0@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.code.image",
+     "message": "a hosted MCP server's image must be a private ECR image URI, <account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag | @sha256:<digest>]"
+    }
+   ]
+  },
+  {
+   "name": "a hosted server's key is capped by the Runtime name",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcpServerWithAVeryLongName1"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {}
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcpServerWithAVeryLongName1"
+     },
+     "path": "tools.ordersMcpServerWithAVeryLongName1",
+     "message": "a hosted MCP server's key is part of its Runtime name ax_<build>_mcp_<key>, which AgentCore caps at 48 characters: use at most 32"
+    }
+   ]
+  },
+  {
+   "name": "hosted applies to type mcp only, and takes code and network only",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "ordersApi"
+     ],
+     {
+      "type": "openapi",
+      "description": "Orders",
+      "schemaS3Uri": "s3://bucket-name/o.json",
+      "hosted": {}
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "ordersMcp"
+     ],
+     {
+      "type": "mcp",
+      "description": "Orders",
+      "hosted": {
+       "port": 8000
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersApi"
+     },
+     "path": "tools.ordersApi.hosted",
+     "message": "`hosted` does not apply to type \"openapi\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "ordersMcp"
+     },
+     "path": "tools.ordersMcp.hosted.port",
+     "message": "unknown key; allowed: code, network"
+    }
+   ]
+  }
+ ]
+}

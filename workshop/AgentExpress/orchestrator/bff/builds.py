@@ -363,7 +363,8 @@ def code_errors(project: dict) -> list[str]:
     """What stops a code function from deploying: the static checks' errors (bff/codecheck.py)."""
     out = []
     tools = (project.get("workflow") or {}).get("tools") or {}
-    for key in buildstore.code_functions(project.get("workflow") or {}):
+    # A function fetched from git or S3 is checked where it is fetched, at deploy.
+    for key in buildstore.written_functions(project.get("workflow") or {}):
         names = [s.get("name") for s in (tools.get(key) or {}).get("toolSchema") or [] if isinstance(s, dict)]
         where = (f"orchestrator.interceptors.{key.split('-', 1)[1]}" if key.startswith("interceptor-")
                  else f"tools.{key}")
@@ -547,6 +548,11 @@ def deploy(build_id: str, owner: str, tool: str, user: str, account: str = "",
     if wrong:
         raise BuildError(400, f"a tool's code has {len(wrong)} error{'s' if len(wrong) != 1 else ''} "
                               f"to fix before it can deploy — {'; '.join(wrong[:3])}")
+    if not account:
+        import code_source
+        refused = code_source.console_account_refusals(wf, code_source.allowed_buckets(os.environ))
+        if refused:
+            raise BuildError(400, "; ".join(refused[:3]))
     # What the region cannot run, said now rather than half-way through a deploy.
     search = sorted(k for k, t in (wf.get("tools") or {}).items()
                     if isinstance(t, dict) and str(t.get("type") or "").lower() == "websearch")
@@ -721,7 +727,9 @@ def delete(build_id: str, owner: str) -> None:
 #: tokens by remote agent, each identity's secret by identity name, and the HTTP headers
 #: (a JSON object, the API key in them) an observability tool takes, by the name
 #: orchestrator.export.secret gives (bff/export_check.py, app/features/observability/runexport.py).
-SECRET_KINDS = ("toolApiKeys", "a2aTokens", "identitySecrets", "exportHeaders")
+#: ...and the tokens of private git repositories a code source names (`git.token`,
+#: bff/code_source.py), read by the deployer only (deployer/code_fetch.py).
+SECRET_KINDS = ("toolApiKeys", "a2aTokens", "identitySecrets", "exportHeaders", "gitTokens")
 
 
 def _secret_id(build_id: str) -> str:

@@ -128,7 +128,12 @@ gated parallel step by seeding its gate to `revise` with that subset.
 | `task` | in the orchestrator runtime, no model | `app/common/task_agent.py`: a Gateway tool call, a Code Interpreter script, Textract, or an output file |
 | `harness` | an AgentCore Harness the deploy creates, or yours by `harness.arn` | `app/common/harness_agent.py` → `InvokeHarness` (no trace header is passed: ADOT rewrites it after signing) |
 
-Each dedicated agent gets its own execution role, derived from its `agentcore` block. An
+Each dedicated agent gets its own execution role, derived from its `agentcore` block. Every
+Runtime is `PUBLIC` unless its network says `VPC` (`cdk/lib/runtime-network.ts`,
+`terraform/runtime_network.tf`, checked by `bff/network_check.py`): `orchestrator.network` for the
+shared Runtime (`main` and `task` agents), `agents.<id>.network` for a dedicated one,
+`tools.<key>.hosted.network` for a hosted MCP server; harness agents keep `harness.network`, and
+`a2a` agents have none. AgentCore's service-linked role creates the network interfaces. An
 `a2a` agent has no package under `app/subagents/` and rejects `tool`, `corpus`, `model`
 and `maxTokens`. The remote supplies content; `A2AAgent._as_asset` adds the envelope
 (`version`, `createdByAgent`, `assetType`, `sourceAssetIds`). Guardrails apply and memory
@@ -173,7 +178,7 @@ what an agent's `tool` names.
 |---|---|
 | `kb` | Lambda calling `bedrock:Retrieve` on a Bedrock KB (S3 Vectors, or your own store with `vectorStore`), filtered to the agent's `doc_type` corpus |
 | `websearch` | managed AgentCore Web Search connector (`connectorId: web-search`) |
-| `mcp` | remote MCP server over Streamable HTTP (sample: AWS Knowledge MCP Server) |
+| `mcp` | remote MCP server over Streamable HTTP (sample: AWS Knowledge MCP Server), or a hosted one (`hosted`) on its own AgentCore Runtime |
 | `openapi` | REST API from an OpenAPI schema in S3 (`schemaS3Uri`, or `source` under `app/tools/`) |
 | `apigateway` | an API Gateway REST API stage in the same account and region |
 | `lambda` | your function (`lambdaArn`), code written in the build (`code`), or a shipped `source`: `pricing`, `codeInterpreter` (AgentCore Code Interpreter), `browser` (AgentCore Browser) |
@@ -194,6 +199,17 @@ what an agent's `tool` names.
   listed skill is added in full (up to 60k characters). A skill is text; nothing in it runs.
 - Research agents verify citation URLs against the evidence; an invented URL is dropped
   and a `sourced-fact` resting on it is downgraded (`_shared/research.py`).
+- A hosted MCP server (`cdk/lib/hosted-mcp.ts`, `terraform/tools_hosted_mcp.tf`, checked by
+  `bff/hosted_mcp_check.py`) is an AgentCore Runtime with protocol `MCP`: an ARM64 container
+  serving streamable HTTP on `0.0.0.0:8000/mcp`, IAM SigV4 inbound and no authorizer. Its Gateway
+  target is an MCP server target on `https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<encoded ARN>/invocations?qualifier=DEFAULT`
+  with `GATEWAY_IAM_ROLE` for `bedrock-agentcore` and `Mcp-Session-Id` passed both ways; the
+  Gateway role is the one role granted `InvokeAgentRuntime` on it (no resource policy on the
+  Runtime yet). The image is the build's own (`server.py`, built by the deploy) or a private ECR
+  image.
+- Code sources (`bff/code_source.py`, `deployer/code_fetch.py`): a Lambda tool's, interceptor's,
+  Run code step's or hosted server's code can be a git or S3 reference, fetched by the deploy into
+  `app/tools/_code/<key>/` (a script into `task.code`) before CDK or Terraform packages it.
 
 ## 5. Images
 
@@ -225,7 +241,7 @@ Each feature lives in `app/features/<name>/` and is switched on per agent in its
 | Identity | Credential providers from `identities.<name>`, secrets from the environment. `gatewayIdentity: "perAgent"` gives each tool-using agent its own Gateway client |
 | Policy | Cedar engine on the Gateway, `ENFORCE` (default-deny) or `LOG_ONLY`. AgentCore has no API for a Cedar decision outside a Gateway call, so `ctx.policy_check` always returns true |
 | Guardrails | Build-wide `guardrail` block (not created if it enforces nothing), plus named `guardrails.<name>`. A block stops the agent and the timeline names the policy that blocked; an anonymize-only finding carries on with the masked text |
-| Observability | OTEL with one `session.id` per run, AGENT and tool spans, force-flush per burst; a telemetry row per model, tool, memory, guardrail and policy call |
+| Observability | OTEL with one `session.id` per run, AGENT and tool spans, force-flush per burst; a telemetry row per model, tool, memory, guardrail and policy call, with prompt cache tokens, cost and saving on model rows |
 | Evaluations | LLM-as-judge per named prompt per version: telemetry rows replayed into `Evaluate` as `sessionSpans`, CloudWatch span fallback. `auto: true` scores at run end |
 | Insights | Batch evaluation over recent traces; findings in the insights table (AWS paused new Insights jobs on 16 Oct 2026; earlier findings stay readable) |
 | Interceptors | At most one Lambda before each MCP request and one after each answer (`orchestrator.interceptors`), written from templates or yours by ARN |
@@ -240,6 +256,17 @@ idempotent call. Token counts are exact; cost is a list-price estimate
 (`pricelist.py`, cached a day), else a built-in snapshot, else a marked fallback, and the
 row records which (`rates_source`). Image renders are priced the same way per image. The Observability tab is a separate module
 (`web/legacy/observability.js`) mounted by `web/src/views/Observability.tsx`.
+
+**Prompt caching.** An agent's `promptCache` is planned per call in `app/common/prompt_cache.py`
+from the called model's row in `vocabulary.json` `promptCacheModels` (the AWS table), so a model
+gets only the cache points it supports. `app/common/llm.py` sends Converse cache points after the
+static system prompt (recalled memory and the date follow it), after the tool list and on the
+conversation; single calls to the listed OpenAI models (GPT-5.6 Sol, Terra, Luna, GPT-6 Astra,
+GPT-6.1 Sol) go through InvokeModel with an explicit `prompt_cache_breakpoint` on the system
+prompt. A call Bedrock refuses for its cache point is retried once without it. Each llm row
+records the cache read and write tokens and their cost at the Price List cache rates, or marks the
+cost unknown when there is no published rate. `bff/cache_insights.py` sums them per agent for the
+Insights tab (paying off, rarely read, nothing cached).
 
 ## 7. The BFF
 
@@ -295,6 +322,20 @@ the conversation file the page polls: the text as it is written, each edit of a 
 is written ("Adding agent x"), and the canvas reloads as each change is saved. A turn that
 passes 180 s in one invocation carries on in a fresh one (up to 3 more) from the saved
 draft instead of stopping. It has no deploy or publish tool.
+
+- **`fetch_url`** (`bff/webfetch.py`): reads a public page a message links, with the
+  `bff/netguard.py` address rules (widened to `http://`) on the connection and every redirect,
+  no credentials sent, a 10 s wall-clock bound, 2 MB read and 40,000 characters kept, 5 pages per
+  message. HTML becomes text with the standard library's parser (no browser, no scripts); PDFs are
+  not read yet. The result reaches the model inside an `<untrusted_page_content>` wrapper.
+- **Review changes** (`bff/review.py`): with Auto (`needs_review`: a new build, agents, stages,
+  tools or named blocks added or removed, code, a security-relevant path, or more than 8 items) or
+  Always, the first `apply_changes` of a turn is checked before it is saved: the request, the
+  affected parts before and after, and the validator's problems go to a second model
+  (`DESIGNER_REVIEW_MODEL`, one Converse call). On "issues" the change is held and the notes go back
+  to the Assistant as data for one revision, which is saved without another review. Failure, a
+  timeout or too little time left in the invocation saves the change as proposed ("Review
+  unavailable"). The page shows the status, never the model.
 
 **Library and sharing** (`bff/library.py`, `bff/sharing.py`, `bff/builds.py`):
 
@@ -378,10 +419,18 @@ BFF: resolve library refs, validate_build, code and region checks,
 deployer/runner.py, on a fresh copy of the framework:
   1. fetch version n
   2. scaffold.py apply <bundle> --exact     (tree mirrors that version only)
-  3. cdk deploy | terraform apply  (agentName=ax_…, idp=cognito, createCognito=true,
+  3. fetch git / S3 code sources into app/tools/_code/<key>/ (deployer/code_fetch.py);
+     write a hosted MCP server's Dockerfile when its code has none
+  4. cdk deploy | terraform apply  (agentName=ax_…, idp=cognito, createCognito=true,
      builder=false, enableGateway when the workflow has tools)
-  4. record deployed on BUILD#<id> META; audit deploy.succeeded | deploy.failed
+  5. record deployed on BUILD#<id> META; audit deploy.succeeded | deploy.failed
 ```
+
+- Code sources: S3 in a connected account is read with that account's deploy role under an STS
+  session policy for that prefix or zip only. In the console's own account only buckets in
+  `CODE_SOURCE_BUCKETS` are read, never the builds bucket, the CDK staging bucket or a bucket
+  tagged `agentexpress:*`. A git token is read from the build's `gitTokens` secret, never logged.
+- Destroy retries: see [DEPLOYMENT.md, Tear down](DEPLOYMENT.md#tear-down) ("When a destroy fails").
 
 - Versions count successful deploys, so a failed attempt retries the same number from a
   newly frozen bundle. Destroy runs the same steps with the tool the build deployed with.
@@ -439,6 +488,11 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
   publishing speaks for the organization, so it needs `admin`, and the console never
   approves its own records. An imported MCP tool gets no credentials until the author
   sets how it connects.
+- The AgentExpress Assistant's `fetch_url` reaches public addresses only and sends no
+  credentials; what it reads is untrusted input to the model. Review changes only advises: the
+  reviewer's notes are data, never applied as edits by themselves.
+- Code sources read only what the build names: a connected account's S3 through a scoped session
+  policy, the console's own account only from operator-listed buckets.
 - Gateway interceptors (`orchestrator.interceptors`) are Lambdas the Gateway role alone may
   invoke; one written in the build is deployed like a code tool (its own role, a boundary
   denying the framework's data). With `passRequestHeaders` they see the agent's Gateway

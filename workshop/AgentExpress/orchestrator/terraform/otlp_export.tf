@@ -51,7 +51,8 @@ resource "aws_iam_role_policy" "runtime_otlp_export" {
 }
 
 resource "aws_iam_role_policy" "subagent_otlp_export" {
-  for_each = local.otlp_export_enabled ? local.dedicated_agents : {}
+  # A filtered for, not a conditional between local.dedicated_agents and {} (see subagent_litellm in litellm.tf).
+  for_each = { for id, a in local.dedicated_agents : id => id if local.otlp_export_enabled }
   name     = "OtlpExportHeaders-${var.agent_name}-${each.key}"
   role     = aws_iam_role.subagent[each.key].id
   policy   = local.otlp_export_policy

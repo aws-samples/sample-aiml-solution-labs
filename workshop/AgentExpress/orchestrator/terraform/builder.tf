@@ -50,6 +50,18 @@ variable "demo_video_url" {
 
 # Buckets, or bucket/prefix, the AgentExpress Assistant may read when a message names an
 # s3:// path (bff/designer.py). Mirrors -c designerS3Buckets in cdk/bin/orchestrator.ts.
+# Buckets an S3 code source (codeSource.s3) may name when a build deploys into this
+# console's own account (bff/code_source.py, deployer/runner.py). Empty: S3 code sources
+# need a connected account. Mirrors -c codeSourceBuckets in cdk/bin/orchestrator.ts.
+variable "code_source_buckets" {
+  description = "Buckets an S3 code source may read for builds deployed into this console's own account. Empty: S3 code sources need a connected account."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for b in var.code_source_buckets : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", b))])
+    error_message = "code_source_buckets must be bucket names (no s3://, no prefix)."
+  }
+}
 variable "designer_s3_buckets" {
   description = "Buckets (or bucket/prefix) the AgentExpress Assistant may read files from when a message names s3://... Empty: none."
   type        = list(string)
@@ -66,6 +78,14 @@ variable "designer_model" {
 }
 variable "designer_summary_model" {
   description = "Model id the Assistant uses to condense a long conversation. Empty: the deployment's default model."
+  type        = string
+  default     = ""
+}
+# The model that reviews the Assistant's changes when Review changes is on (bff/review.py).
+# Its inference profile and the foundation model in each Region it routes to are covered by
+# the BFF's BedrockChatModel grant (bff.tf). Mirrors -c designerReviewModel.
+variable "designer_review_model" {
+  description = "Model id that reviews the AgentExpress Assistant's changes (Review changes: Auto or Always). Empty: us.openai.gpt-6.1-sol."
   type        = string
   default     = ""
 }
@@ -147,8 +167,11 @@ locals {
     BFF_ROLE_ARN    = aws_iam_role.bff.arn
     # s3:// paths an AgentExpress Assistant message may name (bff/designer.py).
     DESIGNER_S3_BUCKETS = join(",", var.designer_s3_buckets)
+    # S3 code sources a build in this account may read (bff/builds.py deploy).
+    CODE_SOURCE_BUCKETS = join(",", var.code_source_buckets)
     }, var.designer_model == "" ? {} : { DESIGNER_MODEL = var.designer_model },
     var.designer_summary_model == "" ? {} : { DESIGNER_SUMMARY_MODEL = var.designer_summary_model },
+    var.designer_review_model == "" ? {} : { DESIGNER_REVIEW_MODEL = var.designer_review_model },
   var.designer_effort == "" ? {} : { DESIGNER_EFFORT = var.designer_effort }) : {}
   console_mode_env = local.builder_enabled && var.console_mode == "builder" ? merge({ CONSOLE_MODE = "builder" },
   var.demo_video_url == "" ? {} : { DEMO_VIDEO_URL = var.demo_video_url }) : {}
@@ -544,6 +567,11 @@ resource "aws_codebuild_project" "deploy" {
     environment_variable {
       name  = "CONSOLE_NAME"
       value = var.agent_name
+    }
+    # S3 code sources a build in this account may read (runner.py code_source_s3).
+    environment_variable {
+      name  = "CODE_SOURCE_BUCKETS"
+      value = join(",", var.code_source_buckets)
     }
     # The organisation's boundary and role path, for every build's roles (hardening.tf).
     dynamic "environment_variable" {

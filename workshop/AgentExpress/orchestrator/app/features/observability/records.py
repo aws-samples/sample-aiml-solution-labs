@@ -81,6 +81,32 @@ class CallRecord:
     # For kind="llm" rows: why `label` is the model that was called (app/common/
     # model_routing.py): "override", "route N", "fallback N", or "" for the agent's own.
     chosen_by: str = ""
+    # Prompt caching (llm rows; app/common/prompt_cache.py). Bedrock's TokenUsage
+    # cacheReadInputTokens / cacheWriteInputTokens, the writes split by TTL (cacheDetails,
+    # https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_TokenUsage.html).
+    # A breakdown OF input_tokens, which stays the total input. Recorded whether or not the
+    # agent turned caching on: implicit caching returns them too.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_write_5m_tokens: int = 0
+    cache_write_1h_tokens: int = 0
+    # OpenAI GPT-5.6+ writes (30-minute TTL, prompt_cache_options.ttl; prompt_cache.split_ttl).
+    cache_write_30m_tokens: int = 0
+    # The sections cache points were sent for ("tools,system,messages"), "" for none, and
+    # the model's documented minimum tokens per checkpoint, verbatim ("4,096", "1K").
+    cache_requested: str = ""
+    cache_min_text: str = ""
+    # What the cache tokens cost (included in cost_usd), at the Price List cache rates;
+    # cache_cost_known=False when a cache token had no published rate and was left out.
+    cache_read_cost_usd: Decimal = Decimal(0)
+    cache_write_cost_usd: Decimal = Decimal(0)
+    cache_saving_usd: Decimal = Decimal(0)   # cached tokens at the input rate minus their cost
+    cache_cost_known: bool = True
+    cache_read_rate: Decimal = Decimal(0)
+    cache_write_5m_rate: Decimal = Decimal(0)
+    cache_write_1h_rate: Decimal = Decimal(0)
+    cache_write_30m_rate: Decimal = Decimal(0)
+    cache_rates_source: str = ""
     # For kind="eval" rows: the evaluator's numeric score (0.0-1.0). `label`
     # holds the evaluator name and `output_text` the judge's explanation.
     value: Decimal = Decimal(0)

@@ -51,7 +51,9 @@ resource "aws_iam_role_policy" "runtime_litellm" {
 }
 
 resource "aws_iam_role_policy" "subagent_litellm" {
-  for_each = local.litellm_enabled ? local.dedicated_agents : {}
+  # A filtered for, not a conditional between local.dedicated_agents and {}: dedicated agents with different keys
+  # make that an object type the empty `{}` cannot match ("Inconsistent conditional result types").
+  for_each = { for id, a in local.dedicated_agents : id => id if local.litellm_enabled }
   name     = "LitellmKey-${var.agent_name}-${each.key}"
   role     = aws_iam_role.subagent[each.key].id
   policy   = local.litellm_policy

@@ -348,8 +348,17 @@ resource "awscc_bedrockagentcore_runtime" "orchestrator" {
     }
   }
 
-  network_configuration = {
-    network_mode = "PUBLIC"
+  # orchestrator.network, for every main and task agent; PUBLIC when unset (runtime_network.tf).
+  network_configuration = local.runtime_network_config["orchestrator.network"]
+  lifecycle {
+    precondition {
+      condition     = length(local.runtime_network_problems["orchestrator.network"]) == 0
+      error_message = "workflow.json ${join("; ", local.runtime_network_problems["orchestrator.network"])}."
+    }
+    precondition {
+      condition     = length(local.misplaced_networks) == 0
+      error_message = "workflow.json agent(s) ${join(", ", local.misplaced_networks)} set \"network\" but are not runtime \"dedicated\". Only a dedicated agent has its own Runtime; main and task agents use orchestrator.network, a harness agent uses harness.network, and an a2a agent runs outside this build."
+    }
   }
 
   # The optional OTLP export's settings are merged in only when it is on (otlp_export.tf).

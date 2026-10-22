@@ -230,7 +230,8 @@ async def gather(ctx, query: str, *, tools: list[str],
                 ctx, SYSTEM, "\n\n".join(str(getattr(m, "content", "")) for m in messages))
             return await model_routing.call(ctx, chain, lambda m: run_llm_tools(
                 f"{ctx.agent_id}.tools", SYSTEM, messages, specs, model=m,
-                max_tokens=min(int(getattr(ctx, "max_tokens", 1500) or 1500), 8000)))
+                max_tokens=min(int(getattr(ctx, "max_tokens", 1500) or 1500), 8000),
+                **({"prompt_cache": ctx.prompt_cache} if getattr(ctx, "prompt_cache", None) else {})))
         if journal:
             # Journaled (asks.py): a node re-run on resume replays this turn, not bills it again.
             async def recorded():

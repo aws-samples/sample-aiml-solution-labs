@@ -49,6 +49,7 @@ class Agent:
     max_tool_calls: int = defaults.get("agent", "maxToolCalls")
     agentcore: dict = None      # AgentCore features config (workflow.json "agentcore" block)
     vision: dict = None         # workflow.json `vision`: earlier agents' images this one reads
+    prompt_cache: dict = None   # workflow.json `promptCache`: Bedrock cache points (prompt_cache.py)
     attachments: bool = False   # workflow.json `attachments`: reads the run's files
 
     # --- where the long-term memory lifecycle runs -------------------------

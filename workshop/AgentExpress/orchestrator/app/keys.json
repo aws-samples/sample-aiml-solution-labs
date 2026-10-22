@@ -12,7 +12,8 @@
     "itemRequired": "For an array of objects: the fields each entry must carry.",
     "enum": "A closed value set that is NOT in vocabulary.json, because only one plane reads it.",
     "doc": "What it does, in one line. This is the text an editor shows on hover, so it is written for whoever is editing the file, not for whoever wrote the framework.",
-    "reads": "The code that consumes it. A key with no reader must not exist — that rule is the reason this file does."
+    "reads": "The code that consumes it. A key with no reader must not exist — that rule is the reason this file does.",
+    "notApplicable": "Per variant the key does NOT apply to: what to do instead. Appended to the rejection, so the message names the setting that does apply."
   },
   "agent": {
     "$comment": "One entry per agent, keyed by agent id, which must match ^[a-zA-Z][a-zA-Z0-9_]*$ (no hyphens — the id becomes part of an AgentCore Runtime name). For `main` and `dedicated` the id is also the folder name under app/subagents/. FOUR KEYS ARE ON EVERY AGENT regardless of placement — name, kind, runtime, produces — and everything after them depends on `runtime`: a local agent has the model group, a remote one has the remote group, and neither has the other's. That is deliberate rather than untidy. A remote agent's `maxTokens` would read as governing its cost while doing nothing, because the model call happens on the far side of a trust boundary.",
@@ -113,6 +114,10 @@
           "code": {
             "type": "string",
             "doc": "kind \"code\": the script, at most 50,000 bytes. It finds the request in in/request.txt, earlier steps' outputs in in/outputs.json and the run's files in in/; what it prints is the step's output (JSON when it parses); files it writes to out/ are kept with the run."
+          },
+          "codeSource": {
+            "type": "object",
+            "doc": "kind \"code\", instead of `code`: where the script comes from. {\"git\": {\"url\": \"https://...\", \"ref\": \"<branch|tag|commit>\", \"path\": \"scripts/run.py\", \"token\": \"<gitTokens build secret name>\"}} or {\"s3\": {\"uri\": \"s3://bucket/run.py-prefix/\" or \"s3://bucket/key.zip\", \"path\": \"run.py\"}}. The deployer reads that one file (at most 50,000 bytes) at deploy time and deploys it as `code`."
           },
           "file": {
             "type": "string",
@@ -411,6 +416,34 @@
         "reads": "registry.py -> agent.max_tokens",
         "default": 4000
       },
+      "promptCache": {
+        "group": "model",
+        "type": "object",
+        "appliesTo": [
+          "main",
+          "dedicated"
+        ],
+        "properties": {
+          "system": {
+            "type": "boolean",
+            "doc": "Cache the agent's system prompt (its instructions and the skills loaded into them). Recalled memory and today's date follow the cache point."
+          },
+          "tools": {
+            "type": "boolean",
+            "doc": "Cache the tool definitions the agent offers its model (toolMode \"model\"). Claude only: Amazon Nova caches system and messages only."
+          },
+          "messages": {
+            "type": "boolean",
+            "doc": "Cache the conversation so far in the agent's tool-calling turns (toolMode \"model\")."
+          },
+          "ttl": {
+            "type": "string",
+            "doc": "\"5m\" (default) or \"1h\". 1h only on models the AWS table lists with it (most Claude 4.5+ models); Nova and older Claude models cache for 5 minutes only. OpenAI GPT-5.6+ (system prompt only, through InvokeModel): \"30m\" (their default and only TTL; leave it out or set \"30m\")."
+          }
+        },
+        "doc": "Bedrock prompt caching, e.g. {\"system\": true, \"ttl\": \"5m\"}: system/tools/messages booleans, ttl \"5m\"|\"1h\"|\"30m\". Off unless set. Claude: all three, 1h on 4.5+; Nova: system+messages, 5m; OpenAI GPT-5.6 Sol/Terra/Luna, GPT-6 Astra, GPT-6.1 Sol: system only on single calls (InvokeModel, explicit breakpoint), 30m, min 1,024 tokens; others: none. Min tokens per checkpoint: Haiku 4.5 4,096, Claude 5.x 512. Counted cumulatively over tools, system and messages; below it the call still succeeds, uncached. The per-model rules are app/vocabulary.json promptCacheModels, copied from https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html; a model not in it is called without cache points (a warning). A cache write can cost more than plain input, so it pays only when the same prefix is reused within the TTL.",
+        "reads": "registry.py -> agent.prompt_cache -> app/common/prompt_cache.py plan() -> app/common/llm.py run_llm / run_llm_tools"
+      },
       "source": {
         "group": "remote",
         "type": "string",
@@ -574,6 +607,35 @@
         },
         "doc": "Let this agent ask a person a question in the middle of its step (\"Which region did the claimant mean?\"): its model is offered an `ask_person` tool, the run waits for the answer on the run page, and the model reads it as the tool's result. true, or {\"maxQuestions\": 3, \"timeout\": \"24h\"}. Needs toolMode \"model\". A run started unattended (gates \"auto\") answers \"no person is available\". Model and tool calls made before the question are not repeated when the run resumes.",
         "reads": "app/common/asks.py ask_spec -> tool_loop (ask_person); bff/asks.py"
+      },
+      "network": {
+        "group": "features",
+        "type": "object",
+        "appliesTo": [
+          "dedicated"
+        ],
+        "notApplicable": {
+          "main": "it runs inside the shared orchestrator Runtime: set orchestrator.network, or switch this agent to runtime \"dedicated\" to give it its own network",
+          "task": "it runs inside the shared orchestrator Runtime: set orchestrator.network for it",
+          "a2a": "a remote agent runs on its owner's network, outside this build",
+          "harness": "set a harness agent's network in harness.network"
+        },
+        "properties": {
+          "mode": {
+            "type": "string",
+            "doc": "\"PUBLIC\" or \"VPC\" (the Runtime's networkMode). Required."
+          },
+          "subnetIds": {
+            "type": "array",
+            "doc": "mode \"VPC\" only: 1-16 subnet ids (subnet-...), in Availability Zones AgentCore supports. Two private subnets in different AZs are recommended."
+          },
+          "securityGroupIds": {
+            "type": "array",
+            "doc": "mode \"VPC\" only: 1-16 security group ids (sg-...). Their outbound rules must allow what the agent calls."
+          }
+        },
+        "doc": "Runtime \"dedicated\" only: this agent's own AgentCore Runtime network. {\"mode\": \"VPC\", \"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]} (1-16 each) or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC. Not inherited from orchestrator.network.",
+        "reads": "cdk/lib/runtime-network.ts (orchestrator-stack.ts Subagent-<id>), terraform/subagent_runtimes.tf; bff/network_check.py. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html"
       },
       "agentcore": {
         "group": "features",
@@ -754,6 +816,16 @@
           "smithy"
         ],
         "why": "One of two has to say where the Smithy model is: schemaS3Uri = a JSON model you already host in S3; schema = the model itself (Smithy JSON AST), inline. None leaves the target with no operations; both is ambiguous."
+      },
+      {
+        "keys": [
+          "endpoint",
+          "hosted"
+        ],
+        "appliesTo": [
+          "mcp"
+        ],
+        "why": "endpoint = an MCP server you already run, by its URL. hosted = one AgentExpress runs on its own AgentCore Runtime, whose URL it derives."
       }
     ],
     "$removed": {
@@ -1131,11 +1203,27 @@
         "appliesTo": [
           "mcp"
         ],
-        "requiredFor": [
+        "doc": "The remote MCP server's Streamable HTTP URL. Set this or `hosted`.",
+        "reads": "tools.tf, tool-plane.ts"
+      },
+      "hosted": {
+        "group": "target",
+        "type": "object",
+        "appliesTo": [
           "mcp"
         ],
-        "doc": "The remote MCP server's Streamable HTTP URL.",
-        "reads": "tools.tf, tool-plane.ts"
+        "properties": {
+          "code": {
+            "type": "object",
+            "doc": "Where the server's code comes from: {\"git\": {...}}, {\"s3\": {...}} or {\"image\": \"<private ECR image URI>\"}. Omitted: the files written in the build (server.py, requirements.txt, optional Dockerfile)."
+          },
+          "network": {
+            "type": "object",
+            "doc": "The server Runtime's network: {\"mode\": \"VPC\", \"subnetIds\": [...], \"securityGroupIds\": [...]} or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC."
+          }
+        },
+        "doc": "An MCP server AgentExpress runs on its own AgentCore Runtime (protocol MCP, an ARM64 container serving streamable HTTP on 0.0.0.0:8000/mcp) and registers on the build's Gateway, reached with SigV4 as the Gateway role. Set this instead of `endpoint`; `auth` is sigv4.",
+        "reads": "cdk/lib/hosted-mcp.ts, terraform/tools_hosted_mcp.tf, deployer/runner.py prepare_hosted_mcp. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp.html"
       },
       "schemaS3Uri": {
         "group": "target",
@@ -1203,6 +1291,10 @@
           "environment": {
             "type": "object",
             "doc": "Plain (non-secret) environment variables."
+          },
+          "codeSource": {
+            "type": "object",
+            "doc": "Where the function's files come from when they are not written or uploaded in the build: {\"git\": {\"url\": \"https://...\", \"ref\": \"<branch|tag|commit>\", \"path\": \"dir\", \"token\": \"<gitTokens build secret name>\"}} or {\"s3\": {\"uri\": \"s3://bucket/prefix/\" or \"s3://bucket/key.zip\", \"path\": \"dir\"}}. The deployer fetches it at deploy time into app/tools/_code/<key>/ (handler.py at its root). Absent: the build's own files (written or uploaded)."
           }
         }
       },
@@ -1804,7 +1896,7 @@
         "properties": {
           "request": {
             "type": "object",
-            "doc": "The Lambda the Gateway calls BEFORE every MCP request reaches a tool (initialize, tools/list, tools/call): it may rewrite the request or refuse it. Exactly one of `code` (written in the build, in app/tools/_code/interceptor-request/, with the same grants menu as a code tool) or `lambdaArn` (yours). `passRequestHeaders` (default false) hands it the request headers, including the caller's token and x-ax-session / x-ax-agent / x-ax-user. `templates` records what the Builder generated the code from: audit, blockTools, argumentGuard, injectContext, custom."
+            "doc": "The Lambda the Gateway calls BEFORE every MCP request reaches a tool (initialize, tools/list, tools/call): it may rewrite the request or refuse it. Exactly one of `code` (written in the build, in app/tools/_code/interceptor-request/, with the same grants menu as a code tool, and the same `codeSource` for files from git or S3) or `lambdaArn` (yours). `passRequestHeaders` (default false) hands it the request headers, including the caller's token and x-ax-session / x-ax-agent / x-ax-user. `templates` records what the Builder generated the code from: audit, blockTools, argumentGuard, injectContext, custom."
           },
           "response": {
             "type": "object",
@@ -1849,6 +1941,25 @@
         },
         "doc": "Send every run to Langfuse, Datadog, Grafana Cloud, Honeycomb or any OTLP backend, once it ends: one trace per run (agents, model calls with tokens and cost, tool calls, guardrail, Cedar, memory and person events, evaluation scores) and, where accepted, metrics. Prompts and answers only with send.content. Not set: nothing is sent and nothing is created. The deploy settings otlp_endpoint / -c otlpEndpoint still work; when both are set, this wins.",
         "reads": "app/features/observability/runexport.py; export.tf / cdk/lib/export.ts (the headers secret, its grant, OTLP_EXPORT_* on the orchestrator runtime); bff/export_check.py"
+      },
+      "network": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "doc": "\"PUBLIC\" or \"VPC\" (the Runtime's networkMode). Required."
+          },
+          "subnetIds": {
+            "type": "array",
+            "doc": "mode \"VPC\" only: 1-16 subnet ids (subnet-...), in Availability Zones AgentCore supports. Two private subnets in different AZs are recommended."
+          },
+          "securityGroupIds": {
+            "type": "array",
+            "doc": "mode \"VPC\" only: 1-16 security group ids (sg-...). Their outbound rules must allow what the agents call."
+          }
+        },
+        "doc": "The shared orchestrator AgentCore Runtime's network, for every main and task agent: {\"mode\": \"VPC\", \"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]} (1-16 each) or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC. Dedicated agents set their own.",
+        "reads": "cdk/lib/runtime-network.ts (orchestrator-stack.ts Orchestrator), terraform/main.tf; bff/network_check.py. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html"
       }
     }
   },

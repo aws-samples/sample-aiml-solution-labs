@@ -22,6 +22,8 @@ import {
   taskLabel, unplace, updateEntry, type Entry, type Json, type Project, type TaskKind,
 } from "./model";
 import { issuesFor, upstreamIds, type Issue } from "./validate";
+import type { CodeSource } from "./codeSource";
+import { CodeSourceField } from "./CodeSourceField";
 
 const opt = (v: string, label = v) => ({ value: v, label });
 
@@ -48,9 +50,9 @@ function ArgumentsField({ value, onChange, errorText }: {
   );
 }
 
-export function TaskPanel({ project, id, issues, onChange, onSelect }: {
+export function TaskPanel({ project, id, issues, onChange, onSelect, server }: {
   project: Project; id: string; issues: Issue[];
-  onChange: (p: Project) => void; onSelect: (s: Selection) => void;
+  onChange: (p: Project) => void; onSelect: (s: Selection) => void; server?: boolean;
 }) {
   const wf = project.workflow;
   const agent = wf.agents[id];
@@ -145,11 +147,19 @@ export function TaskPanel({ project, id, issues, onChange, onSelect }: {
             <Select selectedOption={opt(String(task.language ?? "python"))} options={vocab("taskLanguages").map((l) => opt(l))}
               onChange={({ detail }) => setTask({ language: detail.selectedOption.value })} />
           </FormField>
-          <FormField label="Script" stretch errorText={errorAt("task.code")}
-            description="Runs in the AgentCore Code Interpreter sandbox. Read in/request.txt, in/outputs.json and the run's files in in/; print the output (JSON is read as data); write files to keep to out/.">
-            <Textarea rows={14} value={String(task.code ?? "")} ariaLabel="Script" spellcheck={false}
-              onChange={({ detail }) => setTask({ code: detail.value })} />
-          </FormField>
+          <CodeSourceField mode="script" language={String(task.language ?? "python")} path={`agents.${id}.task.codeSource`}
+            source={task.codeSource as unknown as CodeSource | undefined} buildId={server ? project.id : undefined}
+            // A fetched script replaces the written one: a step has one or the other.
+            onSource={(s) => setTask(s ? { codeSource: s as unknown as Json, code: undefined }
+              : { codeSource: undefined, code: String(task.code ?? "") })}
+            onScript={(c) => setTask({ code: c, codeSource: undefined })} />
+          {task.codeSource === undefined ? (
+            <FormField label="Script" stretch errorText={errorAt("task.code")}
+              description="Runs in the AgentCore Code Interpreter sandbox. Read in/request.txt, in/outputs.json and the run's files in in/; print the output (JSON is read as data); write files to keep to out/.">
+              <Textarea rows={14} value={String(task.code ?? "")} ariaLabel="Script" spellcheck={false}
+                onChange={({ detail }) => setTask({ code: detail.value })} />
+            </FormField>
+          ) : null}
           <Toggle checked={agent.attachments === true}
             onChange={({ detail }) => { const next = { ...agent }; if (detail.checked) next.attachments = true; else delete next.attachments; setAgent(next); }}>
             Give the script the files the run was started with

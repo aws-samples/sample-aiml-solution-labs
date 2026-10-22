@@ -26,8 +26,9 @@ import type { LibraryKind } from "./storage";
 import { toolsOf } from "../lib/tools";
 import type { Selection } from "./Canvas";
 import { CodeTool } from "./CodeTool";
+import { HostedMcp } from "./HostedMcp";
 import { EntryForm } from "./EntryForm";
-import { AGENT_ID_RE, TOOL_KEY_RE, applies, imageModelOf, vocab } from "./meta";
+import { AGENT_ID_RE, TOOL_KEY_RE, applies, imageModelOf, variantOf, vocab } from "./meta";
 import {
   setTools, defaultPrompt, insertStage, joinStage, moveMember, moveStage, removeAgent,
   removeTool, renameAgent, renameTool, setStageKind, stageKind, stageOf, stepAgents, stepName,
@@ -48,6 +49,8 @@ import { findComponent } from "./componentOps";
 import { CorePanel } from "./Rail";
 import { TaskPanel } from "./TaskPanel";
 import { HarnessSettings } from "./HarnessSettings";
+import { PromptCacheSettings } from "./PromptCache";
+import { AgentNetworkSettings } from "./NetworkSettings";
 
 const FRAMEWORK_OPTIONS = [
   { value: "plain", label: "No framework — one ctx.llm call", description: "The simplest agent; add logic to run() as you need it." },
@@ -83,6 +86,10 @@ function clearCore(p: Project, id: string, group: string): Project {
   if (Object.keys(core).length) a.agentcore = core as unknown as Json; else delete a.agentcore;
   return { ...p, workflow: { ...p.workflow, agents: { ...p.workflow.agents, [id]: a } } };
 }
+
+/** Why a harness agent has no prompt caching setting (see app/common/harness_agent.py). */
+const HARNESS_CACHE_REASON =
+  "A harness agent's model calls are made by AgentCore Harness, which documents no prompt caching setting. Observability records any cache tokens it reports.";
 
 /** One AgentCore feature's on/off switch in the agent panel. */
 function FeatureToggle({ label, checked, onChange, description }: {
@@ -258,6 +265,10 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
         collapseGroups={["features"]}
         overrides={{
           agentcore: { hidden: true },
+          // Edited in the Prompt caching section below.
+          promptCache: { hidden: true },
+          // Edited in the Network section below.
+          network: { hidden: true },
           // Where a remote agent came from in an Agent Registry: shown on its own, not edited.
           registry: { hidden: true },
           // Edited in the Instructions section above.
@@ -281,6 +292,10 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
                         ...kept, runtime: v,
                         ...(!agent.instructions && prompt?.systemPrompt?.trim() ? { instructions: prompt.systemPrompt } : {}),
                       }));
+                    } else if (v !== "dedicated" && agent.network !== undefined) {
+                      // Only a dedicated agent has its own Runtime to place, so its network goes.
+                      const rest = Object.fromEntries(Object.entries(agent).filter(([k]) => k !== "network"));
+                      onChange(updateEntry(project, "agents", id, { ...rest, runtime: v } as Entry));
                     } else set(v);
                   }} />
               );
@@ -400,6 +415,14 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
         <SecretField buildId={project.id} kind="a2aTokens" name={id} label="Bearer token"
           description="Sent to the remote agent on every call. Stored encrypted with this build; never shown again." />
       ) : null}
+      {!remote ? (
+        <PromptCacheSettings agent={agent as Record<string, unknown>} orchestrator={wf.orchestrator}
+          disabledReason={harness ? HARNESS_CACHE_REASON : undefined}
+          onAgent={(e) => onChange(updateEntry(project, "agents", id, e as Entry))} />
+      ) : null}
+      <AgentNetworkSettings agent={agent as Record<string, unknown>} runtime={variantOf("agent", agent as Record<string, unknown>)}
+        issues={issues} path={`agents.${id}.network`}
+        onAgent={(e) => onChange(updateEntry(project, "agents", id, e as Entry))} />
       {!remote ? (
         <ExpandableSection headerText="AgentCore features" variant="container" defaultExpanded
           headerDescription="Turn a feature on, then pick what it uses. Define guardrails, memories, evaluators and identities in their tabs (or the library).">
@@ -669,6 +692,9 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
         overrides={{ code: { hidden: true }, allow: { hidden: true }, auth: { hidden: true }, service: { hidden: true }, oauth: { hidden: true },
           registry: { hidden: true },
           identity: { hidden: true },
+          // Hosted or by URL: its own panel below (HostedMcp).
+          hosted: { hidden: true },
+          ...(tool.hosted !== undefined ? { endpoint: { hidden: true } } : {}),
           // A Knowledge Base's document processing, as choices rather than JSON.
           chunking: { render: (value, set) => <ChunkingField value={value} onChange={set} /> },
           parsing: { render: (value, set) => <ParsingField value={value} onChange={set} /> },
@@ -697,6 +723,11 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
           ...builtinOverrides(tool) }}
         onChange={(e) => onChange(updateEntry(project, "tools", id, e))} />
       {String(tool.type) === "lambda" && !builtinLabel(tool) ? <CodeTool project={project} id={id} onChange={onChange} server={server} /> : null}
+      {String(tool.type) === "mcp" ? (
+        <Container header={<Header variant="h3">MCP server</Header>}>
+          <HostedMcp project={project} id={id} onChange={onChange} issues={mine} server={server} />
+        </Container>
+      ) : null}
       {String(tool.type) === "openapi" ? (
         <OpenApiUpload onSchema={(schema) => {
           const { schemaS3Uri: _u, source: _s, ...rest } = tool as Record<string, unknown>;
@@ -759,10 +790,10 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
   } else if (selection?.kind === "component" && wf.agents[selection.agent]) {
     // The row is gone (removed, or renamed by an edit): show its agent.
     body = wf.agents[selection.agent].runtime === "task"
-      ? <TaskPanel project={project} id={selection.agent} issues={issues} onChange={onChange} onSelect={onSelect} />
+      ? <TaskPanel project={project} id={selection.agent} issues={issues} onChange={onChange} onSelect={onSelect} server={server} />
       : <AgentPanel project={project} id={selection.agent} issues={issues} onChange={onChange} onSelect={onSelect} server={server} rows={rows} />;
   } else if (selection?.kind === "agent" && wf.agents[selection.id]?.runtime === "task") {
-    body = <TaskPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} />;
+    body = <TaskPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} />;
   } else if (selection?.kind === "agent" && wf.agents[selection.id]) {
     body = <AgentPanel project={project} id={selection.id} issues={issues} onChange={onChange} onSelect={onSelect} server={server} rows={rows} />;
   } else if (selection?.kind === "stage" && wf.steps[selection.index]) {

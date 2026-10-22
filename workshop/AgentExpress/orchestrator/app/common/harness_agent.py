@@ -241,7 +241,7 @@ def read_stream(stream, cancelled=None) -> dict:
     """
     messages: list[list[str]] = []
     role, stop = "", ""
-    usage = {"inputTokens": 0, "outputTokens": 0}
+    usage = {"inputTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0}
     latency, tools = 0, []
     checked = time.monotonic()
     try:
@@ -267,6 +267,10 @@ def read_stream(stream, cancelled=None) -> dict:
                 got = event["metadata"].get("usage") or {}
                 usage["inputTokens"] += int(got.get("inputTokens") or 0)
                 usage["outputTokens"] += int(got.get("outputTokens") or 0)
+                # HarnessTokenUsage also carries the prompt-cache counts (optional):
+                # https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_HarnessTokenUsage.html
+                usage["cacheReadInputTokens"] += int(got.get("cacheReadInputTokens") or 0)
+                usage["cacheWriteInputTokens"] += int(got.get("cacheWriteInputTokens") or 0)
                 latency += int((event["metadata"].get("metrics") or {}).get("latencyMs") or 0)
             if cancelled and time.monotonic() - checked > _CANCEL_CHECK_SECONDS:
                 checked = time.monotonic()
@@ -395,6 +399,14 @@ class HarnessAgent(Agent):
             system_text=self.instructions, latency_ms=got["latencyMs"] or int((time.monotonic() - started) * 1000),
             mode="harness", user_input=message, output_text=got["text"], temperature=self.temperature,
             max_tokens=self.max_tokens, finish_reason=got["stop"],
+            # The harness's cache tokens are recorded, not priced: HarnessTokenUsage
+            # (https://docs.aws.amazon.com/bedrock-agentcore/latest/APIReference/API_HarnessTokenUsage.html)
+            # does not say whether inputTokens includes them, so pricing them separately could
+            # count them twice. The row says cache cost unknown. The harness API has no
+            # prompt caching setting (CreateHarness), so promptCache does not apply here.
+            cache={"read": int(got["usage"].get("cacheReadInputTokens") or 0),
+                   "write": int(got["usage"].get("cacheWriteInputTokens") or 0),
+                   "write5m": 0, "write1h": 0}, cache_priced=False,
             **({} if priced else {"cost_usd": 0, "rates_source": "none"}))
         for tool in got["tools"]:
             await ctx.log(f"{self.name}: used {tool}")

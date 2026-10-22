@@ -46,6 +46,7 @@ Endpoints:
   GET    /api/sessions/{id}/telemetry            -> per-run cost/token drilldown
   GET    /api/sessions/{id}/flow                 -> the run's events, without any prompt text
   GET    /api/telemetry/aggregate                -> by date / model / user rollup
+                                                     (+ per-agent prompt-cache insights)
   GET    /api/analytics                          -> per tool / agent rates, latency, health (admin)
   POST   /api/chat                   {message, history} -> {reply, actions}
   GET    /api/export                             -> where runs are sent (orchestrator.export; bff/traceexport.py)
@@ -94,6 +95,7 @@ import audit
 import authz
 import boto3
 import builds
+import cache_insights
 import chatbot
 import clock
 import codecheck
@@ -704,12 +706,14 @@ def _telemetry_session(sid: str, tbl=None) -> dict:
     items = _query_all(telemetry_tbl, KeyConditionExpression=Key("session_id").eq(sid))
     agents: dict = {}
     tot = {"costUsd": decimal.Decimal(0), "inputTokens": 0, "outputTokens": 0,
-           "calls": 0, "latencyMs": 0}
+           "calls": 0, "latencyMs": 0, **_cache_zero()}
     for it in items:
         aid = it.get("agent_id", "?")
         a = agents.setdefault(aid, {"agentId": aid, "costUsd": decimal.Decimal(0),
                                     "inputTokens": 0, "outputTokens": 0, "latencyMs": 0,
-                                    "calls": 0, "tools": 0, "models": set()})
+                                    "calls": 0, "tools": 0, "models": set(), **_cache_zero()})
+        _cache_add(a, it)
+        _cache_add(tot, it)
         c = it.get("cost_usd", 0) or 0
         a["costUsd"] += c
         a["inputTokens"] += int(it.get("input_tokens", 0) or 0)
@@ -730,6 +734,26 @@ def _telemetry_session(sid: str, tbl=None) -> dict:
         a["models"] = sorted(a["models"])
         by_agent.append(a)
     return _resp(200, {"session_id": sid, "calls": items, "byAgent": by_agent, "totals": tot})
+
+
+def _cache_zero() -> dict:
+    """Prompt-cache sums for a rollup (llm rows' cache_* fields, app/common/prompt_cache.py).
+    cacheCostUsd is already inside costUsd; cacheCostKnown is false when any row had a cache
+    token with no published rate (left out of its cost, never guessed)."""
+    return {"cacheReadTokens": 0, "cacheWriteTokens": 0, "cacheCostUsd": decimal.Decimal(0),
+            "cacheSavingUsd": decimal.Decimal(0), "cacheCostKnown": True}
+
+
+def _cache_add(bucket: dict, it: dict) -> None:
+    if it.get("kind") != "llm":
+        return
+    bucket["cacheReadTokens"] += int(it.get("cache_read_tokens", 0) or 0)
+    bucket["cacheWriteTokens"] += int(it.get("cache_write_tokens", 0) or 0)
+    bucket["cacheCostUsd"] += ((it.get("cache_read_cost_usd", 0) or 0)
+                               + (it.get("cache_write_cost_usd", 0) or 0))
+    bucket["cacheSavingUsd"] += it.get("cache_saving_usd", 0) or 0
+    if it.get("cache_cost_known") is False:
+        bucket["cacheCostKnown"] = False
 
 
 # The fields the Flow tab draws, and nothing else. NO prompt, answer or tool text is in
@@ -801,6 +825,7 @@ def _telemetry_aggregate(by: str, frm: str | None, to: str | None, tbl=None,
     buckets: dict = {}
     bucket_sessions: dict = {}   # key -> set(session_id), for distinct run counts
     all_sessions: set = set()
+    caching = cache_insights.Rollup()   # per-agent prompt-cache sums, for the Insights tab
     while d <= d1:
         for it in _query_all(telemetry_tbl, IndexName="by_date",
                              KeyConditionExpression=Key("date").eq(d.isoformat())):
@@ -817,7 +842,9 @@ def _telemetry_aggregate(by: str, frm: str | None, to: str | None, tbl=None,
                                          "calls": 0, "latencyMs": 0, "sessions": 0,
                                          "embedTokensEst": 0,
                                          "inRate": decimal.Decimal(0),
-                                         "outRate": decimal.Decimal(0)})
+                                         "outRate": decimal.Decimal(0), **_cache_zero()})
+            _cache_add(b, it)
+            caching.add(it)
             b["costUsd"] += it.get("cost_usd", 0) or 0
             b["inputTokens"] += int(it.get("input_tokens", 0) or 0)
             b["outputTokens"] += int(it.get("output_tokens", 0) or 0)
@@ -839,7 +866,8 @@ def _telemetry_aggregate(by: str, frm: str | None, to: str | None, tbl=None,
         b["sessions"] = len(bucket_sessions.get(key, ()))
     return _resp(200, {"by": by, "from": frm, "to": to,
                        "totalSessions": len(all_sessions),
-                       "buckets": sorted(buckets.values(), key=lambda x: str(x["key"]))})
+                       "buckets": sorted(buckets.values(), key=lambda x: str(x["key"])),
+                       "cacheInsights": caching.insights()})
 
 
 def _build_field(target: dict) -> dict:
@@ -1107,7 +1135,7 @@ def _builds_route(route_key: str, build_id: str, body: dict, event: dict) -> dic
         message = str(body.get("message") or "")
         started = designer.start(build_id, owner, email, message,
                                  lambda payload: _self_invoke(fn, payload),
-                                 attachments=body.get("attachments"))
+                                 attachments=body.get("attachments"), review=body.get("review"))
         sent = next((t for t in reversed(started.get("turns") or []) if t.get("role") == "user"), {})
         # What was asked, shortened, and what it brought: who changed a build by chat.
         audit("design.message", **builds.label(build_id, owner),

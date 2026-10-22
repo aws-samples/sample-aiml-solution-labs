@@ -48,7 +48,9 @@ One line per feature; the link goes to the detail.
 
 | Feature | What it does | Details |
 |---|---|---|
-| AgentExpress Assistant | A chat that drafts and edits the workflow as you talk; cannot deploy or publish | [GETTING_STARTED](GETTING_STARTED.md#agentexpress-assistant) |
+| AgentExpress Assistant | A chat that drafts and edits the workflow as you talk; reads public pages you link (`build this based on <url>`); cannot deploy or publish | [GETTING_STARTED](GETTING_STARTED.md#agentexpress-assistant) |
+| Review changes | Off, Auto (default) or Always: a second model checks the Assistant's larger changes before they're saved, and only advises | [GETTING_STARTED](GETTING_STARTED.md#agentexpress-assistant) |
+| Code sources | Code for Lambda tools, interceptors, Run code steps and hosted MCP servers: written or uploaded in the build, from Git or S3, or a private ECR image | [DEPLOYMENT](DEPLOYMENT.md#code-from-files-git-or-s3-code-sources) |
 | Canvas | Drag agents onto stages, and tools and AgentCore pieces onto agents; each agent card lists its components; **Show** menu and AgentCore rail | [DEPLOYMENT](DEPLOYMENT.md#the-builder-canvas) |
 | Generic step | **+ New generic step**: a step with no model (tool, code, extract, output); pick the kind in its panel | [DEPLOYMENT](DEPLOYMENT.md#steps-with-no-model-task-steps) |
 | Connectors | **Tools → Add a connector**: 10 OAuth connectors (Salesforce, Slack, Jira, GitHub, Microsoft 365, …) as ready-made OpenAPI tools | [DEPLOYMENT](DEPLOYMENT.md#connectors) |
@@ -68,6 +70,8 @@ One line per feature; the link goes to the detail.
 | AgentCore Harness | `runtime: "harness"`: an agent with no code; Gateway tools, managed Code Interpreter and Browser, a named endpoint, or **your own harness by ARN**; other model providers, skills, memory, MCP servers, container, mounts, VPC | [DEPLOYMENT](DEPLOYMENT.md#agents-run-by-agentcore-harness) |
 | A2A agents | `runtime: "a2a"`: delegate a step to an agent you do not operate | [GETTING_STARTED](GETTING_STARTED.md#3-add-your-own-agent) |
 | Frameworks | Plain, Strands or LangGraph inside `run()`; model calls go through `ctx.llm` | [ARCHITECTURE](ARCHITECTURE.md#frameworks) |
+| Prompt caching | Per agent: cache the system prompt, tool definitions or conversation on Claude, Amazon Nova and OpenAI models, within each model's rules | [WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#promptcache-prompt-caching) |
+| Runtime VPC | Run the orchestrator, a dedicated agent or a hosted MCP server in your VPC; `PUBLIC` by default | [DEPLOYMENT](DEPLOYMENT.md#running-agentcore-runtimes-in-your-vpc) |
 | Model routing and fallbacks | Per-agent rules (`inputTokensOver`, `matches`), up to 3 fallbacks, admin per-run override | [DEPLOYMENT](DEPLOYMENT.md#choosing-which-model-answers-per-run-override-routing-and-fallbacks) |
 | LiteLLM | `litellm/<model>` for non-Bedrock models through your proxy | [DEPLOYMENT](DEPLOYMENT.md#using-non-bedrock-models-through-litellm) |
 | Images | Image agents (`output: "image"`), `vision` on later agents | [GETTING_STARTED](GETTING_STARTED.md#5-images) |
@@ -81,6 +85,7 @@ Every tool is a Gateway target with a Cedar permit generated from `workflow.json
 | `kb` | Bedrock Knowledge Base: S3 Vectors by default; chunking and model parsing; your own vector store; web, Confluence, SharePoint and Salesforce sources; reranking | [DEPLOYMENT](DEPLOYMENT.md#knowledge-base-chunking-and-parsing) |
 | `websearch` | AgentCore Web Search (us-east-1, eu-west-1, ap-northeast-1) | [GETTING_STARTED](GETTING_STARTED.md#websearch-the-live-web) |
 | `mcp` | Any remote MCP server | [GETTING_STARTED](GETTING_STARTED.md#mcp-your-mcp-server) |
+| Hosted MCP server | `hosted`: your MCP server code, written, uploaded or linked, runs on its own AgentCore Runtime behind the Gateway | [DEPLOYMENT](DEPLOYMENT.md#hosted-mcp-servers) |
 | `openapi` | A REST API from an OpenAPI schema | [GETTING_STARTED](GETTING_STARTED.md#openapi-any-rest-api) |
 | `lambda` | Your function, or code written in the build | [GETTING_STARTED](GETTING_STARTED.md#lambda-your-database-or-anything-else) |
 | `apigateway` | An API Gateway REST API stage | [GETTING_STARTED](GETTING_STARTED.md#apigateway-an-api-gateway-rest-api) |
@@ -100,7 +105,7 @@ Every tool is a Gateway target with a Cedar permit generated from `workflow.json
 | Identity and sign-in | Cognito, Auth0, Okta or Entra ID; outbound OAuth2 and API-key credential providers | [DEPLOYMENT](DEPLOYMENT.md#identity-provider) |
 | Interceptors | A Lambda before each tool request and after each answer: audit, block, guard, inject, redact (email, phone, SSN, card), hide, cap | [GETTING_STARTED](GETTING_STARTED.md#7-gateway-interceptors) |
 | Evaluations | Built-in and custom LLM judges, automatic or on demand | [GETTING_STARTED](GETTING_STARTED.md#10-tune-features) |
-| Observability | OTEL spans, tokens, latency and cost per call; Prompts & I/O inspector | [ARCHITECTURE](ARCHITECTURE.md#6-agentcore-features) |
+| Observability | OTEL spans, tokens, latency and cost per call; Prompts & I/O inspector; prompt cache hits, cost and savings per call and run, and per-agent caching insights | [ARCHITECTURE](ARCHITECTURE.md#6-agentcore-features) |
 | Observability export | Send every run to Langfuse, Datadog, Grafana Cloud, Honeycomb or any OTLP backend: pick it, paste the key, **Test connection** (Builder → Settings → Export); run links, re-send and pause in the app | [DEPLOYMENT](DEPLOYMENT.md#send-runs-to-langfuse-datadog-and-others) |
 | Skills | SKILL.md know-how an agent opens when needed; never code | [GETTING_STARTED](GETTING_STARTED.md#build-manually) |
 

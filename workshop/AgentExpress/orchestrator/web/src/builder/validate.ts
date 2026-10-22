@@ -30,9 +30,13 @@ import { checkKbVectorStore } from "./kbVectorStore";
 import { checkKbDataSource } from "./kbDataSource";
 import { checkBrowserTool } from "./browserTool";
 import { checkTasks } from "./taskCheck";
+import { codeSourceProblems } from "./codeSource";
 import { checkHarness } from "./harnessCheck";
 import { checkModelRouting } from "./modelRoutingCheck";
+import { checkPromptCache } from "./promptCacheCheck";
 import { checkExport } from "./exportCheck";
+import { checkNetwork } from "./networkCheck";
+import { checkHostedMcp } from "./hostedMcpCheck";
 import { stepAgents, stepName, type Entry, type StepSpec, type Workflow } from "./model";
 
 export type Where =
@@ -144,6 +148,10 @@ function checkCode(key: string, code: unknown, path: string, where: Where, add: 
     } else if (typeof value !== "string" || value.length > 1000) {
       add("error", where, `${p}.environment.${name}`, "must be a string of at most 1000 characters");
     }
+  }
+  // Where the files come from when they are not written or uploaded here (codeSource.ts).
+  if ("codeSource" in code) {
+    for (const c of codeSourceProblems(code.codeSource, `${p}.codeSource`)) add("error", where, c.path, c.message);
   }
 }
 
@@ -998,8 +1006,10 @@ function checkEntry(name: BlockName, entry: unknown, path: string, where: Where,
   const checkValue = (key: string, value: unknown, p: string) => {
     const k = spec.keys[key];
     if (!applies(name, key, variant)) {
+      // keys.json `notApplicable`: what to set instead, for this variant.
+      const hint = k?.notApplicable?.[variant];
       err(p, `\`${key.split(".").pop()}\` does not apply to ${variantLabel || "this entry"} — `
-        + "a key that looks like a setting and controls nothing is rejected, not ignored");
+        + (hint || "a key that looks like a setting and controls nothing is rejected, not ignored"));
       return;
     }
     if (!typeOk(value, k.type)) {
@@ -1312,7 +1322,9 @@ export function validate(wf: Workflow): Issue[] {
   checkTasks(agents as Record<string, unknown>, tools as Record<string, unknown>, steps as StepSpec[], wf.orchestrator, add, vocab, upstreamIds);
   checkHarness(agents as Record<string, unknown>, add, wf as unknown as Record<string, unknown>);
   checkModelRouting(wf.orchestrator, agents as Record<string, unknown>, wf.authorization, add);
+  checkPromptCache(wf.orchestrator, agents as Record<string, unknown>, add);
   checkExport(wf.orchestrator, add);
+  checkNetwork(wf.orchestrator, agents as Record<string, unknown>, add, tools as Record<string, unknown>);
   checkSignIn(wf.authorization, add);
   checkNamed(wf, add, out);
 
@@ -1345,6 +1357,8 @@ export function validate(wf: Workflow): Issue[] {
     if (type === "mcp" && typeof tool.endpoint === "string" && !/^https:\/\/\S+\.\S+/.test(tool.endpoint)) {
       add("error", where, `${path}.endpoint`, "must be the server's https:// URL");
     }
+    // A hosted MCP server (tools.<key>.hosted): hostedMcpCheck.ts.
+    if (type === "mcp") checkHostedMcp(key, tool, path, where, add);
     if (type === "kb") {
       const kbId = tool.knowledgeBaseId, s3Uri = tool.s3Uri, kms = tool.kmsKeyArn;
       if (typeof kbId === "string" && !KB_ID_RE.test(kbId)) {

@@ -314,6 +314,12 @@ INVENTORY = {
         "netguard.urlopen: the observability tool a build sends its runs to (workflow.json "
         "orchestrator.export: a preset host, or the https endpoint given for otlp, grafana and "
         "self-hosted Langfuse); carries the tool's API key from Secrets Manager.",
+    ("bff/webfetch.py", "_opener"):
+        "the guard widened to http:// for the AgentExpress Assistant's fetch_url (a page a chat "
+        "message links): netguard._connector on every http and https connection (checked "
+        "addresses only), every redirect re-checked (at most 5), no proxy or cookie handler, "
+        "no credential sent, a wall-clock watchdog shutting its sockets at TIMEOUT_S. "
+        "tests/test_webfetch.py.",
     ("bff/litellm_models.py", "_fetch"):
         "netguard.urlopen: the LiteLLM proxy's /v1/models (deployment config LITELLM_BASE_URL); "
         "carries the virtual key.",

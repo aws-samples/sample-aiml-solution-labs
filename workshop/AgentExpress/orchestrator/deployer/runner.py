@@ -319,6 +319,79 @@ def check_requirements(text: str, key: str) -> None:
                              f"lines are installed (no options, URLs, paths or other indexes)")
 
 
+#: The image a hosted MCP server is built into when its code brings no Dockerfile: the
+#: AgentCore MCP contract is a container on ARM64 serving streamable HTTP on 0.0.0.0:8000 at
+#: /mcp (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp-protocol-contract.html).
+#: The bind is inside the container, which publishes no port: the Runtime is reached only
+#: through AgentCore with SigV4 (the build's Gateway role). Same base image as ../Dockerfile.
+HOSTED_MCP_DOCKERFILE = """\
+# Written by the deployer for a hosted MCP server whose code has no Dockerfile.
+FROM --platform=linux/arm64 public.ecr.aws/docker/library/python:3.13-slim-bookworm@sha256:5024f48ba9441d4b13a95d3945abc6365538e3a31109833367a1923523c6efed
+WORKDIR /app
+COPY . /app
+RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi \\
+    && useradd --create-home --uid 1000 mcp
+USER mcp
+EXPOSE 8000
+CMD ["python", "server.py"]
+"""
+
+
+def hosted_mcp_tools(workflow: dict) -> dict:
+    """tools.<key>.hosted for each hosted MCP server (type "mcp" with `hosted`)."""
+    return {k: t["hosted"] for k, t in (workflow.get("tools") or {}).items()
+            if isinstance(t, dict) and str(t.get("type") or "").lower() == "mcp"
+            and isinstance(t.get("hosted"), dict)}
+
+
+def prepare_hosted_mcp(workflow: dict, bid: str, env: dict, target: Target | None = None,
+                       action: str = "deploy", tokens: dict | None = None, s3_for=None) -> list[str]:
+    """Fill app/tools/_code/<key>/ for each hosted MCP server CDK and Terraform build an image
+    from, after `scaffold.py apply`: git or S3 code is fetched there (deployer/code_fetch.py);
+    code written in the build is already there. A server with no Dockerfile gets
+    HOSTED_MCP_DOCKERFILE, which runs its server.py. An image the build brings (code.image)
+    needs nothing. A destroy fetches nothing: a stand-in folder is enough for both tools."""
+    done = []
+    servers = hosted_mcp_tools(workflow)
+    # The build's git tokens are read once, before any server, when a hosted git source
+    # names one (as materialise_code_sources does), so every server sees the same tokens
+    # whatever the key order.
+    if tokens is None:
+        tokens = read_git_tokens(env, bid) if action == "deploy" and any(
+            isinstance(h.get("code"), dict) and isinstance(h["code"].get("git"), dict)
+            and h["code"]["git"].get("token") for h in servers.values()) else {}
+    for key, hosted in servers.items():
+        src = hosted.get("code")
+        kind = next((k for k in ("git", "s3", "image") if isinstance(src, dict) and k in src), "")
+        if kind == "image":
+            continue
+        folder = ROOT / "app" / "tools" / "_code" / key
+        if action != "deploy":
+            folder.mkdir(parents=True, exist_ok=True)
+        elif kind:
+            import code_fetch  # deployer/code_fetch.py
+            try:
+                # S3 is read through code_source_s3: a connected account's deploy role scoped
+                # to this path, or, in this console's own account, only a bucket listed in
+                # CODE_SOURCE_BUCKETS and never one of the console's (console_bucket_refusal).
+                s3 = (s3_for(src, target) if s3_for else code_source_s3(src, target, env)) if kind == "s3" else None
+                code_fetch.materialise(src, folder, tokens=tokens, s3=s3)
+            except code_fetch.CodeSourceError as e:
+                raise StepFailed(f"tools.{key}.hosted.code: {e}") from e
+        if not (folder / "Dockerfile").is_file():
+            if action == "deploy" and not (folder / "server.py").is_file():
+                raise StepFailed(f"tools.{key}.hosted: its code has neither a Dockerfile nor a "
+                                 f"server.py at the root")
+            if action == "deploy" and (folder / "requirements.txt").is_file():
+                check_requirements((folder / "requirements.txt").read_text(), key)
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "Dockerfile").write_text(HOSTED_MCP_DOCKERFILE)
+        print(f"runner: tools.{key}: hosted MCP server "
+              + ("stand-in for destroy" if action != "deploy" else f"code ready ({kind or 'written in the build'})"))
+        done.append(key)
+    return done
+
+
 def install_code_requirements(workflow: dict) -> list[str]:
     """pip install each code function's requirements.txt into its folder, which CDK and
     Terraform then zip as they are (app/tools/_code/<key>/; interceptors included)."""
@@ -335,6 +408,135 @@ def install_code_requirements(workflow: dict) -> list[str]:
         done.append(key)
     if done:
         print(f"runner: installed the requirements of {', '.join(done)}")
+    return done
+
+
+def read_git_tokens(env: dict, bid: str) -> dict:
+    """The build's gitTokens (bff/builds.py set_secrets), for code sources only: never put
+    in the environment of CDK or Terraform."""
+    import boto3
+    sm = boto3.client("secretsmanager")
+    try:
+        data = json.loads(sm.get_secret_value(
+            SecretId=f"{env.get('SECRETS_PREFIX') or 'agentexpress/builds/'}{bid}")["SecretString"])
+    except sm.exceptions.ResourceNotFoundException:
+        return {}
+    return dict(data.get("gitTokens") or {})
+
+
+def console_bucket_refusal(bucket: str, env: dict, s3, account: str) -> str | None:
+    """Why an S3 code source may not be read from `bucket` in this console's own account,
+    else None. Without a connected account the read uses this container's role, which
+    reads the whole account, so a build may not name a bucket that holds other builds' data:
+      * BUILDS_BUCKET (every build's versions, documents and Terraform state) and the
+        bucket of this job's SOURCE_URI;
+      * the CDK bootstrap staging bucket, `cdk-<qualifier>-assets-<account-ID>-<Region>`
+        (https://docs.aws.amazon.com/cdk/v2/guide/bootstrapping-env.html), which holds
+        every build's packaged code;
+      * any bucket of this account tagged `agentexpress:*` (cdk/bin/orchestrator.ts and
+        terraform/versions.tf tag every resource of the console and of each build).
+    GetBucketTagging with ExpectedBucketOwner fails with 403 when the bucket belongs to
+    another account, and NoSuchTagSet means no tags
+    (https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetBucketTagging.html)."""
+    import re
+    source_bucket = str(env.get("SOURCE_URI") or "")
+    source_bucket = source_bucket[len("s3://"):].split("/", 1)[0] if source_bucket.startswith("s3://") else ""
+    if bucket in {str(env.get("BUILDS_BUCKET") or ""), source_bucket} - {""}:
+        return "it is a bucket of this console"
+    if re.fullmatch(rf"cdk-[a-z0-9]+-assets-{re.escape(account)}-[a-z0-9-]+", bucket):
+        return "it is the CDK staging bucket of this console's account"
+    try:
+        tags = s3.get_bucket_tagging(Bucket=bucket, ExpectedBucketOwner=account).get("TagSet") or []
+    except Exception as e:  # noqa: BLE001 - botocore's ClientError, read by code
+        code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+        status = getattr(e, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+        if code == "NoSuchTagSet":
+            return None
+        if code in ("AccessDenied", "403") or status == 403:
+            return None  # not this account's bucket (ExpectedBucketOwner)
+        if code == "NoSuchBucket":
+            return None  # the read then fails with its own message
+        return f"its tags cannot be checked ({code or type(e).__name__})"
+    if any(str(t.get("Key", "")).startswith("agentexpress:") for t in tags):
+        return "it is a bucket of this console or of a build deployed by it"
+    return None
+
+
+def code_source_s3(source: dict, target: Target | None, env: dict | None = None, script: bool = False):
+    """An S3 client that may read only this code source's path: in a connected account its
+    deploy role assumed again with a session policy (code_fetch.scoped_s3_policy); in this
+    console's own account, this container's role, after console_bucket_refusal."""
+    import boto3
+    import code_fetch
+    s3 = source["s3"]
+    if not target:
+        client = boto3.client("s3")
+        account = str(boto3.client("sts").get_caller_identity()["Account"])
+        bucket = s3["uri"][len("s3://"):].split("/", 1)[0]
+        import code_source
+        # Only the buckets the operator listed (CODE_SOURCE_BUCKETS; bff/builds.py deploy
+        # says the same before a job starts), and never one of this console's own.
+        allowed = code_source.allowed_buckets(env or {})
+        reason = (f"it is not in this console's codeSourceBuckets "
+                  f"({', '.join(sorted(allowed)) if allowed else 'empty'})" if bucket not in allowed
+                  else console_bucket_refusal(bucket, env or {}, client, account))
+        if reason:
+            raise code_fetch.CodeSourceError(
+                f"bucket {bucket} cannot be read without a connected account: {reason}")
+        return client
+    c = boto3.client("sts").assume_role(
+        RoleArn=target.role_arn, ExternalId=target.external_id, DurationSeconds=900,
+        RoleSessionName=f"agentexpress-{target.bid}-code",
+        Policy=json.dumps(code_fetch.scoped_s3_policy(s3["uri"], s3.get("path") or "", script=script)))["Credentials"]
+    return boto3.client("s3", region_name=target.region, aws_access_key_id=c["AccessKeyId"],
+                        aws_secret_access_key=c["SecretAccessKey"], aws_session_token=c["SessionToken"])
+
+
+def materialise_code_sources(workflow: dict, bid: str, env: dict, target: Target | None = None,
+                             action: str = "deploy", tokens: dict | None = None, s3_for=None) -> list[str]:
+    """Fetch every git or S3 code source (bff/code_source.py located) after `scaffold.py
+    apply`: a Lambda tool's or interceptor's into app/tools/_code/<key>/, which CDK and
+    Terraform then package as written code; a Run code step's script into app/workflow.json
+    as its task.code (codeSource removed there). A destroy fetches nothing: it gets stand-ins,
+    because both tools only need the folders and keys to exist to remove what they made."""
+    import code_fetch
+    import code_source
+    found = [(w, k, s) for w, k, s in code_source.located(workflow) if code_source.kind(s) in ("git", "s3")]
+    if not found:
+        return []
+    if tokens is None:
+        tokens = read_git_tokens(env, bid) if code_source.secret_names(workflow) and action == "deploy" else {}
+    s3_for = s3_for or (lambda src, script=False: code_source_s3(src, target, env, script))
+    wf_path = ROOT / "app" / "workflow.json"
+    deployed = json.loads(wf_path.read_text())
+    done = []
+    for where, key, src in found:
+        label = f"agents.{key}.task" if where == "task" else (
+            f"orchestrator.interceptors.{key.split('-', 1)[1]}" if where == "interceptor" else f"tools.{key}")
+        try:
+            s3 = (s3_for(src, script=where == "task")
+                  if code_source.kind(src) == "s3" and action == "deploy" else None)
+            if where == "task":
+                task = deployed["agents"][key]["task"]
+                task.pop("codeSource", None)
+                task["code"] = ("# Stand-in for a destroy: the script is not fetched.\n" if action != "deploy"
+                                else code_fetch.read_script(src, tokens=tokens, s3=s3))
+            elif action != "deploy":
+                folder = ROOT / "app" / "tools" / "_code" / key
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "handler.py").write_text(
+                    "# Stand-in for a destroy: the code is not fetched.\n"
+                    "def lambda_handler(event, context):\n    return {}\n")
+            else:
+                code_fetch.materialise(src, ROOT / "app" / "tools" / "_code" / key, tokens=tokens, s3=s3)
+                if not (ROOT / "app" / "tools" / "_code" / key / "handler.py").is_file():
+                    raise code_fetch.CodeSourceError("has no handler.py at the root of its path")
+        except code_fetch.CodeSourceError as e:
+            raise StepFailed(f"{label}.codeSource ({code_source.describe(src)}): {e}") from e
+        print(f"runner: {label}: {'stand-in for destroy' if action != 'deploy' else 'fetched'} "
+              f"{code_source.describe(src)}")
+        done.append(key)
+    wf_path.write_text(json.dumps(deployed, indent=2, ensure_ascii=False) + "\n")
     return done
 
 
@@ -556,7 +758,8 @@ def clear_failed_create(session, stack: str, region: str, attempts: int = 4,
 LATE_LOG_BUCKET = "UiLogsBucket"
 #: Destroys run again after the first fails, shared by both retryable failures: a logs
 #: bucket refilled late (CloudFront can deliver again while a destroy is running, so each
-#: attempt empties the bucket afresh) and an AgentCore Runtime whose delete timed out.
+#: attempt empties the bucket afresh), an AgentCore Runtime whose delete timed out, and
+#: one CloudFormation failed with "Access denied" after AgentCore had already deleted it.
 DESTROY_RETRIES = 3
 #: The type of every AgentCore Runtime a CDK build's stack holds: the orchestrator and each
 #: dedicated agent (lib/orchestrator-stack.ts).
@@ -603,8 +806,54 @@ def timed_out_runtimes(stack: str, resources: list[dict]) -> list[str]:
     return out
 
 
+def deleted_runtimes(session, stack: str, region: str, resources: list[dict]) -> list[str]:
+    """After a failed `cdk destroy`: the stack's AgentCore Runtimes that CloudFormation
+    reports DELETE_FAILED with "Access denied for operation" while AgentCore says they no
+    longer exist, by logical id, each printed.
+
+    Seen live (runtime-vpc cdk test): after a NotStabilized retry, the handler failed a
+    Runtime it had already deleted with "Access denied for operation
+    'AWS::BedrockAgentCore::Runtime'" (HandlerErrorCode AccessDenied) while GetAgentRuntime
+    returned ResourceNotFound for it; the next destroy succeeded. A Runtime counts only when
+    GetAgentRuntime raises ResourceNotFoundException (404, "a resource referenced by the
+    operation does not exist":
+    https://docs.aws.amazon.com/bedrock-agentcore-control/latest/APIReference/API_GetAgentRuntime.html).
+    Any other answer (it exists, or the read is denied or fails) leaves it to be reported."""
+    out = []
+    control = None
+    for r in resources:
+        reason = str(r.get("ResourceStatusReason") or "")
+        if r.get("ResourceStatus") != "DELETE_FAILED" or r.get("ResourceType") != RUNTIME_TYPE \
+                or "access denied" not in reason.lower():
+            continue
+        logical = str(r.get("LogicalResourceId") or "")
+        physical = str(r.get("PhysicalResourceId") or "")
+        # The id is the ARN's last segment (agentRuntimeArn pattern ...:runtime/<id>, same page).
+        runtime_id = physical.rsplit("runtime/", 1)[-1]
+        if not runtime_id:
+            continue
+        try:
+            control = control or session.client("bedrock-agentcore-control", region_name=region)
+            control.get_agent_runtime(agentRuntimeId=runtime_id)
+            gone = False
+        except Exception as e:  # noqa: BLE001 - only ResourceNotFound means gone
+            code = str(getattr(e, "response", {}).get("Error", {}).get("Code", ""))
+            gone = code == "ResourceNotFoundException"
+            if not gone:
+                print(f"runner: could not confirm {stack}'s AgentCore Runtime {logical} is gone: "
+                      f"{type(e).__name__}: {e}", flush=True)
+        if gone:
+            print(f"runner: {stack}'s AgentCore Runtime {logical} ({physical}) failed to delete "
+                  f"({reason}) but AgentCore no longer has it (GetAgentRuntime: "
+                  f"ResourceNotFoundException); destroying again", flush=True)
+            out.append(logical)
+    return out
+
+
 #: A Terraform build's AgentCore Runtimes (main.tf, subagent_runtimes.tf), named in an error.
 TF_RUNTIME = re.compile(r"with (awscc_bedrockagentcore_runtime\.[^\s,]+)")
+#: How a Runtime whose error names no address is listed (its type is in Cloud Control's message).
+TF_UNNAMED_RUNTIME = "an awscc_bedrockagentcore_runtime (no address in the error)"
 
 
 def timed_out_tf_runtimes(output: str) -> list[str]:
@@ -612,13 +861,26 @@ def timed_out_tf_runtimes(output: str) -> list[str]:
     address, from the tail of its output. awscc deletes through Cloud Control, which runs the
     same handler as CloudFormation and gives up the same way (NotStabilized; DEPLOYMENT.md,
     "When a destroy fails"). Each error is read on its own: a Runtime counts only when its
-    own error says it timed out."""
+    own error says it timed out.
+
+    Seen live (hosted MCP tf test): the error can come with no `with <address>,` line, only
+    Cloud Control's "Request timed out while deleting AWS::BedrockAgentCore::Runtime.
+    ErrorCode: NotStabilized" (wrapped over lines). Such an error counts too, as
+    TF_UNNAMED_RUNTIME, when its own text names the Runtime type."""
     out = []
     for block in re.split(r"^[^\w\n]*Error: ", output, flags=re.MULTILINE)[1:]:
         m = TF_RUNTIME.search(block)
         low = block.lower()
-        if m and ("notstabilized" in low or "timed out" in low) and m.group(1) not in out:
-            out.append(m.group(1))
+        if not ("notstabilized" in low or "timed out" in low):
+            continue
+        if m:
+            name = m.group(1)
+        elif not re.search(r"with \S", block) and RUNTIME_TYPE.lower() in " ".join(low.split()):
+            name = TF_UNNAMED_RUNTIME
+        else:
+            continue
+        if name not in out:
+            out.append(name)
     return out
 
 
@@ -706,10 +968,11 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
                     raise
                 emptied = empty_late_log_buckets(session, stack, region, resources)
                 runtimes = timed_out_runtimes(stack, resources)
-                if not emptied and not runtimes:
+                gone = deleted_runtimes(session, stack, region, resources)
+                if not emptied and not runtimes and not gone:
                     failed = sum(r.get("ResourceStatus") == "DELETE_FAILED" for r in resources)
                     print(f"runner: no {LATE_LOG_BUCKET} bucket to empty and no timed-out "
-                          f"AgentCore Runtime in {stack}: {len(resources)} resource(s) read, "
+                          f"or already-deleted AgentCore Runtime in {stack}: {len(resources)} resource(s) read, "
                           f"{failed} DELETE_FAILED; reporting the destroy's own failure", flush=True)
                     raise
                 if runtimes:
@@ -913,6 +1176,10 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
             print(f"runner: version {version} was frozen on framework {built_on}; deploying "
                   f"it with framework {buildstore.FRAMEWORK_VERSION}")
         run([sys.executable, "scaffold.py", "apply", str(path), "--exact"], ROOT)
+        # Code from git or S3 (codeSource), before its requirements are installed.
+        materialise_code_sources(bundle.get("workflow") or {}, bid, env, target, action)
+        # Hosted MCP servers' code (tools.<key>.hosted), for the image CDK / Terraform build.
+        prepare_hosted_mcp(bundle.get("workflow") or {}, bid, env, target, action)
         install_code_requirements(bundle.get("workflow") or {})
         sync_documents(s3, bucket, bid)
         if action == "destroy":

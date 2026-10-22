@@ -11,10 +11,20 @@ region —
   * AmazonBedrockFoundationModels    the AWS Marketplace editions (Anthropic Claude).
 
 and keeps ONLY the standard on-demand text-token rates: input and output, per scope
-(regional — an `us.`/`eu.` profile or a bare model id — and `global.`). Batch,
-priority, flex, prompt caching, latency-optimised, long-context, image/audio/video
-tokens and provisioned throughput are left out: those are not what a Converse call at
-the default tier is billed at.
+(regional — an `us.`/`eu.` profile or a bare model id — and `global.`), plus the same
+tier's prompt-cache rates (cache read, 5-minute, 1-hour and 30-minute write) where AWS publishes
+them, for Converse calls that read or write the prompt cache
+(https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html). Batch,
+priority, flex, latency-optimised, long-context, image/audio/video tokens and
+provisioned throughput are left out: those are not what a Converse call at the default
+tier is billed at.
+
+A cache row is one whose `inferenceType` (Nova global rows: `featureType`) starts
+"Prompt cache read" / "Prompt cache write"; a write row whose usage type says `1h` is the
+1-hour write; `global` in the usage type is the global scope. A published 0 is kept (it is
+a price, not a missing row). Rows read from GetProducts
+(https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_pricing_GetProducts.html)
+and checked against https://aws.amazon.com/bedrock/pricing/ for us-east-1 on 2026-10-21.
 
 Joining a model id to a price row is the hard part. The Price List has no model-id
 attribute (aws/aws-sdk-go-v2#3397): a row names its model by display name ("Claude
@@ -58,6 +68,12 @@ _EXCLUDE = re.compile(r"batch|priority|flex|cache|latency|long|image|video|audio
                       r"reserved|provisioned|custom|training|storage|embed", re.IGNORECASE)
 #: A per-image generation price (Stability on Bedrock: "Output image, SD3.5 Large").
 _IMAGE_ROW = re.compile(r"created_image|output image", re.IGNORECASE)
+#: A prompt-cache row, and the tiers of one that are not the standard on-demand rate.
+_CACHE_ROW = re.compile(r"^prompt cache (read|write)", re.IGNORECASE)
+_CACHE_SKIP = re.compile(r"batch|priority|flex|latency|long|custom|reserved|provisioned",
+                         re.IGNORECASE)
+#: The cache kinds a scope may carry (USD per 1M tokens).
+CACHE_KINDS = ("cacheRead", "cacheWrite5m", "cacheWrite1h", "cacheWrite30m")
 _REGION_PREFIX = re.compile(r"^[A-Z0-9]+-")
 _UT_ID_END = re.compile(r"-(?:mantle-)?(?:text-)?(?:input|output)", re.IGNORECASE)
 _EDITION = re.compile(r"\(amazon bedrock edition\)", re.IGNORECASE)
@@ -192,6 +208,10 @@ def parse_products(products: list) -> dict:
             attrs = (p.get("product") or {}).get("attributes") or {}
             head = " ".join(str(attrs.get(k) or "") for k in
                             ("usagetype", "inferenceType", "feature", "service_tier"))
+            cache = _CACHE_ROW.match(str(attrs.get("inferenceType") or attrs.get("featureType") or ""))
+            if cache:
+                _cache_row(p, attrs, cache.group(1).lower(), out)
+                continue
             image_row = bool(_IMAGE_ROW.search(head))
             if not image_row and (_EXCLUDE.search(head)
                                   or (attrs.get("feature") or "").lower().startswith("batch")):
@@ -234,10 +254,37 @@ def parse_products(products: list) -> dict:
     return {k: v for k, v in book.items() if v}
 
 
+def _cache_row(p: dict, attrs: dict, which: str, out: dict) -> None:
+    """One prompt-cache row into `out` (see the module docstring for the rule)."""
+    usage = str(attrs.get("usagetype") or "")
+    label = str(attrs.get("inferenceType") or attrs.get("featureType") or "")
+    if _CACHE_SKIP.search(f"{usage} {label} {attrs.get('feature') or ''}"):
+        return
+    keys = _row_keys(attrs)
+    # A `30m` write row is OpenAI's 30-minute write (prompt_cache_options.ttl, GPT-5.6+:
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html), its own
+    # kind: never priced as a 5-minute or 1-hour Converse write.
+    kind = ("cacheRead" if which == "read"
+            else "cacheWrite30m" if "30m" in usage.lower()
+            else "cacheWrite1h" if "1h" in usage.lower() else "cacheWrite5m")
+    scope = "global" if "global" in usage.lower() else "regional"
+    for term in ((p.get("terms") or {}).get("OnDemand") or {}).values():
+        for dim in (term.get("priceDimensions") or {}).values():
+            if _CACHE_SKIP.search(dim.get("description") or ""):
+                continue
+            rate = _per_mtok((dim.get("pricePerUnit") or {}).get("USD"), dim.get("unit"))
+            if rate is None or rate < 0:
+                continue
+            for k in keys:
+                slot = out.setdefault(k, {}).setdefault(scope, {})
+                slot[kind] = max(slot.get(kind, Decimal(-1)), rate)
+
+
 # --- loading ----------------------------------------------------------------
 
 def _cache_path(region: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"agentexpress-pricebook-{region}.json"
+    # v3: carries the 30-minute write kind, so a v2 file is not read as "no 30m rows".
+    return Path(tempfile.gettempdir()) / f"agentexpress-pricebook-v3-{region}.json"
 
 
 def _read_cache(region: str) -> dict | None:
@@ -324,6 +371,20 @@ def lookup(model_id: str) -> tuple[Decimal, Decimal] | None:
     if not rates or "input" not in rates:
         return None
     return Decimal(rates["input"]), Decimal(rates["output"])
+
+
+def lookup_cache(model_id: str) -> dict[str, Decimal]:
+    """The prompt-cache rates AWS publishes for `model_id` in ITS OWN scope (regional or
+    global), {kind: USD per 1M tokens} for the CACHE_KINDS present; {} when none. No
+    fallback to the other scope: a global cache rate is a different price, so a missing
+    one is unknown, never borrowed."""
+    if _book is None and _thread is not None and _thread.is_alive():
+        _ready.wait(LOOKUP_WAIT_S)
+    book = _book or {}
+    scopes = next((book[k] for k in candidate_keys(model_id)
+                   if k in book and any("input" in r for r in book[k].values())), {})
+    rates = scopes.get(scope_of(model_id)) or {}
+    return {k: Decimal(rates[k]) for k in CACHE_KINDS if k in rates}
 
 
 def lookup_image(model_id: str) -> Decimal | None:

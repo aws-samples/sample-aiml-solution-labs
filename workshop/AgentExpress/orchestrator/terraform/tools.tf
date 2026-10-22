@@ -33,9 +33,12 @@ locals {
       type = lower(try(t.type, ""))
       # workflow.json descriptions explain the tool to whoever edits the config,
       # so they can run long; the Gateway target Description field caps at 200.
-      description   = substr(try(t.description, "Tool target ${name}"), 0, 190)
-      corpora       = try(t.corpora, [])
-      endpoint      = try(t.endpoint, "")
+      description = substr(try(t.description, "Tool target ${name}"), 0, 190)
+      corpora     = try(t.corpora, [])
+      endpoint    = try(t.endpoint, "")
+      # type=mcp with `hosted`: AgentExpress runs the server (tools_hosted_mcp.tf), which
+      # sets the endpoint and signs with the gateway role for "bedrock-agentcore".
+      hosted        = lower(try(t.type, "")) == "mcp" && can(t.hosted)
       schema_s3_uri = try(t.schemaS3Uri, "")
       # type=openapi: the OpenAPI document itself, inline. Encoded here so the map stays
       # homogeneous (each entry's document has its own shape).
@@ -172,10 +175,11 @@ locals {
       #            SigV4: AgentCore Runtime/Gateway, API Gateway, Lambda Function
       #            URLs. `service` is the signing name (auto-detected from the
       #            hostname when omitted).
-      auth = (try(local.identity_defs[t.identity].type, "") != ""
+      auth = (lower(try(t.type, "")) == "mcp" && can(t.hosted) ? "sigv4"
+        : try(local.identity_defs[t.identity].type, "") != ""
         ? lower(local.identity_defs[t.identity].type)
       : lower(try(t.auth, "")))
-      auth_service = try(t.service, "")
+      auth_service = lower(try(t.type, "")) == "mcp" && can(t.hosted) ? "bedrock-agentcore" : try(t.service, "")
       # Secrets never live in workflow.json — they come from tfvars, keyed by
       # the tool name (see var.tool_api_keys), or by the identity it uses.
       api_key = (try(local.identity_defs[t.identity].type, "") != ""
@@ -634,8 +638,19 @@ resource "terraform_data" "tools_validation" {
       error_message = "Each workflow.json tools entry needs \"type\" = kb | websearch | mcp | openapi | lambda."
     }
     precondition {
-      condition     = alltrue([for n, t in local.mcp_tools : t.endpoint != ""])
+      condition     = alltrue([for n, t in local.mcp_tools : t.endpoint != "" || t.hosted])
       error_message = "A tools entry with type=\"mcp\" requires \"endpoint\" (your MCP server's Streamable HTTP URL)."
+    }
+    # A hosted MCP server (tools_hosted_mcp.tf): no endpoint of its own, auth sigv4 or unset,
+    # hosted = { code?, network? }, code.image a private ECR URI. Mirrors cdk validateTools.
+    precondition {
+      condition = alltrue([for n, t in local.tools_raw : (
+        !can(t.hosted) || (lower(try(t.type, "")) == "mcp" && !can(t.endpoint)
+          && contains(["", "sigv4"], lower(try(t.auth, ""))) && contains(["", "bedrock-agentcore"], try(t.service, ""))
+          && can(keys(t.hosted)) && length(setsubtract(keys(t.hosted), ["code", "network"])) == 0
+        && (!can(t.hosted.code.image) || can(regex("^\\d{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/", t.hosted.code.image))))
+      )])
+      error_message = "A tools entry with \"hosted\" is a hosted MCP server: type \"mcp\" with hosted = { code?, network? }, no \"endpoint\" (it is the server's own Runtime), auth \"sigv4\" or unset, and code.image, when set, a private ECR image URI."
     }
     # --- type=kb ----------------------------------------------------------
     precondition {
@@ -1137,7 +1152,7 @@ resource "aws_bedrockagentcore_gateway_target" "mcp_server" {
   target_configuration {
     mcp {
       mcp_server {
-        endpoint     = each.value.endpoint
+        endpoint     = each.value.hosted ? local.hosted_mcp_endpoints[each.key] : each.value.endpoint
         listing_mode = each.value.listing_mode
         # Used as the person: its tools are given here, since the Gateway cannot list
         # them from the server before anyone has connected an account.
@@ -1164,6 +1179,18 @@ resource "aws_bedrockagentcore_gateway_target" "mcp_server" {
       }
     }
   }
+
+  # A hosted server on AgentCore Runtime: Mcp-Session-Id passes both ways (gateway-target-MCPservers.html
+  # tip for protocol 2025-11-25 and earlier; aws 6.67.0 metadata_configuration). See tools_hosted_mcp.tf.
+  dynamic "metadata_configuration" {
+    for_each = each.value.hosted ? [1] : []
+    content {
+      allowed_request_headers  = ["Mcp-Session-Id"]
+      allowed_response_headers = ["Mcp-Session-Id"]
+    }
+  }
+  # Creating the target lists the server's tools as the gateway role: the grant lands first.
+  depends_on = [aws_iam_role_policy.gateway_hosted_mcp]
 
   # SigV4: the Gateway signs with its OWN execution role, so no secret exists at
   # all. This is how you reach an MCP server you host yourself on AgentCore

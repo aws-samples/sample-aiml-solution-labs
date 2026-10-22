@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import re
 
+import code_source
+
 #: The keys each kind reads (app/common/task_agent.KEYS_OF).
-KEYS_OF = {"tool": ("kind", "tool", "arguments"), "code": ("kind", "language", "code"),
+KEYS_OF = {"tool": ("kind", "tool", "arguments"), "code": ("kind", "language", "code", "codeSource"),
            "extract": ("kind", "file", "features"), "output": ("kind", "format", "name", "from")}
 ALL_KEYS = {k for keys in KEYS_OF.values() for k in keys}
 MAX_CODE_BYTES = 50_000
@@ -92,7 +94,14 @@ def check(agents: dict, tools: dict, steps: list, orch, add, vocab, upstream_ids
             _check_refs(task.get("arguments"), before, where, f"{tp}.arguments", add)
         elif kind == "code":
             code = task.get("code")
-            if not isinstance(code, str) or not code.strip():
+            if "codeSource" in task:
+                # The script is fetched at deploy time (deployer/code_fetch.py read_script).
+                if "code" in task:
+                    add("error", where, f"{tp}.codeSource",
+                        "use one of code (written or uploaded here) or codeSource, not both")
+                for cp, msg in code_source.problems(task["codeSource"], f"{tp}.codeSource"):
+                    add("error", where, cp, msg)
+            elif not isinstance(code, str) or not code.strip():
                 add("error", where, f"{tp}.code", "write the script this step runs")
             elif len(code.encode("utf-8")) > MAX_CODE_BYTES:
                 add("error", where, f"{tp}.code",

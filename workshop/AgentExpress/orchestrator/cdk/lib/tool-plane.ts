@@ -22,6 +22,7 @@ import { kbIngestion, type KbChunking, type KbParsing } from "./kb-ingestion";
 import { kbVectorStore, kbVectorStoreName, validateKbVectorStore, type KbVectorStore } from "./kb-vector-store";
 import { kbConnector, validateKbConnector, type KbConnector } from "./kb-data-source";
 import { BROWSER_SOURCE, browserToolFunction } from "./browser-tool";
+import { HOSTED_MCP_METADATA, hostedMcpRuntime, type HostedMcp } from "./hosted-mcp";
 
 /** The tool types the framework knows how to provision. */
 
@@ -275,6 +276,9 @@ export interface ToolSpec {
   rerank?: { model?: string; count?: number };
   /** type=mcp: the MCP server's Streamable HTTP URL. Change this, nothing else. */
   endpoint?: string;
+  /** type=mcp: a server AgentExpress runs on its own AgentCore Runtime (lib/hosted-mcp.ts),
+   *  instead of `endpoint`. */
+  hosted?: HostedMcp;
   /** type=openapi: s3:// URI of the OpenAPI schema. */
   schemaS3Uri?: string;
   /**
@@ -1325,7 +1329,13 @@ export class ToolPlane extends Construct {
     let previousTarget: agentcore.CfnGatewayTarget | undefined;
     const targets: agentcore.CfnGatewayTarget[] = [];
 
-    for (const [name, spec] of entries) {
+    for (const [name, declared] of entries) {
+      // A hosted MCP server (tools.<key>.hosted, lib/hosted-mcp.ts): its own Runtime, reached
+      // by the Gateway with SigV4 as its role ("bedrock-agentcore"). The endpoint is derived.
+      const hosted = declared.type === "mcp" && declared.hosted
+        ? hostedMcpRuntime(this, name, declared.hosted, agentName, orchRoot, gatewayRole) : undefined;
+      const spec: ToolSpec = hosted
+        ? { ...declared, endpoint: hosted.endpoint, auth: "sigv4", service: "bedrock-agentcore" } : declared;
       // A vaulted key, for the types that reach a third-party endpoint. The name
       // MUST start with "bedrock-agentcore" so the Gateway role's Secrets Manager
       // statement above can read it.
@@ -1462,8 +1472,15 @@ export class ToolPlane extends Construct {
         description: truncate(spec.description ?? `Tool target ${name}`, 190),
         targetConfiguration: { mcp: this.mcpConfigFor(name, spec, kbLambda) },
         ...(credentialProviderConfigurations ? { credentialProviderConfigurations } : {}),
+        ...(hosted ? { metadataConfiguration: HOSTED_MCP_METADATA } : {}),
       });
 
+      // Creating the target lists the hosted server's tools as the gateway role, so the
+      // Runtime and the role's invoke grant land first.
+      if (hosted) {
+        target.node.addDependency(hosted.runtime);
+        dependOnDefaultPolicy(target, gatewayRole);
+      }
       if (spec.type === "kb") dependOnDefaultPolicy(target, gatewayRole);
       // An openapi target is the one kind whose creation READS something: the Gateway
       // fetches and parses the schema as the gateway role. So both the grant and the

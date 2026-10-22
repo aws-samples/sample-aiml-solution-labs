@@ -250,8 +250,13 @@ resource "awscc_bedrockagentcore_runtime" "subagent" {
     }
   }
 
-  network_configuration = {
-    network_mode = "PUBLIC"
+  # agents.<id>.network: PUBLIC unless this agent sets its own (runtime_network.tf).
+  network_configuration = local.runtime_network_config["agents.${each.key}.network"]
+  lifecycle {
+    precondition {
+      condition     = length(local.runtime_network_problems["agents.${each.key}.network"]) == 0
+      error_message = "workflow.json ${join("; ", local.runtime_network_problems["agents.${each.key}.network"])}."
+    }
   }
 
   # The optional OTLP export's settings are merged in only when it is on (otlp_export.tf).

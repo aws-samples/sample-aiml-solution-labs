@@ -6,13 +6,14 @@
  *  word (both run tests/fixtures/validation_cases.json). */
 import type { Issue, Where } from "./validate";
 import type { StepSpec } from "./model";
+import { codeSourceProblems } from "./codeSource";
 
 type Add = (severity: Issue["severity"], where: Where, path: string, message: string) => void;
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** The keys each kind reads (app/common/task_agent.KEYS_OF). */
 export const KEYS_OF: Record<string, string[]> = {
-  tool: ["kind", "tool", "arguments"], code: ["kind", "language", "code"],
+  tool: ["kind", "tool", "arguments"], code: ["kind", "language", "code", "codeSource"],
   extract: ["kind", "file", "features"], output: ["kind", "format", "name", "from"],
 };
 const ALL_KEYS = new Set(Object.values(KEYS_OF).flat());
@@ -83,7 +84,11 @@ export function checkTasks(agents: Record<string, unknown>, tools: Record<string
       checkRefs(task.arguments, before, where, `${tp}.arguments`, add);
     } else if (kind === "code") {
       const code = task.code;
-      if (typeof code !== "string" || !code.trim()) add("error", where, `${tp}.code`, "write the script this step runs");
+      if ("codeSource" in task) {
+        // The script is fetched at deploy time (deployer/code_fetch.py read_script).
+        if ("code" in task) add("error", where, `${tp}.codeSource`, "use one of code (written or uploaded here) or codeSource, not both");
+        for (const c of codeSourceProblems(task.codeSource, `${tp}.codeSource`)) add("error", where, c.path, c.message);
+      } else if (typeof code !== "string" || !code.trim()) add("error", where, `${tp}.code`, "write the script this step runs");
       else {
         const size = new TextEncoder().encode(code).length;
         if (size > MAX_CODE_BYTES) add("error", where, `${tp}.code`, `is ${size} bytes; a script may be at most ${MAX_CODE_BYTES}`);

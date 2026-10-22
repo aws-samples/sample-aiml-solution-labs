@@ -29,6 +29,8 @@ import Toggle from "@cloudscape-design/components/toggle";
 import { useEffect, useRef, useState } from "react";
 
 import { CheckResult, Files, GrantsForm, type Code } from "./CodeTool";
+import type { CodeSource } from "./codeSource";
+import { CodeSourceField } from "./CodeSourceField";
 import { TEMPLATES, interceptorFiles, type Point } from "./interceptorCode";
 import { IssueList } from "./IssueList";
 import { vocab } from "./meta";
@@ -215,7 +217,7 @@ function PublishBar({ project, point, notify }: { project: Project; point: Point
   const [busy, setBusy] = useState(false);
   const [published, setPublished] = useState<LibraryItem | null>(null);
   const [sharing, setSharing] = useState<LibraryItem[] | null>(null);
-  const ready = Boolean(ic && (ic.code !== undefined ? files?.["handler.py"] : ic.lambdaArn));
+  const ready = Boolean(ic && (ic.code !== undefined ? ic.code.codeSource || files?.["handler.py"] : ic.lambdaArn));
   const publish = async () => {
     setBusy(true);
     try {
@@ -411,7 +413,16 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
                 </Alert>
               ) : null}
               <ExpandableSection headerText="The code" variant="container">
-                <Files files={files} onChange={(f) => onChange(setInterceptor(project, point.id, ic, f))} />
+                <SpaceBetween size="s">
+                  <CodeSourceField source={ic.code.codeSource} path={`orchestrator.interceptors.${point.id}.code.codeSource`}
+                    buildId={server ? project.id : undefined}
+                    onSource={(s: CodeSource | undefined) => {
+                      const { codeSource: _cs, ...rest } = ic.code ?? {};
+                      onChange(setInterceptor(project, point.id, { ...ic, code: s ? { ...rest, codeSource: s } : rest }, files));
+                    }}
+                    onFiles={(f) => onChange(setInterceptor(project, point.id, ic, f))} />
+                  {ic.code.codeSource ? null : <Files files={files} onChange={(f) => onChange(setInterceptor(project, point.id, ic, f))} />}
+                </SpaceBetween>
               </ExpandableSection>
               <ExpandableSection headerText="What it may reach" variant="container">
                 <GrantsForm code={ic.code} onChange={(c) => onChange(setInterceptor(project, point.id, { ...ic, code: c }, files))} />

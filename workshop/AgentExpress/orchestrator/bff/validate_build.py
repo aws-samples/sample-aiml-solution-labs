@@ -20,12 +20,16 @@ from pathlib import Path
 
 import browser_tool
 import cedar
+import code_source
 import export_check
 import harness_check
 import kb_data_source
 import kb_ingestion
 import kb_vector_store
 import model_routing_check
+import network_check
+import hosted_mcp_check
+import prompt_cache_check
 import smithy_tool
 import task_check
 
@@ -277,8 +281,10 @@ def _check_entry(name: str, entry, path: str, where: dict, out: list) -> None:
     def check_value(key, value, p):
         k = keys[key]
         if not applies(name, key, variant):
+            # keys.json `notApplicable`: what to set instead, for this variant.
+            hint = (k.get("notApplicable") or {}).get(variant)
             err(p, f"`{key.split('.')[-1]}` does not apply to {variant_label or 'this entry'} — "
-                   "a key that looks like a setting and controls nothing is rejected, not ignored")
+                   + (hint or "a key that looks like a setting and controls nothing is rejected, not ignored"))
             return
         if not _type_ok(value, k.get("type")):
             t = " or ".join(k["type"]) if isinstance(k.get("type"), list) else (k.get("type") or "")
@@ -525,6 +531,10 @@ def _check_code(key: str, code, path: str, where: dict, add) -> None:
                 "is not a name you can set: letters, digits and _, not AWS_..., SECRET_NAME, TABLE_NAME or S3_PREFIX")
         elif not isinstance(value, str) or len(value) > 1000:
             add("error", where, f"{p}.environment.{name}", "must be a string of at most 1000 characters")
+    # Where the files come from when they are not written or uploaded here (bff/code_source.py).
+    if "codeSource" in code:
+        for cp, msg in code_source.problems(code["codeSource"], f"{p}.codeSource"):
+            add("error", where, cp, msg)
 
 
 #: An S3 location runs may name: a bucket, or bucket/prefix (no scheme, no trailing slash).
@@ -1429,7 +1439,10 @@ def validate(wf: dict) -> list[dict]:
     task_check.check(agents, tools, steps, wf.get("orchestrator"), add, vocab, upstream_ids)
     harness_check.check(agents, add, wf)
     model_routing_check.check(wf.get("orchestrator"), agents, wf.get("authorization"), add)
+    prompt_cache_check.check(wf.get("orchestrator"), agents, add, VOCAB.get,
+                             str(KEYS["orchestrator"]["keys"]["defaultModel"].get("default") or ""))
     export_check.check(wf.get("orchestrator"), add)
+    network_check.check(wf.get("orchestrator"), agents, add, VOCAB.get, tools)
     _check_sign_in(wf.get("authorization"), add)
     _check_named(wf, add, out)
 
@@ -1469,6 +1482,9 @@ def validate(wf: dict) -> list[dict]:
         endpoint = tool.get("endpoint")
         if t == "mcp" and isinstance(endpoint, str) and not re.search(r"^https://\S+\.\S+", endpoint):
             add("error", where, f"{path}.endpoint", "must be the server's https:// URL")
+        # A hosted MCP server (tools.<key>.hosted): bff/hosted_mcp_check.py.
+        if t == "mcp":
+            hosted_mcp_check.check(key, tool, path, where, add)
         if t == "kb":
             kb_id, s3_uri, kms = tool.get("knowledgeBaseId"), tool.get("s3Uri"), tool.get("kmsKeyArn")
             if isinstance(kb_id, str) and not KB_ID_RE.match(kb_id):

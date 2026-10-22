@@ -15,9 +15,11 @@ import Container from "@cloudscape-design/components/container";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import FileInput from "@cloudscape-design/components/file-input";
 import FileTokenGroup from "@cloudscape-design/components/file-token-group";
+import FormField from "@cloudscape-design/components/form-field";
 import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
 import PromptInput from "@cloudscape-design/components/prompt-input";
+import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
@@ -26,8 +28,9 @@ import { SecretField } from "./BuildResources";
 import { Canvas } from "./Canvas";
 import { Markdown } from "./markdown";
 import type { Project } from "./model";
-import { designChanges, designer, type DesignChange, type DesignDoc, type DesignTurn } from "./storage";
+import { designChanges, designer, type DesignChange, type DesignDoc, type DesignTurn, type ReviewMode } from "./storage";
 import type { Issue } from "./validate";
+import { gitTokenNames } from "./codeSource";
 
 /** Literal \\uXXXX sequences as the characters they name. The model sometimes
  *  double-escapes one in a change summary (an arrow arrives as "\\u2192"); summaries
@@ -51,6 +54,35 @@ export function scrollParent(log: HTMLElement | null, stop: HTMLElement | null):
     if ((oy === "auto" || oy === "scroll") && e.scrollHeight > e.clientHeight + 1) return e;
   }
   return log;
+}
+
+/** Review changes: a second model checks the Assistant's change before it is saved
+ *  (bff/review.py). The label is this one constant; the reviewer model is never named. */
+export const REVIEW_LABEL = "Review changes";
+export const REVIEW_HELP = "A second model checks the Assistant's changes before they're applied.";
+export const REVIEW_OPTIONS: { id: ReviewMode; text: string }[] = [
+  { id: "off", text: "Off" }, { id: "auto", text: "Auto" }, { id: "always", text: "Always" }];
+/** The person's last choice, Auto by default. */
+const REVIEW_KEY = "agentexpress.assistant.review";
+export function readReview(): ReviewMode {
+  try {
+    const v = localStorage.getItem(REVIEW_KEY);
+    return v === "off" || v === "always" ? v : "auto";
+  } catch { return "auto"; }
+}
+function writeReview(v: ReviewMode): void {
+  try { localStorage.setItem(REVIEW_KEY, v); } catch { /* private mode: not remembered */ }
+}
+/** The muted line under a reviewed reply. */
+export function reviewLine(r: DesignTurn["review"]): string {
+  if (!r) return "";
+  const n = r.count ?? 0;
+  const s = `${n} suggestion${n === 1 ? "" : "s"}`;
+  return r.status === "ok" ? "Reviewed: no issues"
+    : r.status === "applied" ? `Reviewed: ${s} applied`
+      : r.status === "noted" ? `Reviewed: ${s} noted`
+        : r.status === "skipped" ? "Review skipped (small change)"
+          : r.status === "unavailable" ? "Review unavailable" : "";
 }
 
 const PHASE: Record<string, string> = {
@@ -108,6 +140,9 @@ function Turn({ turn: t }: { turn: DesignTurn }) {
             <StatusIndicator type={c.undo ? "info" : "success"}>{unescape(c.summary) || "Updated the build"}</StatusIndicator>
           </div>
         ))}
+        {!live && reviewLine(t.review) ? (
+          <Box fontSize="body-s" color="text-body-secondary" data-testid="design-review">{reviewLine(t.review)}</Box>
+        ) : null}
         {live && t.phase !== "writing" ? (
           <div className="axd-phase"><StatusIndicator type="loading">{phase}{secs >= 5 ? ` ${secs}s` : ""}</StatusIndicator></div>
         ) : null}
@@ -146,12 +181,14 @@ export function openInputs(changes: DesignChange[], issues: Issue[]): { path: st
 /** The secrets the designer asked for, newest first, one per tool or agent, and only
  *  for tools and agents still in the build. */
 export function secretsNeeded(changes: DesignChange[], tools: Record<string, unknown>,
-  agents: Record<string, unknown>, identities: Record<string, unknown> = {}): NonNullable<DesignChange["secretsNeeded"]> {
+  agents: Record<string, unknown>, identities: Record<string, unknown> = {},
+  gitTokens: string[] = []): NonNullable<DesignChange["secretsNeeded"]> {
   const out: NonNullable<DesignChange["secretsNeeded"]> = [];
   for (const c of [...changes].reverse()) {
     for (const s of c.secretsNeeded ?? []) {
       const present = s.kind === "toolApiKeys" ? s.name in tools
-        : s.kind === "identitySecrets" ? s.name in identities : s.name in agents;
+        : s.kind === "identitySecrets" ? s.name in identities
+          : s.kind === "gitTokens" ? gitTokens.includes(s.name) : s.name in agents;
       if (present && !out.some((o) => o.kind === s.kind && o.name === s.name)) out.push(s);
     }
   }
@@ -211,6 +248,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [review, setReview] = useState<ReviewMode>(readReview);
   /** Files picked for the next message, each uploaded as soon as it is picked. */
   const [files, setFiles] = useState<{ file: File; key?: string; name?: string; loading: boolean; error?: string }[]>([]);
   const uploading = files.some((f) => f.loading);
@@ -299,7 +337,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
     try {
       await flush();
       setText("");
-      take(await designer.send(id, m, ready));
+      take(await designer.send(id, m, ready, review));
       setFiles([]);
       scrollToEnd();
       // And the page: the chat's foot, where the reply grows, can be below the window.
@@ -322,8 +360,8 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
   const inputs = useMemo(() => openInputs(changes, issues), [changes, issues]);
   const defaults = useMemo(() => defaultsUsed(changes), [changes]);
   const secrets = useMemo(() => secretsNeeded(changes, project.workflow.tools ?? {}, project.workflow.agents ?? {},
-    (project.workflow.identities ?? {}) as Record<string, unknown>),
-    [changes, project.workflow.tools, project.workflow.agents]);
+    (project.workflow.identities ?? {}) as Record<string, unknown>, gitTokenNames(project.workflow)),
+    [changes, project.workflow]);
   const errors = issues.filter((i) => i.severity === "error").length;
 
   if (!doc) {
@@ -375,6 +413,10 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
               {doc.attach?.s3?.length ? <> S3 paths can be in: {doc.attach.s3.join(", ")}.</> : null} It never
               deploys; you do that from Deploy.
             </Box>
+            <FormField label={REVIEW_LABEL} description={REVIEW_HELP}>
+              <SegmentedControl label={REVIEW_LABEL} selectedId={review} options={REVIEW_OPTIONS}
+                onChange={({ detail }) => { const v = detail.selectedId as ReviewMode; setReview(v); writeReview(v); }} />
+            </FormField>
             {error ? <StatusIndicator type="error">{error}</StatusIndicator> : null}
           </SpaceBetween>
         }

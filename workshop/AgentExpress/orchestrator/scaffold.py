@@ -454,6 +454,47 @@ def code_functions(workflow: dict) -> list[str]:
     return code_tools(workflow) + code_interceptors(workflow)
 
 
+def fetched_functions(workflow: dict) -> set[str]:
+    """The code functions whose files come from git or S3 (their `code.codeSource`): the
+    deployer fetches them into app/tools/_code/<key>/ after this apply
+    (deployer/runner.py materialise_code_sources), so the bundle holds no files for them."""
+    out = {k for k, t in (workflow.get("tools") or {}).items() if k in code_tools(workflow)
+           and isinstance(t.get("code"), dict) and "codeSource" in t["code"]}
+    ics = (workflow.get("orchestrator") or {}).get("interceptors") if isinstance(
+        workflow.get("orchestrator"), dict) else None
+    ics = ics if isinstance(ics, dict) else {}
+    return out | {f"interceptor-{p}" for p in INTERCEPTOR_POINTS if isinstance(ics.get(p), dict)
+                  and isinstance(ics[p].get("code"), dict) and "codeSource" in ics[p]["code"]}
+
+
+#: A hosted MCP server written in the build (tools.<key>.hosted with no `code`): its files are
+#: app/tools/_code/<key>/ too, built into an image (deployer/runner.py prepare_hosted_mcp).
+HOSTED_FILE_RE = re.compile(r"^([a-z_][a-z0-9_]*\.py|requirements\.txt|Dockerfile)$")
+
+
+def hosted_mcp_code(workflow: dict) -> list[str]:
+    """The tool keys of hosted MCP servers whose code is written in the build."""
+    return [k for k, t in (workflow.get("tools") or {}).items()
+            if isinstance(t, dict) and str(t.get("type") or "").lower() == "mcp"
+            and isinstance(t.get("hosted"), dict) and t["hosted"].get("code") is None]
+
+
+def hosted_code_problems(key: str, files) -> list[str]:
+    """What stops a hosted MCP server's files from being written."""
+    where = f"tools.{key}.hosted"
+    if not isinstance(files, dict) or not any(
+            isinstance(files.get(n), str) and files[n].strip() for n in ("server.py", "Dockerfile")):
+        return [f"{where} is written in the build but has neither server.py nor a Dockerfile"]
+    out = [f"{where}: {name!r} is not a file a hosted MCP server may hold (*.py, requirements.txt, Dockerfile)"
+           for name in files if not HOSTED_FILE_RE.match(str(name))]
+    out += [f"{where}: {name} is not text" for name, body in files.items() if not isinstance(body, str)]
+    if len(files) > CODE_MAX_FILES:
+        out.append(f"{where}: at most {CODE_MAX_FILES} files")
+    if sum(len(str(b).encode()) for b in files.values()) > CODE_MAX_BYTES:
+        out.append(f"{where}: its files are over {CODE_MAX_BYTES // 1000} KB")
+    return out
+
+
 def code_label(key: str) -> str:
     """Where a code function is declared, for messages."""
     if key.startswith("interceptor-"):
@@ -482,7 +523,8 @@ def _referenced(workflow: dict) -> tuple[set[str], set[str]]:
     """The app/tools/ folders and kb_docs/ corpora the workflow actually uses."""
     tools = (workflow.get("tools") or {}).values()
     sources = {str(t.get("source")) for t in tools if isinstance(t, dict) and t.get("source")}
-    if code_functions(workflow):
+    if code_functions(workflow) or any(isinstance(t, dict) and isinstance(t.get("hosted"), dict)
+                                       for t in (workflow.get("tools") or {}).values()):
         sources.add(CODE_DIR)
     corpora = {str(c) for t in tools if isinstance(t, dict)
                and str(t.get("type") or "").lower() == "kb" for c in (t.get("corpora") or [])}
@@ -559,8 +601,17 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
         return 2
     prompts = bundle.get("prompts") or {}
     tool_code = bundle.get("toolCode") if isinstance(bundle.get("toolCode"), dict) else {}
+    hosted = hosted_mcp_code(workflow)
     coded = code_functions(workflow)
-    wrong = [p for k in coded for p in code_problems(k, tool_code.get(k))]
+    fetched = fetched_functions(workflow)
+    wrong = [p for k in coded if k not in fetched for p in code_problems(k, tool_code.get(k))]
+    wrong += [p for k in hosted for p in hosted_code_problems(k, tool_code.get(k))]
+    # Hosted MCP servers' folders are written like code functions'; a fetched one's folder
+    # (git or S3 codeSource, or hosted.code) is filled by the deployer after this apply,
+    # so only its name is kept.
+    coded = coded + hosted
+    fetched = fetched | {k for k, t in (workflow.get("tools") or {}).items()
+                         if k not in hosted and isinstance(t, dict) and isinstance(t.get("hosted"), dict)}
     if wrong:
         print("scaffold: " + "; ".join(wrong) + ". Write it in the Builder and export again.",
               file=sys.stderr)
@@ -612,10 +663,10 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
                            if d.is_dir() and d.name not in used_corpora) if kb_root.is_dir() else []
     code_root = tools_root / CODE_DIR
     stale_code = sorted(d.name for d in code_root.iterdir()
-                        if d.is_dir() and d.name not in coded) if code_root.is_dir() else []
+                        if d.is_dir() and d.name not in coded and d.name not in fetched) if code_root.is_dir() else []
     # Without --exact a folder you took over (its marker deleted) is yours, like a prompts.py.
-    write_code = [k for k in coded if exact or not (code_root / k).exists()
-                  or (code_root / k / CODE_MARKER).exists()]
+    write_code = [k for k in coded if k not in fetched and (exact or not (code_root / k).exists()
+                  or (code_root / k / CODE_MARKER).exists())]
 
     print(f"app/workflow.json — replaced ({len(workflow['agents'])} agents, "
           f"{len(workflow['steps'])} steps, {len(workflow.get('tools') or {})} tools)")
@@ -640,7 +691,8 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
             print(f"app/tools/{CODE_DIR}/{name}/ — DELETED (no code tool or interceptor is named {name})")
     for key in coded:
         print(f"app/tools/{CODE_DIR}/{key}/ — "
-              + ("written from the Builder" if key in write_code else "kept as is (your code)"))
+              + ("fetched from its codeSource at deploy" if key in fetched else
+                 "written from the Builder" if key in write_code else "kept as is (your code)"))
     if not exact:
         for aid in orphans:
             print(f"app/subagents/{aid}/ — NOT in the workflow any more; left in place. Delete "

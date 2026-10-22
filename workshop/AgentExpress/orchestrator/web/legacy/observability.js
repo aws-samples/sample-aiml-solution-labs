@@ -14,6 +14,9 @@
  *                 AgentCore Evaluations scores for each named prompt.
  *   Insights    — cross-run AgentCore batch analysis: failure patterns, user
  *                 intents and execution summaries over a lookback window.
+ *                 Also per-agent prompt caching insights over the Overview date
+ *                 range (written but rarely read, requested but nothing cached,
+ *                 paying off), from GET /api/telemetry/aggregate `cacheInsights`.
  */
 (function () {
   "use strict";
@@ -259,6 +262,7 @@
   .obs-badge.allowed { background:#ecfdf5; color:#047857; }
   .obs-badge.denied { background:#fef2f2; color:#b91c1c; }
   .obs-badge.logonly { background:#fefce8; color:#a16207; }
+  .obs-badge.warn { background:#fefce8; color:#a16207; }
   .obs-metagrid { display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr)); gap:10px 16px; padding:12px 16px; border-bottom:1px solid #f1f5f9; }
   .obs-kv { display:flex; flex-direction:column; gap:2px; min-width:0; }
   .obs-kv .k { font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--muted2,#94a3b8); }
@@ -755,6 +759,8 @@
           </div>
         </div>
         <div class="obs-card"><div id="obsInsightsBody"><div class="obs-note" style="margin:0">Loading…</div></div></div>
+        <div class="obs-card"><h3>Prompt caching <span class="obs-note">per agent, over the Overview tab's From / To range, from recorded telemetry</span></h3>
+          <div id="obsCacheInsBody"><div class="obs-note" style="margin:0">Loading…</div></div></div>
       </section>
      </div>
      </div>`);
@@ -813,7 +819,10 @@
     const tot = buckets.reduce((a, b) => ({
       cost: a.cost + Number(b.costUsd || 0), inp: a.inp + Number(b.inputTokens || 0),
       out: a.out + Number(b.outputTokens || 0), calls: a.calls + Number(b.calls || 0),
-    }), { cost: 0, inp: 0, out: 0, calls: 0 });
+      cr: a.cr + Number(b.cacheReadTokens || 0), cw: a.cw + Number(b.cacheWriteTokens || 0),
+      cc: a.cc + Number(b.cacheCostUsd || 0), cs: a.cs + Number(b.cacheSavingUsd || 0),
+      ck: a.ck && b.cacheCostKnown !== false,
+    }), { cost: 0, inp: 0, out: 0, calls: 0, cr: 0, cw: 0, cc: 0, cs: 0, ck: true });
     const runs = Number(data.totalSessions || 0);
 
     const bucketLabel = { date: "Active days", model: "Models used", user: "Users" }[by];
@@ -822,7 +831,8 @@
       + kpi(fmtInt(tot.inp + tot.out), "Total tokens", "#0891b2",
             fmtInt(tot.inp) + " in · " + fmtInt(tot.out) + " out")
       + kpi(fmtInt(tot.calls), "Calls", "#059669")
-      + kpi(buckets.length, bucketLabel, "#d97706"));
+      + kpi(buckets.length, bucketLabel, "#d97706")
+      + cacheKpi(tot));
 
     renderProjection(tot.cost, runs);
 
@@ -975,7 +985,10 @@
       + kpi(fmtInt((Number(t.inputTokens || 0) + Number(t.outputTokens || 0))), "Tokens", "#0891b2",
             fmtInt(t.inputTokens) + " in · " + fmtInt(t.outputTokens) + " out")
       + kpi(fmtInt(t.calls), "Calls", "#059669")
-      + kpi(fmtMs(t.latencyMs), "Model+tool latency", "#d97706"));
+      + kpi(fmtMs(t.latencyMs), "Model+tool latency", "#d97706")
+      + cacheKpi({ cr: Number(t.cacheReadTokens || 0), cw: Number(t.cacheWriteTokens || 0),
+                   cc: Number(t.cacheCostUsd || 0), cs: Number(t.cacheSavingUsd || 0),
+                   ck: t.cacheCostKnown !== false }));
 
     const agents = (data.byAgent || []).slice().sort((a, b) => Number(b.costUsd || 0) - Number(a.costUsd || 0));
     if (!agents.length) { setHtml($("obsFlowTable"), `<div class="obs-empty">No telemetry for this session yet.</div>`); if (charts.obsFlowChart) charts.obsFlowChart.destroy(); return; }
@@ -996,6 +1009,8 @@
 
     setHtml($("obsFlowTable"), `<table class="obs"><thead><tr>
       <th>Agent</th><th>Model(s)</th><th class="num">Input</th><th class="num">Output</th>
+      <th class="num" title="${esc(CACHE_READ_TIP)}">Cache read</th><th class="num" title="${esc(CACHE_WRITE_TIP)}">Cache write</th>
+      <th class="num" title="${esc(CACHE_SAVING_TIP)}">Cache saving</th>
       <th class="num">Tools</th><th class="num">Latency</th><th class="num">Cost</th></tr></thead><tbody>${
       agents.map((a) => `
         <tr class="obs-agent" data-obs-click="toggleAgent" data-obs-arg="${esc(a.agentId)}">
@@ -1005,15 +1020,36 @@
           <td>${(a.models || []).map((m) => esc(shortModel(m))).join(", ") || "—"}</td>
           <td class="num">${fmtInt(a.inputTokens)}</td>
           <td class="num">${fmtInt(a.outputTokens)}</td>
+          <td class="num">${fmtInt(a.cacheReadTokens)}</td>
+          <td class="num">${fmtInt(a.cacheWriteTokens)}</td>
+          <td class="num">${cacheSavingCell(a)}</td>
           <td class="num">${fmtInt(a.tools)}</td>
           <td class="num">${fmtMs(a.latencyMs)}</td>
           <td class="num">${fmtUsd(a.costUsd)}</td>
         </tr>
-        <tr class="obs-calls" id="calls-${esc(a.agentId)}" style="display:none"><td colspan="7">
+        <tr class="obs-calls" id="calls-${esc(a.agentId)}" style="display:none"><td colspan="10">
           <div class="obs-calls-inner" id="calls-inner-${esc(a.agentId)}"></div></td></tr>`).join("")}</tbody></table>`);
     setHtml($("obsFlowLegend"), LEGEND);
   }
 
+  // ---- prompt caching (Bedrock cache points; cache_* fields on llm rows) ----------
+  // Cache tokens are a part of Input: total input = inputTokens + cacheReadInputTokens +
+  // cacheWriteInputTokens (https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
+  // Their cost is inside Cost, at the AWS Price List cache rates; a cache token with no
+  // published rate is left out of Cost and the figure is marked "unknown", never estimated.
+  const CACHE_READ_TIP = "Input tokens read from the prompt cache (part of Input), billed at the cache-read rate.";
+  const CACHE_WRITE_TIP = "Input tokens written to the prompt cache (part of Input), billed at the cache-write rate.";
+  const CACHE_SAVING_TIP = "The cached tokens at the model's normal input rate, minus what they cost at the cache rates. Negative when writes outweigh reads.";
+  function cacheSavingCell(a) {
+    if (!Number(a.cacheReadTokens || 0) && !Number(a.cacheWriteTokens || 0)) return "—";
+    if (a.cacheCostKnown === false) return `<span title="A cache token had no published rate">unknown</span>`;
+    return fmtUsd(a.cacheSavingUsd);
+  }
+  function cacheKpi(c) {
+    if (!c.cr && !c.cw) return "";
+    return kpi(c.ck ? fmtUsd(c.cs) : "unknown", "Cache saving", "#0d9488",
+      fmtInt(c.cr) + " read · " + fmtInt(c.cw) + " written · " + (c.ck ? fmtUsd(c.cc) : "unknown") + " cache cost (in total)");
+  }
   function renderRates(calls) {
     const seen = {};
     (calls || []).forEach((c) => {
@@ -1202,10 +1238,12 @@
         JSON.stringify({ groupedBy: lastBy, buckets: lastBuckets }, null, 2), "application/json");
       return;
     }
-    const head = [lastBy, "costUsd", "inputTokens", "outputTokens", "calls", "runs", "latencyMs"];
+    const head = [lastBy, "costUsd", "inputTokens", "outputTokens", "calls", "runs", "latencyMs",
+      "cacheReadTokens", "cacheWriteTokens", "cacheCostUsd", "cacheSavingUsd", "cacheCostKnown"];
     if (lastBy === "model") head.push("inRatePerM", "outRatePerM");
     const rows = [head].concat(lastBuckets.map((b) => {
-      const r = [b.key, b.costUsd, b.inputTokens, b.outputTokens, b.calls, b.sessions, b.latencyMs];
+      const r = [b.key, b.costUsd, b.inputTokens, b.outputTokens, b.calls, b.sessions, b.latencyMs,
+        b.cacheReadTokens, b.cacheWriteTokens, b.cacheCostUsd, b.cacheSavingUsd, b.cacheCostKnown];
       if (lastBy === "model") r.push(b.inRate, b.outRate);
       return r;
     }));
@@ -1221,9 +1259,12 @@
     }
     const head = ["agent_id", "kind", "label", "mode", "status", "version", "prompt",
       "input_tokens", "output_tokens", "system_tokens", "system_tokens_exact",
-      "embed_tokens_est", "in_rate", "out_rate", "rates_known", "rates_source", "latency_ms", "cost_usd", "value",
+      "embed_tokens_est", "in_rate", "out_rate", "rates_known", "rates_source", "latency_ms", "cost_usd",
+      "cache_requested", "cache_read_tokens", "cache_write_tokens", "cache_write_5m_tokens", "cache_write_1h_tokens",
+      "cache_read_cost_usd", "cache_write_cost_usd", "cache_saving_usd", "cache_cost_known", "value",
       "eval_label", "namespace", "finish_reason", "ts"];
     // embed_tokens_est = estimated KB-query embedding tokens (tool rows);
+    // cache_* = prompt caching (llm rows): input_tokens already includes the read and write tokens;
     // value = the evaluator score (eval rows); namespace = memory rows.
     const rows = [head].concat(flowCalls.map((c) => head.map((k) => c[k])));
     download(`run-${sid}-${etStamp()}.csv`, toCsv(rows), "text/csv");
@@ -1266,6 +1307,31 @@
   // Build the per-kind call blocks (model / tool / memory / guardrail / policy)
   // for a subset of calls. Reused per version so a re-run's calls render under
   // their own "Version N" header.
+  // A model call's cache result: "cache hit" when it read from the cache, "cache miss"
+  // when it sent cache points (or wrote) and read nothing; nothing when caching was not in play.
+  function cacheBadge(c) {
+    const read = Number(c.cache_read_tokens || 0), write = Number(c.cache_write_tokens || 0);
+    if (read > 0) return ` <span class="obs-badge ok" title="${esc(CACHE_READ_TIP)}">cache hit</span>`;
+    if (write > 0 || c.cache_requested) {
+      const why = write > 0 ? "Nothing was read from the cache; this call wrote it."
+        : `Nothing was read or written: the prefix may be below the model's minimum${c.cache_min_text ? " (" + c.cache_min_text + " tokens per checkpoint)" : ""}.`;
+      return ` <span class="obs-badge warn" title="${esc(why)}">cache miss</span>`;
+    }
+    return "";
+  }
+  function cacheKvs(c) {
+    const read = Number(c.cache_read_tokens || 0), write = Number(c.cache_write_tokens || 0);
+    if (!read && !write && !c.cache_requested) return "";
+    const unknown = c.cache_cost_known === false;
+    const usd = (v) => unknown ? `<span title="A cache token had no published rate">unknown</span>` : fmtUsd(v);
+    const ttl = [Number(c.cache_write_5m_tokens || 0) ? fmtInt(c.cache_write_5m_tokens) + " 5m" : "",
+      Number(c.cache_write_1h_tokens || 0) ? fmtInt(c.cache_write_1h_tokens) + " 1h" : ""].filter(Boolean).join(" · ");
+    return `${kv("Cache read", fmtInt(read))}
+        ${kv("Cache write", fmtInt(write) + (ttl ? ` <small>${esc(ttl)}</small>` : ""))}
+        ${kv("Cache cost", usd(Number(c.cache_read_cost_usd || 0) + Number(c.cache_write_cost_usd || 0)))}
+        ${kv("Cache saving", usd(c.cache_saving_usd))}
+        ${c.cache_requested ? kv("Cache points", esc(String(c.cache_requested))) : ""}`;
+  }
   function callBlocks(calls) {
     const llm = calls.filter((c) => c.kind === "llm");
     const tools = calls.filter((c) => c.kind === "tool");
@@ -1285,12 +1351,13 @@
         ${kv("Latency", fmtMs(c.latency_ms))}
         ${kv("Cost", fmtUsd(c.cost_usd))}
         ${kv("Time", esc(shortTime(c.ts)))}
+        ${cacheKvs(c)}
       </div>`;
       const pname = String(c.prompt || "").trim();
       return `<div class="obs-callblk">
         <div class="obs-callttl"><span class="cn">Model call ${i + 1}</span>
           ${pname ? `<span class="obs-mchip"><code>${esc(pname)}</code></span>` : ""}
-          <span class="cmodel">${esc(shortModel(c.label))}</span>${badge(c.status)}</div>
+          <span class="cmodel">${esc(shortModel(c.label))}</span>${badge(c.status)}${cacheBadge(c)}</div>
         ${meta}
         ${seg("sys", "System prompt", c.system_prompt)}
         ${seg("in", "Input", c.user_input)}
@@ -1794,7 +1861,62 @@
     return head + errNote + (body || `<div class="obs-note" style="margin:0">No clusters returned for this window.</div>`);
   }
 
+  // Prompt-caching insights (bff/cache_insights.py), per agent over the date range.
+  // Costs are the recorded ones; a null cost means no published rate: "unknown".
+  function cacheUsd(v) { return v == null ? "unknown" : fmtUsd(v); }
+  function cacheInsightHtml(i) {
+    const who = `<b>${esc(friendlyAgent(i.agentId))}</b>`;
+    const nums = `<span class="obs-mchip">${fmtInt(i.cacheReadTokens)} read</span>
+      <span class="obs-mchip">${fmtInt(i.cacheWriteTokens)} written</span>
+      <span class="obs-mchip">read cost ${cacheUsd(i.cacheReadCostUsd)}</span>
+      <span class="obs-mchip">write cost ${cacheUsd(i.cacheWriteCostUsd)}</span>
+      <span class="obs-mchip">net saving <b>${cacheUsd(i.netSavingUsd)}</b></span>`;
+    const unknown = i.costKnown === false
+      ? `<div class="obs-note warn" style="margin:6px 0 0">Some cache tokens had no published rate, so their cost was not recorded. It is shown as unknown, not estimated.</div>`
+      : "";
+    if (i.kind === "rarely_read") {
+      return `<div class="obs-optcard"><div class="obs-ins-sub-h">Cache written but rarely read · ${who}</div>
+        <div class="obs-note" style="margin:4px 0 6px">Cache read tokens are below cache write tokens over this range, with no net saving recorded.</div>
+        <div class="obs-mchips">${nums}</div>${unknown}
+        <div class="obs-note" style="margin:6px 0 0">Net saving = the cached tokens at the normal input rate, minus what the cache reads and writes cost (recorded per call).
+          To get more reads: run the agent more often within the cache TTL, use a longer TTL where the model allows it, or turn caching off for this agent.</div></div>`;
+    }
+    if (i.kind === "nothing_cached") {
+      const mins = (i.models || []).map((m) => `<span class="obs-mchip">${esc(m.name || shortModel(m.model))}: minimum <b>${
+        m.minTokens ? esc(String(m.minTokens)) : "not listed"}</b> tokens per checkpoint</span>`).join("");
+      const src = i.source ? ` <a href="${esc(i.source)}" target="_blank" rel="noopener noreferrer">Model table source</a>` : "";
+      return `<div class="obs-optcard"><div class="obs-ins-sub-h">Caching requested but nothing cached · ${who}</div>
+        <div class="obs-note" style="margin:4px 0 6px">${fmtInt(i.requestedCalls)} call(s) requested caching, and no tokens were read from or written to the cache.
+          The cached prefix is likely shorter than the model's minimum tokens per cache checkpoint.</div>
+        <div class="obs-mchips">${mins}</div>
+        <div class="obs-note" style="margin:6px 0 0">Make the cached part (system prompt, tools) longer than the minimum, or turn caching off for this agent.${src}</div></div>`;
+    }
+    return `<div class="obs-optcard"><div class="obs-ins-sub-h">Caching is paying off · ${who}</div>
+      <div class="obs-note" style="margin:4px 0 6px">At the normal input rate the cached tokens would have cost more than the cache reads and writes did (recorded per call).</div>
+      <div class="obs-mchips">${nums}</div></div>`;
+  }
+  function cacheInsightsHtml(list) {
+    if (!list || !list.length) {
+      return `<div class="obs-note" style="margin:0">No prompt caching insights for this range: no agent requested caching, or there is nothing to report.</div>`;
+    }
+    return `<div class="obs-optgrid">${list.map(cacheInsightHtml).join("")}</div>`;
+  }
+  async function loadCacheInsights() {
+    const el = $("obsCacheInsBody");
+    if (!el) return;
+    const from = $("obsFrom").value, to = $("obsTo").value;
+    try {
+      const data = await api(`/api/telemetry/aggregate?by=date&from=${from}&to=${to}`);
+      const note = data && data.note ? `<div class="obs-note" style="margin:0 0 6px">${esc(String(data.note))}</div>` : "";
+      setHtml(el, `<div class="obs-note" style="margin:0 0 8px">${esc(from)} to ${esc(to)}</div>` + note
+        + cacheInsightsHtml((data && data.cacheInsights) || []));
+    } catch (e) {
+      setHtml(el, `<div class="obs-note warn" style="margin:0">Couldn't load prompt caching insights: ${esc(e.message)}</div>`);
+    }
+  }
+
   async function loadInsights() {
+    loadCacheInsights();
     const el = $("obsInsightsBody");
     if (!el) return;
     try {

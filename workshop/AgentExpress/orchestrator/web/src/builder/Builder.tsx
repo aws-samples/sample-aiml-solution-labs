@@ -38,6 +38,7 @@ import type { ComponentKind } from "./components";
 import { PaletteGroup, PRIMITIVE_TAB, PrimitivePalette } from "./Primitives";
 import { DesignChat } from "./DesignChat";
 import { ExportSettings, exportSummary } from "./ExportSettings";
+import { NetworkFields } from "./NetworkSettings";
 import { BuildPolicies, policyBlock } from "./Policies";
 import { BuildInterceptors, interceptorsOf } from "./Interceptors";
 import { BuildSuites } from "./Suites";
@@ -1027,13 +1028,23 @@ function Editor({
                 {singleBlocks.map((name) => (
                   <Container key={name} header={<Header variant="h2" description={block(name).$comment?.split(". ")[0]}>{name}</Header>}>
                     <EntryForm name={name} entry={(wf[name] ?? {}) as Entry} issues={issues} pathPrefix={name}
-                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true }, export: { hidden: true } }
+                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true }, export: { hidden: true }, network: { hidden: true } }
                         : name === "authorization" ? SIGN_IN_HIDDEN : undefined}
                       onChange={(e) => setProject(name === "ui" ? setUi(project, e as Record<string, Json>)
                         : { ...project, workflow: { ...wf, [name]: e } })} />
                   </Container>
                 ))}
                 <ExportSettings project={project} setProject={setProject} buildId={server ? build?.id : undefined} notify={notify} />
+                <Container header={<Header variant="h2"
+                  description="Where the shared orchestrator AgentCore Runtime runs: every main and task agent runs in it. A dedicated agent sets its own network in its panel; a remote (a2a) agent runs outside this build.">
+                  Network</Header>}>
+                  <NetworkFields value={(wf.orchestrator as Record<string, unknown> | undefined)?.network} path="orchestrator.network" issues={issues}
+                    onChange={(net) => {
+                      const orch = { ...((wf.orchestrator ?? {}) as Record<string, Json>) };
+                      if (net) orch.network = net as Json; else delete orch.network;
+                      setProject({ ...project, workflow: { ...wf, orchestrator: orch as typeof wf.orchestrator } });
+                    }} />
+                </Container>
               </SpaceBetween>
             ),
           },

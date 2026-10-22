@@ -116,6 +116,17 @@ catalogue per call instead of caching it. `auth` is `none`, `apikey` (sent as `X
 `sigv4` (the Gateway signs with its own role) or `oauth2`. The sample's `docs` tool is the AWS
 Knowledge MCP Server (`https://knowledge-mcp.global.api.aws`), which needs no credentials.
 
+**No server yet? Host it here.** Set `hosted` instead of `endpoint` (Builder: **Host it here** in
+the tool's MCP server panel), and write, upload or link the code (Git, S3 or a private ECR image).
+The deploy runs it on its own AgentCore Runtime and registers it on the Gateway, so its tools show
+up as `<key>___<tool>`. The canvas starts you with a `server.py` and a `requirements.txt` pinned
+to `mcp==1.30.0` and `pydantic==2.13.5`; the Assistant can write them for you too. Details:
+[DEPLOYMENT](DEPLOYMENT.md#hosted-mcp-servers).
+
+```json
+"facts": { "type": "mcp", "description": "Look up reference facts.", "call": "lookup_fact", "arg": "query", "hosted": {} }
+```
+
 ### `openapi`: any REST API
 
 ```json
@@ -164,7 +175,9 @@ publishes several tools.
 - **`code`: written in the build.** **Write it here** on a Lambda tool in the Builder (or ask the
   AgentExpress Assistant). Its files (`handler.py` with `lambda_handler(event, context)`,
   `requirements.txt`, other `*.py`, `events.json` test events) travel with the build and deploy in
-  its account as `ToolLambda-<agentName>-<key>`.
+  its account as `ToolLambda-<agentName>-<key>`. **Where the code comes from** can also be an
+  upload, a Git repository (a private one's token goes in the build's secrets) or Amazon S3,
+  fetched at deploy ([code sources](DEPLOYMENT.md#code-from-files-git-or-s3-code-sources)).
 
 For `code`, grants are a fixed menu: one secret (`SECRET_NAME`), one DynamoDB table read or
 read/write (`TABLE_NAME`), one S3 prefix (`S3_PREFIX`), a VPC, e.g. `"code": { "grants": {
@@ -284,9 +297,21 @@ A build opens on the **AgentExpress Assistant** tab. Describe what you want.
   each with the answer it would assume; `go` builds with those. "Just build it" or "ask me first"
   overrides that.
 - **What it edits.** Agents, steps, tools and their code, skills, interceptors (from the templates),
-  triggers and the named blocks. It reuses your library items as they are, and imports from your
-  AWS Agent Registry when asked. It cannot deploy or publish; you do that from the Deployment
-  panel.
+  triggers and the named blocks. It also turns prompt caching on or off per agent, sets a
+  Runtime's network, writes a hosted MCP server, and points code at Git or S3. It reuses your
+  library items as they are, and imports from your AWS Agent Registry when asked. It cannot deploy
+  or publish; you do that from the Deployment panel.
+- **Links.** Give it any public page: `build this based on <url>`. It reads the page before it
+  changes anything (text, title and links; scripts are not run). It refuses private or internal
+  addresses and pages that need a sign-in, waits about 10 seconds per page, keeps the first
+  40,000 characters, and reads up to 5 pages per message. Page text is treated as untrusted data,
+  never as instructions. PDFs are not read from a link yet.
+- **Review changes.** Off, Auto (the default) or Always, under the message box; your choice is
+  remembered in this browser. A second model checks a change before it is saved, once, and only
+  advises: the Assistant takes the notes that serve your request. Auto reviews larger changes: a
+  new build, agents, stages or tools added or removed, code, security settings, or more than 8
+  items. Each reply says how it went: *Reviewed: no issues*, *Reviewed: N suggestions applied* (or
+  *noted*), *Review skipped (small change)* or *Review unavailable* (the change is saved anyway).
 - **What you see.** Replies stream (Enter sends, Shift+Enter adds a line); changed agents are
   highlighted. **Defaults used** lists what it filled in; **Needs your input** lists what only you
   can give (endpoint, ARN, key), and the deploy waits for them. Secrets go in the **Secrets** card,
@@ -635,6 +660,37 @@ checker flags, before deploy:
 - an unconditional `forbid`, which hides the tool from agents (an agent whose tools are all hidden
   fails the run with the reason). Who may start runs, approve
 gates, re-run or deploy is the `authorization` block; see [DEPLOYMENT.md](DEPLOYMENT.md).
+
+**Prompt caching.** Per agent (`main` or `dedicated`), in the agent panel's **Prompt caching**
+section or by asking the Assistant: cache the system prompt, the tool definitions and the
+conversation so far, so a repeated prefix is billed at the cache-read rate.
+
+```json
+"triage": { "promptCache": { "system": true, "ttl": "5m" } }
+```
+
+Each model allows its own fields, TTLs and a minimum of tokens per checkpoint (Claude: all three;
+Amazon Nova: system and messages; the listed OpenAI models, GPT-5.6 Sol, Terra, Luna, GPT-6 Astra
+and GPT-6.1 Sol: the system prompt only). The panel shows the rules for the agent's model and the
+checker flags what it cannot do. A cache write can cost more than plain input, so caching pays
+when the same prefix comes back within the TTL.
+Observability shows cache reads, writes, cost and saving per call and per run, and the
+**Insights** tab says, per agent, whether caching is paying off, rarely read, or caching nothing
+(usually a prefix under the model's minimum). A model with no published rate is priced at an
+estimated fallback rate (`rates_known=false`); cache tokens with no published rate are left out of
+the cost and shown as unknown, never guessed. Rules:
+[WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#promptcache-prompt-caching).
+
+**Your VPC.** Runtimes are `PUBLIC` unless you say otherwise. **Settings → Network** (or
+`orchestrator.network`) moves the orchestrator Runtime, and with it every `main` and task agent;
+a `dedicated` agent's panel has its own **Network** section (`agents.<id>.network`), and so does a
+hosted MCP server. Harness agents use their Harness settings, and remote (`a2a`) agents run on
+their owner's network. What the VPC needs:
+[DEPLOYMENT](DEPLOYMENT.md#running-agentcore-runtimes-in-your-vpc).
+
+```json
+"orchestrator": { "network": { "mode": "VPC", "subnetIds": ["subnet-0123456789abcdef0"], "securityGroupIds": ["sg-0123456789abcdef0"] } }
+```
 
 **Run Assistant.** The in-app assistant (titled from `ui.assistantTitle`, *Assistant* when unset)
 is on unless `orchestrator.chatbot.enabled` is `false`, so a Builder build gets one by default. It

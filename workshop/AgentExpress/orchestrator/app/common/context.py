@@ -151,6 +151,8 @@ class AgentContext:
         # `vision`: the earlier agents whose images this agent's model reads. Loaded
         # once per run of the agent, on its first model call (see _vision_images).
         self.vision = dict(getattr(agent, "vision", None) or {})
+        # `promptCache`: which parts of this agent's requests carry a Bedrock cache point.
+        self.prompt_cache = dict(getattr(agent, "prompt_cache", None) or {})
         self._seen_images: list[dict] | None = None
         # `attachments`: this agent's model reads the files the run was started with.
         self.reads_attachments = getattr(agent, "attachments", False) is True
@@ -247,12 +249,16 @@ class AgentContext:
             await self.log(f"config v{getattr(self, 'config_version', 0)}: this agent's live prompt was "
                            f"not applied, because its code does not pass its own system_prompt to "
                            f"ctx.llm; it ran with the prompt in its code")
+        recall = ""
         if self.recalled_memory:
-            system = system + (
-                f"\n\n{RECALL_HEADER}\n"
+            recall = (
+                f"{RECALL_HEADER}\n"
                 + "\n---\n".join(self.recalled_memory)
                 + f"\n({RECALL_CAVEAT})"
             )
+        cache_system = (getattr(self, "prompt_cache", None) or {}).get("system") is True
+        if recall and not cache_system:
+            system = f"{system}\n\n{recall}"
         # Skills: in full when there is no model-driven tool turn to open them in;
         # otherwise the ones it opened, and the rest by name (app/common/skills.py).
         if getattr(self, "skills", None):
@@ -263,7 +269,15 @@ class AgentContext:
                 system = f"{system}\n\n{block}"
         # The model has no clock: without this, every deadline and timeline it writes is
         # anchored to its training cut-off (a 2026 launch plan dated 2024).
-        system = f"{system}\n\n{today_line()}"
+        if cache_system:
+            # promptCache.system: the cache point goes after the part that repeats (the
+            # instructions and skills); recalled memory and the date, which change per run
+            # and per day, follow it (app/common/prompt_cache.SystemPrompt).
+            from app.common import prompt_cache
+            system = prompt_cache.SystemPrompt(
+                system, "\n\n".join(x for x in (recall, today_line()) if x))
+        else:
+            system = f"{system}\n\n{today_line()}"
         call = name or self.agent_id
         budget = max_tokens or self.max_tokens
         seen = await self._vision_images()
@@ -284,7 +298,9 @@ class AgentContext:
             self, chain, lambda m: run_llm(
                 call, system, user, model=m, temperature=self.temperature,
                 max_tokens=budget, top_p=getattr(self, "top_p", None),
-                stop_sequences=getattr(self, "stop_sequences", None), images=seen, files=files))))
+                stop_sequences=getattr(self, "stop_sequences", None), images=seen, files=files,
+                # Only when set, so a call without promptCache is exactly today's call.
+                **({"prompt_cache": self.prompt_cache} if getattr(self, "prompt_cache", None) else {})))))
         if truncated:
             # SAY SO. The response is a prefix: it stopped because it ran out of room,
             # not because the model was done, so whatever the agent builds from it is

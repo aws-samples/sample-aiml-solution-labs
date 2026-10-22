@@ -132,6 +132,9 @@ def model(env, monkeypatch):
         monkeypatch.setattr(env.handler.designer, "_bedrock", s)
         monkeypatch.setattr(env.handler.designer, "_model_ids",
                             lambda: ["us.anthropic.claude-haiku-4-5-20251001-v1:0"])
+        # Review changes defaults to Auto: its reviewer is faked too (tests/test_designer_review.py).
+        monkeypatch.setattr(env.handler.designer._review, "call_reviewer",
+                            lambda text: {"verdict": "ok", "notes": []})
         return s
     return use
 
@@ -493,6 +496,35 @@ def test_the_spec_the_model_reads_is_every_key_the_framework_has(env):
         for key in spec["keys"]:
             assert f"`{key}`" in text, f"{block}.{key} is missing from the designer's spec"
     assert json.dumps(designer.TOOLS)                        # a valid Converse toolConfig
+
+
+def test_the_spec_says_what_each_model_allows_in_prompt_cache(env):
+    """Live test 2026-10-22: asked to cache an OpenAI agent, the assistant said only Claude and
+    Nova support caching (no word of implicit caching), and it could not say whether a model
+    takes a 1h ttl. It now reads the per-model rows of the AWS table."""
+    text = env.handler.designer.system_prompt()[0]["text"]
+    assert "### Prompt caching by model" in text
+    assert "amazon.nova-pro-v1:0: fields system/messages; ttl 5m (omit ttl); min 1K" in text
+    assert "anthropic.claude-haiku-4-5-20251001-v1:0: fields tools/system/messages; ttl 5m/1h; min 4,096" in text
+    assert "Every `openai.*` model: OpenAI models cache implicitly" in text
+    assert ("openai.gpt-5.6-sol: fields system; ttl 30m; min 1,024 tokens per checkpoint; "
+            "InvokeModel") in text
+    assert "openai.gpt-6-sol:" not in text
+
+
+def test_the_spec_says_how_to_put_a_runtime_in_a_vpc(env):
+    """"Run the dedicated agent in my VPC" in chat: the assistant reads both network keys,
+    their whole shape, who each applies to, and the allowed modes."""
+    text = env.handler.designer.system_prompt()[0]["text"]
+    agent_line = next(l for l in text.splitlines() if l.startswith("  - `network` (object; for dedicated)"))
+    orch_line = next(l for l in text.splitlines() if l.startswith("  - `network` (object)"))
+    for line in (agent_line, orch_line):
+        assert not line.endswith("..."), line
+        for part in ('"mode": "VPC"', '"subnetIds"', '"securityGroupIds"', '{"mode": "PUBLIC"}', "Omitted: PUBLIC"):
+            assert part in line, (part, line)
+    assert "main and task agent" in orch_line
+    assert "Not inherited from orchestrator.network" in agent_line
+    assert '  - networkModes: "PUBLIC", "VPC"' in text
 
 
 def test_a_thin_brief_is_asked_about_before_it_is_drafted(env):

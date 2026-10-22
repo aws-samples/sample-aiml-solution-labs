@@ -24,6 +24,7 @@ import types
 from pathlib import Path
 
 import boto3
+import botocore.exceptions
 import pytest
 
 moto = pytest.importorskip("moto")
@@ -636,7 +637,7 @@ def test_a_builds_secrets_are_write_only_and_go_with_the_build(env):
     status, names = call(env, "PUT /api/builds/{id}/secrets", params={"id": "pclaims01"},
                          body={"toolApiKeys": {"billing": "sk-live-123"}, "a2aTokens": {"partner": "tok"}})
     assert status == 200 and names == {"toolApiKeys": ["billing"], "a2aTokens": ["partner"], "identitySecrets": [],
-                                  "exportHeaders": []}
+                                  "exportHeaders": [], "gitTokens": []}
     status, got = call(env, "GET /api/builds/{id}/secrets", params={"id": "pclaims01"})
     assert got == names and "sk-live-123" not in json.dumps(got)   # names out, never values
     assert call(env, "GET /api/builds/{id}/secrets", params={"id": "pclaims01"}, sub="u2")[0] == 404
@@ -1503,9 +1504,21 @@ def test_a_failed_first_create_is_deleted_before_the_retry_and_nothing_else_is(r
         assert cfn.deleted == deletes, states
 
 
-def _late_log_world(resources):
-    """A session whose CloudFormation reports `resources` and whose S3 records deletes."""
-    s3_calls = {"deleted": [], "listed": []}
+def _late_log_world(resources, runtimes=None):
+    """A session whose CloudFormation reports `resources` and whose S3 records deletes.
+    `runtimes` maps a runtime id to what GetAgentRuntime answers: an error code it raises,
+    or None for "it exists"; ids not in it exist."""
+    s3_calls = {"deleted": [], "listed": [], "got": []}
+    runtimes = runtimes or {}
+
+    class Control:
+        def get_agent_runtime(self, agentRuntimeId):
+            s3_calls["got"].append(agentRuntimeId)
+            code = runtimes.get(agentRuntimeId)
+            if code:
+                raise botocore.exceptions.ClientError(
+                    {"Error": {"Code": code, "Message": "x"}}, "GetAgentRuntime")
+            return {"agentRuntimeId": agentRuntimeId, "status": "READY"}
 
     class StackPages:
         def paginate(self, StackName):
@@ -1531,7 +1544,8 @@ def _late_log_world(resources):
         def delete_objects(self, Bucket, Delete):
             s3_calls["deleted"].append((Bucket, len(Delete["Objects"])))
 
-    session = types.SimpleNamespace(client=lambda name, **_: Cfn() if name == "cloudformation" else S3())
+    session = types.SimpleNamespace(client=lambda name, **_: Cfn() if name == "cloudformation"
+                                    else Control() if name == "bedrock-agentcore-control" else S3())
     return session, s3_calls
 
 
@@ -1661,7 +1675,8 @@ def test_any_other_destroy_failure_is_reported_as_it_is_and_nothing_is_emptied(
     assert ran.count(["npx", "cdk", "destroy"]) == 1 and s3["deleted"] == [] and s3["listed"] == []
     out = capsys.readouterr().out
     assert why in out
-    assert "no UiLogsBucket bucket to empty and no timed-out AgentCore Runtime in ax-8686bcef-stack" in out
+    assert ("no UiLogsBucket bucket to empty and no timed-out or already-deleted AgentCore Runtime "
+            "in ax-8686bcef-stack") in out
 
 
 def test_a_runtime_whose_delete_timed_out_is_destroyed_again_after_a_wait(runner, monkeypatch, capsys, waits):
@@ -1703,7 +1718,48 @@ def test_a_runtime_failure_that_is_not_a_timeout_is_reported_as_it_is(runner, mo
         runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
     assert ran.count(["npx", "cdk", "destroy"]) == 1 and waits == []
     out = capsys.readouterr().out
-    assert "no timed-out AgentCore Runtime in ax-8686bcef-stack" in out and "timed out while deleting (" not in out
+    assert "no timed-out or already-deleted AgentCore Runtime in ax-8686bcef-stack" in out
+    assert "timed out while deleting (" not in out
+
+
+#: As seen live (runtime-vpc cdk test): after a NotStabilized retry, CloudFormation failed a
+#: Runtime AgentCore had already deleted with AccessDenied.
+DENIED = {**RUNTIME, "PhysicalResourceId": "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/"
+                                          "ax_8686bcef_fact_checker-AbCdEf1234",
+          "ResourceStatusReason": "Access denied for operation 'AWS::BedrockAgentCore::Runtime'. "
+                                  "(HandlerErrorCode: AccessDenied)"}
+
+
+def test_an_access_denied_runtime_that_no_longer_exists_is_destroyed_again(runner, monkeypatch, capsys, waits):
+    session, calls = _late_log_world([DENIED], {"ax_8686bcef_fact_checker-AbCdEf1234": "ResourceNotFoundException"})
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 1)
+    assert runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"}) == {}
+    assert ran.count(["npx", "cdk", "destroy"]) == 2 and waits == []
+    assert calls["got"] == ["ax_8686bcef_fact_checker-AbCdEf1234"]     # the id, from the ARN
+    assert "AgentCore no longer has it" in capsys.readouterr().out
+
+
+def test_an_access_denied_runtime_that_keeps_failing_stops_after_the_shared_budget(runner, monkeypatch, waits):
+    session, calls = _late_log_world([DENIED], {"ax_8686bcef_fact_checker-AbCdEf1234": "ResourceNotFoundException"})
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 99)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
+    assert ran.count(["npx", "cdk", "destroy"]) == 1 + runner.DESTROY_RETRIES
+    assert len(calls["got"]) == runner.DESTROY_RETRIES
+
+
+@pytest.mark.parametrize("answer", [None, "AccessDeniedException", "ThrottlingException"],
+                         ids=["still-exists", "read-denied", "read-failed"])
+def test_an_access_denied_runtime_not_confirmed_gone_is_reported_as_it_is(runner, monkeypatch, capsys, waits, answer):
+    session, calls = _late_log_world([DENIED], {"ax_8686bcef_fact_checker-AbCdEf1234": answer})
+    monkeypatch.setattr(runner, "local_session", lambda: session)
+    ran = _failing_destroys(runner, monkeypatch, 99)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_cdk("destroy", "ax_8686bcef", False, {"AWS_REGION": "us-east-1"})
+    assert ran.count(["npx", "cdk", "destroy"]) == 1 and len(calls["got"]) == 1
+    assert "no timed-out or already-deleted AgentCore Runtime" in capsys.readouterr().out
 
 
 def test_a_late_log_and_a_runtime_timeout_in_the_same_failure_are_both_handled_each_attempt(
@@ -1765,6 +1821,35 @@ def test_a_terraform_runtime_timeout_rebuilds_the_ui_step_and_destroys_again(
     assert 'AgentCore Runtime awscc_bedrockagentcore_runtime.subagent["fact_checker"] timed out' in out
 
 
+#: The same timeout as captured live (hosted MCP tf test, awscc_bedrockagentcore_runtime.
+#: hosted_mcp["facts"]): Cloud Control's message wrapped over lines and no `with <address>,` line.
+TF_RUNTIME_TIMEOUT_NO_ADDRESS = """\
+aws_s3_bucket.ui_logs: Destruction complete after 0s
+Error: AWS SDK Go Service Operation Unsuccessful
+Calling Cloud Control API service DeleteResource operation returned: waiter
+state transitioned to FAILED. StatusMessage: Request timed out while deleting
+AWS::BedrockAgentCore::Runtime. ErrorCode: NotStabilized
+"""
+
+
+def test_a_terraform_runtime_timeout_with_no_address_in_the_error_is_retried_too(
+        runner, monkeypatch, tmp_path, capsys, waits):
+    assert runner.timed_out_tf_runtimes(TF_RUNTIME_TIMEOUT_NO_ADDRESS) == [runner.TF_UNNAMED_RUNTIME]
+    assert runner.timed_out_tf_runtimes(TF_RUNTIME_TIMEOUT + TF_RUNTIME_TIMEOUT_NO_ADDRESS) == [
+        'awscc_bedrockagentcore_runtime.subagent["fact_checker"]', runner.TF_UNNAMED_RUNTIME]
+    ran = _terraform_destroys(runner, monkeypatch, tmp_path, 1, TF_RUNTIME_TIMEOUT_NO_ADDRESS)
+    assert runner.deploy_terraform("destroy", "ax_12345678", False, TF_ENV) == {}
+    assert ran == ["init", "ui", "destroy", "ui", "destroy"]
+    assert waits == [runner.RUNTIME_DELETE_PAUSE]
+    assert f"AgentCore Runtime {runner.TF_UNNAMED_RUNTIME} timed out" in capsys.readouterr().out
+    # The same attempt budget as an error with an address.
+    (tmp_path / "again").mkdir()
+    ran = _terraform_destroys(runner, monkeypatch, tmp_path / "again", 99, TF_RUNTIME_TIMEOUT_NO_ADDRESS)
+    with pytest.raises(runner.StepFailed):
+        runner.deploy_terraform("destroy", "ax_12345678", False, TF_ENV)
+    assert ran.count("destroy") == 1 + runner.DESTROY_RETRIES
+
+
 def test_a_terraform_runtime_that_keeps_timing_out_stops_after_the_shared_budget(
         runner, monkeypatch, tmp_path, waits):
     ran = _terraform_destroys(runner, monkeypatch, tmp_path, 99)
@@ -1781,7 +1866,11 @@ def test_a_terraform_runtime_that_keeps_timing_out_stops_after_the_shared_budget
     # A timeout on another resource, and a Runtime that failed for another reason.
     ("Error: timed out\n\n  with aws_lambda_function.bff,\n\n"
      "Error: Access denied\n\n  with awscc_bedrockagentcore_runtime.orchestrator,\n"),
-], ids=["not-a-timeout", "not-a-runtime", "two-other-errors"])
+    # No address: a timeout that names another type, and a Runtime that failed for another reason.
+    TF_RUNTIME_TIMEOUT_NO_ADDRESS.replace("AWS::BedrockAgentCore::Runtime", "AWS::BedrockAgentCore::Memory"),
+    TF_RUNTIME_TIMEOUT_NO_ADDRESS.replace("Request timed out while deleting", "Access denied deleting")
+                                 .replace("NotStabilized", "AccessDenied"),
+], ids=["not-a-timeout", "not-a-runtime", "two-other-errors", "no-address-not-a-runtime", "no-address-not-a-timeout"])
 def test_any_other_terraform_destroy_failure_is_reported_as_it_is(runner, monkeypatch, tmp_path, waits, output):
     ran = _terraform_destroys(runner, monkeypatch, tmp_path, 99, output)
     with pytest.raises(runner.StepFailed):

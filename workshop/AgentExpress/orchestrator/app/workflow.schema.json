@@ -82,6 +82,10 @@
                 "type": "string",
                 "description": "kind \"code\": the script, at most 50,000 bytes. It finds the request in in/request.txt, earlier steps' outputs in in/outputs.json and the run's files in in/; what it prints is the step's output (JSON when it parses); files it writes to out/ are kept with the run."
               },
+              "codeSource": {
+                "type": "object",
+                "description": "kind \"code\", instead of `code`: where the script comes from. {\"git\": {\"url\": \"https://...\", \"ref\": \"<branch|tag|commit>\", \"path\": \"scripts/run.py\", \"token\": \"<gitTokens build secret name>\"}} or {\"s3\": {\"uri\": \"s3://bucket/run.py-prefix/\" or \"s3://bucket/key.zip\", \"path\": \"run.py\"}}. The deployer reads that one file (at most 50,000 bytes) at deploy time and deploys it as `code`."
+              },
               "file": {
                 "type": "string",
                 "description": "kind \"extract\": the name of the run's file to read. Omit to read every PDF, PNG and JPEG the run brought."
@@ -319,6 +323,29 @@
             "type": "integer",
             "default": 4000
           },
+          "promptCache": {
+            "description": "Bedrock prompt caching, e.g. {\"system\": true, \"ttl\": \"5m\"}: system/tools/messages booleans, ttl \"5m\"|\"1h\"|\"30m\". Off unless set. Claude: all three, 1h on 4.5+; Nova: system+messages, 5m; OpenAI GPT-5.6 Sol/Terra/Luna, GPT-6 Astra, GPT-6.1 Sol: system only on single calls (InvokeModel, explicit breakpoint), 30m, min 1,024 tokens; others: none. Min tokens per checkpoint: Haiku 4.5 4,096, Claude 5.x 512. Counted cumulatively over tools, system and messages; below it the call still succeeds, uncached. The per-model rules are app/vocabulary.json promptCacheModels, copied from https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html; a model not in it is called without cache points (a warning). A cache write can cost more than plain input, so it pays only when the same prefix is reused within the TTL.\n\nRead by: registry.py -> agent.prompt_cache -> app/common/prompt_cache.py plan() -> app/common/llm.py run_llm / run_llm_tools",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "system": {
+                "type": "boolean",
+                "description": "Cache the agent's system prompt (its instructions and the skills loaded into them). Recalled memory and today's date follow the cache point."
+              },
+              "tools": {
+                "type": "boolean",
+                "description": "Cache the tool definitions the agent offers its model (toolMode \"model\"). Claude only: Amazon Nova caches system and messages only."
+              },
+              "messages": {
+                "type": "boolean",
+                "description": "Cache the conversation so far in the agent's tool-calling turns (toolMode \"model\")."
+              },
+              "ttl": {
+                "type": "string",
+                "description": "\"5m\" (default) or \"1h\". 1h only on models the AWS table lists with it (most Claude 4.5+ models); Nova and older Claude models cache for 5 minutes only. OpenAI GPT-5.6+ (system prompt only, through InvokeModel): \"30m\" (their default and only TTL; leave it out or set \"30m\")."
+              }
+            }
+          },
           "source": {
             "description": "Reach the A2A server this framework deploys for you, instead of an external URL. The deploy injects its endpoint, so there is nothing to commit. Exclusive with agentCard.\n\nRead by: registry.py A2A_SOURCES; a2a.tf / orchestrator-stack.ts inject A2A_ENDPOINTS\n\nAllowed values (a2aSources in app/vocabulary.json): 'a2a_lambda'",
             "type": "string",
@@ -436,6 +463,31 @@
               "timeout": {
                 "type": "string",
                 "description": "With no answer by then (<n>m, <n>h or <n>d, at most 30d), the question goes unanswered and the agent carries on."
+              }
+            }
+          },
+          "network": {
+            "description": "Runtime \"dedicated\" only: this agent's own AgentCore Runtime network. {\"mode\": \"VPC\", \"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]} (1-16 each) or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC. Not inherited from orchestrator.network.\n\nRead by: cdk/lib/runtime-network.ts (orchestrator-stack.ts Subagent-<id>), terraform/subagent_runtimes.tf; bff/network_check.py. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "description": "\"PUBLIC\" or \"VPC\" (the Runtime's networkMode). Required."
+              },
+              "subnetIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "mode \"VPC\" only: 1-16 subnet ids (subnet-...), in Availability Zones AgentCore supports. Two private subnets in different AZs are recommended."
+              },
+              "securityGroupIds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "mode \"VPC\" only: 1-16 security group ids (sg-...). Their outbound rules must allow what the agent calls."
               }
             }
           },
@@ -867,6 +919,29 @@
                   "description": "The name of this agent's deliverable, e.g. \"claim-decision\". Names the asset type, is injected into the task prompt, and is what the framework stamps as `assetType` on the asset.\n\nRead by: nodes.py task prompt; a2a_agent.py _as_asset (the envelope on a remote reply)",
                   "type": "string"
                 },
+                "promptCache": {
+                  "description": "Bedrock prompt caching, e.g. {\"system\": true, \"ttl\": \"5m\"}: system/tools/messages booleans, ttl \"5m\"|\"1h\"|\"30m\". Off unless set. Claude: all three, 1h on 4.5+; Nova: system+messages, 5m; OpenAI GPT-5.6 Sol/Terra/Luna, GPT-6 Astra, GPT-6.1 Sol: system only on single calls (InvokeModel, explicit breakpoint), 30m, min 1,024 tokens; others: none. Min tokens per checkpoint: Haiku 4.5 4,096, Claude 5.x 512. Counted cumulatively over tools, system and messages; below it the call still succeeds, uncached. The per-model rules are app/vocabulary.json promptCacheModels, copied from https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html; a model not in it is called without cache points (a warning). A cache write can cost more than plain input, so it pays only when the same prefix is reused within the TTL.\n\nRead by: registry.py -> agent.prompt_cache -> app/common/prompt_cache.py plan() -> app/common/llm.py run_llm / run_llm_tools",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "system": {
+                      "type": "boolean",
+                      "description": "Cache the agent's system prompt (its instructions and the skills loaded into them). Recalled memory and today's date follow the cache point."
+                    },
+                    "tools": {
+                      "type": "boolean",
+                      "description": "Cache the tool definitions the agent offers its model (toolMode \"model\"). Claude only: Amazon Nova caches system and messages only."
+                    },
+                    "messages": {
+                      "type": "boolean",
+                      "description": "Cache the conversation so far in the agent's tool-calling turns (toolMode \"model\")."
+                    },
+                    "ttl": {
+                      "type": "string",
+                      "description": "\"5m\" (default) or \"1h\". 1h only on models the AWS table lists with it (most Claude 4.5+ models); Nova and older Claude models cache for 5 minutes only. OpenAI GPT-5.6+ (system prompt only, through InvokeModel): \"30m\" (their default and only TTL; leave it out or set \"30m\")."
+                    }
+                  }
+                },
                 "runtime": {
                   "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
                   "type": "string",
@@ -1188,6 +1263,31 @@
                   "description": "Display name, shown on the diagram, in the timeline and on a review gate.\n\nRead by: registry.py -> agent.name; bff/workflow.py; the UI node title",
                   "type": "string"
                 },
+                "network": {
+                  "description": "Runtime \"dedicated\" only: this agent's own AgentCore Runtime network. {\"mode\": \"VPC\", \"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]} (1-16 each) or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC. Not inherited from orchestrator.network.\n\nRead by: cdk/lib/runtime-network.ts (orchestrator-stack.ts Subagent-<id>), terraform/subagent_runtimes.tf; bff/network_check.py. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "description": "\"PUBLIC\" or \"VPC\" (the Runtime's networkMode). Required."
+                    },
+                    "subnetIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "mode \"VPC\" only: 1-16 subnet ids (subnet-...), in Availability Zones AgentCore supports. Two private subnets in different AZs are recommended."
+                    },
+                    "securityGroupIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "mode \"VPC\" only: 1-16 security group ids (sg-...). Their outbound rules must allow what the agent calls."
+                    }
+                  }
+                },
                 "output": {
                   "description": "What this agent produces. \"text\" is a JSON asset from its model. \"image\" makes it an image agent: its model writes an image brief (prompt, negative prompt, caption) from the request and the upstream outputs, and an image model renders it; the asset carries the brief and the stored images, which a reviewer sees at the gate. Images are kept in the deployment's own assets bucket and deleted with it.\n\nRead by: scaffold.py apply -> agent.py (image template); registry.py -> agent.output\n\nDefault: \"text\"",
                   "type": "string",
@@ -1200,6 +1300,29 @@
                 "produces": {
                   "description": "The name of this agent's deliverable, e.g. \"claim-decision\". Names the asset type, is injected into the task prompt, and is what the framework stamps as `assetType` on the asset.\n\nRead by: nodes.py task prompt; a2a_agent.py _as_asset (the envelope on a remote reply)",
                   "type": "string"
+                },
+                "promptCache": {
+                  "description": "Bedrock prompt caching, e.g. {\"system\": true, \"ttl\": \"5m\"}: system/tools/messages booleans, ttl \"5m\"|\"1h\"|\"30m\". Off unless set. Claude: all three, 1h on 4.5+; Nova: system+messages, 5m; OpenAI GPT-5.6 Sol/Terra/Luna, GPT-6 Astra, GPT-6.1 Sol: system only on single calls (InvokeModel, explicit breakpoint), 30m, min 1,024 tokens; others: none. Min tokens per checkpoint: Haiku 4.5 4,096, Claude 5.x 512. Counted cumulatively over tools, system and messages; below it the call still succeeds, uncached. The per-model rules are app/vocabulary.json promptCacheModels, copied from https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html; a model not in it is called without cache points (a warning). A cache write can cost more than plain input, so it pays only when the same prefix is reused within the TTL.\n\nRead by: registry.py -> agent.prompt_cache -> app/common/prompt_cache.py plan() -> app/common/llm.py run_llm / run_llm_tools",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "system": {
+                      "type": "boolean",
+                      "description": "Cache the agent's system prompt (its instructions and the skills loaded into them). Recalled memory and today's date follow the cache point."
+                    },
+                    "tools": {
+                      "type": "boolean",
+                      "description": "Cache the tool definitions the agent offers its model (toolMode \"model\"). Claude only: Amazon Nova caches system and messages only."
+                    },
+                    "messages": {
+                      "type": "boolean",
+                      "description": "Cache the conversation so far in the agent's tool-calling turns (toolMode \"model\")."
+                    },
+                    "ttl": {
+                      "type": "string",
+                      "description": "\"5m\" (default) or \"1h\". 1h only on models the AWS table lists with it (most Claude 4.5+ models); Nova and older Claude models cache for 5 minutes only. OpenAI GPT-5.6+ (system prompt only, through InvokeModel): \"30m\" (their default and only TTL; leave it out or set \"30m\")."
+                    }
+                  }
                 },
                 "runtime": {
                   "description": "Where the step runs. \"main\" = in-process; \"dedicated\" = its own AgentCore Runtime; \"a2a\" = an agent you do NOT operate, reached over the Agent2Agent protocol; \"task\" = a step with no model that calls a tool, runs code, reads a document or writes a file (its `task` block), in-process; \"harness\" = a managed AgentCore Harness built from its `instructions` and model, with no code of yours. Defaults to \"main\".\n\nRead by: registry.py, subagent_runtimes.tf / orchestrator-stack.ts; the UI chip\n\nAllowed values (runtimes in app/vocabulary.json): 'main', 'dedicated', 'a2a', 'task', 'harness'\n\nDefault: \"main\"",
@@ -1705,6 +1828,10 @@
                     "code": {
                       "type": "string",
                       "description": "kind \"code\": the script, at most 50,000 bytes. It finds the request in in/request.txt, earlier steps' outputs in in/outputs.json and the run's files in in/; what it prints is the step's output (JSON when it parses); files it writes to out/ are kept with the run."
+                    },
+                    "codeSource": {
+                      "type": "object",
+                      "description": "kind \"code\", instead of `code`: where the script comes from. {\"git\": {\"url\": \"https://...\", \"ref\": \"<branch|tag|commit>\", \"path\": \"scripts/run.py\", \"token\": \"<gitTokens build secret name>\"}} or {\"s3\": {\"uri\": \"s3://bucket/run.py-prefix/\" or \"s3://bucket/key.zip\", \"path\": \"run.py\"}}. The deployer reads that one file (at most 50,000 bytes) at deploy time and deploys it as `code`."
                     },
                     "file": {
                       "type": "string",
@@ -2364,8 +2491,23 @@
             }
           },
           "endpoint": {
-            "description": "The remote MCP server's Streamable HTTP URL.\n\nRead by: tools.tf, tool-plane.ts",
+            "description": "The remote MCP server's Streamable HTTP URL. Set this or `hosted`.\n\nRead by: tools.tf, tool-plane.ts",
             "type": "string"
+          },
+          "hosted": {
+            "description": "An MCP server AgentExpress runs on its own AgentCore Runtime (protocol MCP, an ARM64 container serving streamable HTTP on 0.0.0.0:8000/mcp) and registers on the build's Gateway, reached with SigV4 as the Gateway role. Set this instead of `endpoint`; `auth` is sigv4.\n\nRead by: cdk/lib/hosted-mcp.ts, terraform/tools_hosted_mcp.tf, deployer/runner.py prepare_hosted_mcp. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp.html",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "object",
+                "description": "Where the server's code comes from: {\"git\": {...}}, {\"s3\": {...}} or {\"image\": \"<private ECR image URI>\"}. Omitted: the files written in the build (server.py, requirements.txt, optional Dockerfile)."
+              },
+              "network": {
+                "type": "object",
+                "description": "The server Runtime's network: {\"mode\": \"VPC\", \"subnetIds\": [...], \"securityGroupIds\": [...]} or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC."
+              }
+            }
           },
           "schemaS3Uri": {
             "description": "s3:// URI of an OpenAPI schema YOU already host. The framework reads nothing and uploads nothing; it points the Gateway target at this object and grants the Gateway role GetObject on it. Exclusive with source. For type=\"smithy\": the Smithy JSON model, same rules.\n\nRead by: tools.tf, tool-plane.ts",
@@ -2403,6 +2545,10 @@
               "environment": {
                 "type": "object",
                 "description": "Plain (non-secret) environment variables."
+              },
+              "codeSource": {
+                "type": "object",
+                "description": "Where the function's files come from when they are not written or uploaded in the build: {\"git\": {\"url\": \"https://...\", \"ref\": \"<branch|tag|commit>\", \"path\": \"dir\", \"token\": \"<gitTokens build secret name>\"}} or {\"s3\": {\"uri\": \"s3://bucket/prefix/\" or \"s3://bucket/key.zip\", \"path\": \"dir\"}}. The deployer fetches it at deploy time into app/tools/_code/<key>/ (handler.py at its root). Absent: the build's own files (written or uploaded)."
               }
             }
           },
@@ -2722,6 +2868,35 @@
                 }
               ],
               "$comment": "One of two has to say where the Smithy model is: schemaS3Uri = a JSON model you already host in S3; schema = the model itself (Smithy JSON AST), inline. None leaves the target with no operations; both is ambiguous."
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "mcp"
+                  ]
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "required": [
+                    "endpoint"
+                  ]
+                },
+                {
+                  "required": [
+                    "hosted"
+                  ]
+                }
+              ],
+              "$comment": "endpoint = an MCP server you already run, by its URL. hosted = one AgentExpress runs on its own AgentCore Runtime, whose URL it derives."
             }
           },
           {
@@ -3251,8 +3426,23 @@
                   "type": "string"
                 },
                 "endpoint": {
-                  "description": "The remote MCP server's Streamable HTTP URL.\n\nRead by: tools.tf, tool-plane.ts",
+                  "description": "The remote MCP server's Streamable HTTP URL. Set this or `hosted`.\n\nRead by: tools.tf, tool-plane.ts",
                   "type": "string"
+                },
+                "hosted": {
+                  "description": "An MCP server AgentExpress runs on its own AgentCore Runtime (protocol MCP, an ARM64 container serving streamable HTTP on 0.0.0.0:8000/mcp) and registers on the build's Gateway, reached with SigV4 as the Gateway role. Set this instead of `endpoint`; `auth` is sigv4.\n\nRead by: cdk/lib/hosted-mcp.ts, terraform/tools_hosted_mcp.tf, deployer/runner.py prepare_hosted_mcp. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp.html",
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "type": "object",
+                      "description": "Where the server's code comes from: {\"git\": {...}}, {\"s3\": {...}} or {\"image\": \"<private ECR image URI>\"}. Omitted: the files written in the build (server.py, requirements.txt, optional Dockerfile)."
+                    },
+                    "network": {
+                      "type": "object",
+                      "description": "The server Runtime's network: {\"mode\": \"VPC\", \"subnetIds\": [...], \"securityGroupIds\": [...]} or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC."
+                    }
+                  }
                 },
                 "identity": {
                   "description": "Authenticate to this tool with an identity from `identities`, instead of `auth` + `oauth` here: an oauth2 identity makes it auth \"oauth2\" with that client (mcp and openapi), an apikey identity auth \"apikey\" with that key. The secret is the identity's, set once in the build's secrets.\n\nRead by: tools.tf / tool-plane.ts (the tool inherits the identity's auth); validate_build",
@@ -3359,10 +3549,7 @@
                   ]
                 }
               },
-              "additionalProperties": false,
-              "required": [
-                "endpoint"
-              ]
+              "additionalProperties": false
             }
           },
           {
@@ -3562,6 +3749,10 @@
                     "environment": {
                       "type": "object",
                       "description": "Plain (non-secret) environment variables."
+                    },
+                    "codeSource": {
+                      "type": "object",
+                      "description": "Where the function's files come from when they are not written or uploaded in the build: {\"git\": {\"url\": \"https://...\", \"ref\": \"<branch|tag|commit>\", \"path\": \"dir\", \"token\": \"<gitTokens build secret name>\"}} or {\"s3\": {\"uri\": \"s3://bucket/prefix/\" or \"s3://bucket/key.zip\", \"path\": \"dir\"}}. The deployer fetches it at deploy time into app/tools/_code/<key>/ (handler.py at its root). Absent: the build's own files (written or uploaded)."
                     }
                   }
                 },
@@ -4132,7 +4323,7 @@
           "properties": {
             "request": {
               "type": "object",
-              "description": "The Lambda the Gateway calls BEFORE every MCP request reaches a tool (initialize, tools/list, tools/call): it may rewrite the request or refuse it. Exactly one of `code` (written in the build, in app/tools/_code/interceptor-request/, with the same grants menu as a code tool) or `lambdaArn` (yours). `passRequestHeaders` (default false) hands it the request headers, including the caller's token and x-ax-session / x-ax-agent / x-ax-user. `templates` records what the Builder generated the code from: audit, blockTools, argumentGuard, injectContext, custom."
+              "description": "The Lambda the Gateway calls BEFORE every MCP request reaches a tool (initialize, tools/list, tools/call): it may rewrite the request or refuse it. Exactly one of `code` (written in the build, in app/tools/_code/interceptor-request/, with the same grants menu as a code tool, and the same `codeSource` for files from git or S3) or `lambdaArn` (yours). `passRequestHeaders` (default false) hands it the request headers, including the caller's token and x-ax-session / x-ax-agent / x-ax-user. `templates` records what the Builder generated the code from: audit, blockTools, argumentGuard, injectContext, custom."
             },
             "response": {
               "type": "object",
@@ -4172,6 +4363,31 @@
             "send": {
               "type": "object",
               "description": "What is sent: content (default false: prompts, answers, tool input and output, the run's request and result), evals (default true: evaluation scores), metrics (default true: runs, failures, duration, cost, tokens; datadog, honeycomb and otlp only)."
+            }
+          }
+        },
+        "network": {
+          "description": "The shared orchestrator AgentCore Runtime's network, for every main and task agent: {\"mode\": \"VPC\", \"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]} (1-16 each) or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC. Dedicated agents set their own.\n\nRead by: cdk/lib/runtime-network.ts (orchestrator-stack.ts Orchestrator), terraform/main.tf; bff/network_check.py. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "description": "\"PUBLIC\" or \"VPC\" (the Runtime's networkMode). Required."
+            },
+            "subnetIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "mode \"VPC\" only: 1-16 subnet ids (subnet-...), in Availability Zones AgentCore supports. Two private subnets in different AZs are recommended."
+            },
+            "securityGroupIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "mode \"VPC\" only: 1-16 security group ids (sg-...). Their outbound rules must allow what the agents call."
             }
           }
         }

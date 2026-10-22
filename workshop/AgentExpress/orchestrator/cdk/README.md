@@ -179,6 +179,7 @@ Set in `cdk.json` or via `-c key=value`:
 | `designerModel` | `""` | The AgentExpress Assistant's models, tried in order: `model[:effort],…`. Empty is Claude Sonnet 5.5, then Claude Sonnet 5 when the account may not call 5.5 (e.g. a private marketplace without it) |
 | `designerSummaryModel` | `""` | The model that condenses long Assistant conversations; empty is the default model |
 | `designerEffort` | `medium` | The Assistant's reasoning effort: `low`, `medium`, `high`, or `model` (the model's own default) |
+| `designerReviewModel` | `""` | The model that reviews the Assistant's changes when Review changes is Auto or Always; empty is `us.openai.gpt-6.1-sol`. Never shown in the UI |
 | `memoryEventExpiryDays` | `30` | AgentCore Memory event retention |
 | `idp` | `cognito` | `cognito`, `auth0`, `okta`, `entra`, or `none` |
 | `createCognito` | `false` | With `idp=cognito`, provision the User Pool + SPA client |
@@ -209,6 +210,7 @@ Set in `cdk.json` or via `-c key=value`:
 | `nag` | `false` | Run cdk-nag's AwsSolutions pack at synth; an unacknowledged finding fails it (`lib/nag.ts`) |
 | `keepBuildsTableProtected` | `false` | A destroy stops at the builds table instead of clearing its deletion protection ([Tear down](../../DEPLOYMENT.md#tear-down)) |
 | `designerS3Buckets` | `""` | Buckets (or `bucket/prefix`, comma-separated) the AgentExpress Assistant may read when a message names `s3://…` |
+| `codeSourceBuckets` | `""` | Buckets (comma-separated names) an S3 code source may read for builds deployed into this console's own account; empty means S3 code sources need a connected account ([Code sources](../../DEPLOYMENT.md#code-from-files-git-or-s3-code-sources)) |
 | `runOwnerEmail` | `""` | Whose runs a trigger with `runAs: "owner"` starts; the Builder sets it to the build's owner |
 | `permissionsBoundaryArn`, `iamRolePath` | `""`, `/` | Permissions boundary and IAM path for every role ([Organisation guardrails](../../DEPLOYMENT.md#organisation-guardrails)) |
 | `customDomain`, `acmCertificateArn` | `""` | Your host name on CloudFront with a us-east-1 certificate, TLS 1.2+ |

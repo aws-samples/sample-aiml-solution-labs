@@ -7,10 +7,10 @@ types, agents, the Builder): [GETTING_STARTED.md](GETTING_STARTED.md). Internals
 | Part | Sections |
 |---|---|
 | Set up | [Prerequisites](#prerequisites) · [Identity provider](#identity-provider) · [IAM to deploy](#iam-to-deploy) · [Organisation guardrails](#organisation-guardrails) · [Terraform](#deploy-with-terraform) · [CDK](#deploy-with-cdk) · [Users and RBAC](#users-groups-and-rbac) · [Secrets](#secrets) |
-| Tools | [Acting as the person](#tools-that-act-as-the-person) · [Smithy](#tools-that-call-an-aws-api-smithy) · [KB chunking](#knowledge-base-chunking-and-parsing) · [KB vector stores](#knowledge-base-on-your-own-vector-store) · [KB sources](#knowledge-base-from-a-web-crawl-confluence-sharepoint-or-salesforce) · [Code Interpreter](#running-code-in-a-sandbox) · [Browser](#opening-web-pages-with-a-browser) |
-| Agents | [Task steps](#steps-with-no-model-task-steps) · [Harness](#agents-run-by-agentcore-harness) · [LiteLLM](#using-non-bedrock-models-through-litellm) · [Model routing](#choosing-which-model-answers-per-run-override-routing-and-fallbacks) |
+| Tools | [Acting as the person](#tools-that-act-as-the-person) · [Smithy](#tools-that-call-an-aws-api-smithy) · [KB chunking](#knowledge-base-chunking-and-parsing) · [KB vector stores](#knowledge-base-on-your-own-vector-store) · [KB sources](#knowledge-base-from-a-web-crawl-confluence-sharepoint-or-salesforce) · [Code Interpreter](#running-code-in-a-sandbox) · [Browser](#opening-web-pages-with-a-browser) · [Hosted MCP](#hosted-mcp-servers) |
+| Agents | [Task steps](#steps-with-no-model-task-steps) · [Harness](#agents-run-by-agentcore-harness) · [Runtime VPC](#running-agentcore-runtimes-in-your-vpc) · [LiteLLM](#using-non-bedrock-models-through-litellm) · [Model routing](#choosing-which-model-answers-per-run-override-routing-and-fallbacks) |
 | Using it | [Smoke test](#smoke-test-a-deployment-before-a-release) · [Timeline chart](#the-timeline-chart-on-a-run) · [Flow tab](#the-flow-tab-on-a-run) · [Builder canvas](#the-builder-canvas) · [Analytics](#operational-analytics) · [Memory records](#memory-records-what-agents-remembered) · [Share links](#sharing-a-run-with-a-link) · [Files](#a-runs-files-and-the-files-page) · [Asks and approvals](#an-agent-asks-a-person-and-tool-calls-that-wait-for-approval) · [Teams](#teams-and-team-workspaces-builder-console) |
-| Builder console | [Console mode](#deploy-a-builder-console) · [Connectors](#connectors) · [How a build deploys](#how-a-build-deploys) · [Registry](#aws-agent-registry) · [Connected accounts](#connected-accounts) · [Moving a build](#moving-a-build-out-of-a-console) · [Test suites](#test-suites) |
+| Builder console | [Console mode](#deploy-a-builder-console) · [Assistant](#the-agentexpress-assistant-links-and-review-changes) · [Connectors](#connectors) · [How a build deploys](#how-a-build-deploys) · [Code sources](#code-from-files-git-or-s3-code-sources) · [Registry](#aws-agent-registry) · [Connected accounts](#connected-accounts) · [Moving a build](#moving-a-build-out-of-a-console) · [Test suites](#test-suites) |
 | Operate | [Tuning](#tuning) · [Limits](#limits-on-spend-and-runs) · [Billing tag](#seeing-the-bill-in-aws) · [A2A endpoint](#serving-the-workflow-over-a2a) · [Live config](#changing-a-prompt-or-model-without-redeploying-live-config) · [Send runs to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others) · [OTLP export](#sending-traces-to-another-otlp-backend) · [Tear down](#tear-down) · [Troubleshooting](#troubleshooting) |
 
 Two IaC paths deploy the same resources. Use one per account and region (names overlap); different
@@ -60,6 +60,9 @@ source of truth. They create:
   Claude Sonnet 5.5 on a Builder console (the Assistant), and,
   with the tool plane, the embedding model (default Titan Text Embeddings V2, overridable with
   `embeddingModel` on the `kb` tool). Deploys and KB ingestion fail without both
+- On a Builder console, model access for the Assistant's reviewer (`designerReviewModel`,
+  default `us.openai.gpt-6.1-sol`). Without it, Review changes reports "Review unavailable" and
+  the change is saved unreviewed
 - Terraform 1.10+ (S3 native locking, `use_lockfile`), or the AWS CDK CLI (`npm i -g aws-cdk@2.1144.0`)
 
 ## Identity provider
@@ -382,6 +385,8 @@ telemetry still work.
 | `modelId` | empty | Default model; empty uses the workflow's `orchestrator.defaultModel`, else Claude Haiku 4.5. Its `us.`/`eu.`/`apac.` prefix follows the region |
 | `designerModel`, `designerSummaryModel` | empty | The Assistant's models, a list tried in order (`model[:effort],…`; empty is Claude Sonnet 5.5, then Claude Sonnet 5 if the account is refused 5.5), and its summary model (the default model) |
 | `designerEffort` | `medium` | The Assistant's reasoning effort: `low`, `medium`, `high` or `model` |
+| `designerReviewModel` | empty | The model that reviews the Assistant's changes when **Review changes** is Auto or Always; empty is `us.openai.gpt-6.1-sol`. Sets `DESIGNER_REVIEW_MODEL` on the BFF; the UI never shows it (Terraform `designer_review_model`) |
+| `codeSourceBuckets` | empty | Buckets an S3 [code source](#code-from-files-git-or-s3-code-sources) may read for builds deployed into this console's own account, comma-separated; empty means S3 code sources need a connected account (Terraform `code_source_buckets`) |
 | `idp`, `createCognito`, … | `cognito`, `false` | See [Identity provider](#identity-provider) |
 | `selfSignUp`, `selfSignUpGroup` | `false`, `members` | Open registration |
 | `enableGateway` | `false` | Tool plane |
@@ -774,6 +779,31 @@ Terraform: set `agent_name = "agentexpress"`, `idp = "cognito"`,
 [step 3](#deploy-with-terraform). `enableGateway` / `enable_gateway` has no effect in this mode.
 Self sign-up users join `members`, which may deploy and destroy their own builds.
 
+### The AgentExpress Assistant: links and Review changes
+
+Both run in the BFF (`bff/webfetch.py`, `bff/review.py`) and need no new resource or IAM statement.
+
+- **Links.** A message such as `build this based on <url>` makes the Assistant read the page with
+  its `fetch_url` tool before it changes anything. Every fetch follows the address rules of
+  `bff/netguard.py`, widened to `http://`: no `user:password@`, and refused when the
+  host resolves to a loopback, link-local (including 169.254.169.254), private or CGNAT address,
+  checked again on every redirect (at most 5). No proxy, cookie or `Authorization` header is sent,
+  so a page that answers 401, 403 or 407 is reported as needing a sign-in.
+- **Limits.** 10 seconds per fetch (wall clock, connecting included), 2 MB read, the first 40,000
+  characters of text kept, 5 pages per message. HTML is turned into text without running scripts,
+  so a page drawn by JavaScript comes back nearly empty. PDFs are not read yet.
+- **Untrusted.** The page's text reaches the model wrapped as untrusted data, and the system prompt
+  tells it never to follow instructions found there.
+- **Review changes** (Off / Auto / Always in the Assistant panel, Auto by default, remembered per
+  browser). A second model checks a proposed change before it is saved: one round, advisory only,
+  and a failure or timeout never blocks the change. Auto reviews a new build, agents, stages, tools
+  or named blocks added or removed, code changes, security-relevant settings, or more than 8 items
+  changed (`LARGE_CHANGE`). The reviewer model is `designerReviewModel` / `designer_review_model`
+  (`DESIGNER_REVIEW_MODEL` on the BFF, default `us.openai.gpt-6.1-sol`); the page never names it.
+  The BFF's existing Bedrock grant (foundation models, and inference profiles in this region)
+  already covers it. Its token counts are logged per call (`[designer] review ...`) and not metered
+  in Observability.
+
 ### Connectors
 
 **Add a connector** under **Tools** in the Build view (in the left pane and on the Tools tab; also **Use a connector** in **Add a tool**) opens
@@ -839,6 +869,45 @@ agent name, with the tool the user picked:
 - A CDK build stack whose first create failed (`ROLLBACK_COMPLETE`, `ROLLBACK_FAILED`,
   `DELETE_FAILED`) is deleted through the CDK deploy role and created again. A stack that ever
   deployed is never deleted this way
+
+### Code from files, git or S3 (code sources)
+A Lambda tool written in the build, a Gateway interceptor written in it, a Run code step and a
+[hosted MCP server](#hosted-mcp-servers) can take their code from several places. Pick one with
+**Where the code comes from** (**Where the script comes from** on a Run code step):
+
+| Source | Kept in the build | When it is read |
+|---|---|---|
+| Written here | the files (`toolCode`), or `task.code` | exported with the build |
+| Upload | files or a zip, unpacked in the page into the same files (`*.py`, `requirements.txt`, `events.json`; 20 files, 500 KB). A Run code step takes one script, or a zip with exactly one | exported with the build |
+| Git repository | `code.codeSource` / `task.codeSource` / `hosted.code`: `{"git": {"url", "ref", "path", "token"}}` | fetched by the deploy |
+| Amazon S3 | `{"s3": {"uri": "s3://bucket/prefix/" or "s3://bucket/key.zip", "path"}}` | read by the deploy |
+| Container image | hosted MCP servers only: `hosted.code = {"image": "<account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag or @sha256:digest]"}`, a private ECR image | the Runtime's container; its role may pull from that repository only |
+
+- Git: `url` is `https://` only. `ref` is a branch, a tag or a commit; pin a tag or a commit if a
+  deploy must not change by itself. `path` is the folder with `handler.py` at its root (for Run
+  code, the script file). The deploy runs `git fetch --depth 1 origin <ref>` and checks it out, so
+  a commit works when the host lets a client fetch a commit by its id
+- A private repository: set `token` to a name, then paste the token in the field that appears (a
+  build secret of kind `gitTokens`, `user:token` or a token sent as `x-access-token`). It is never in
+  `workflow.json`, never on a command line and never in the deploy log
+- S3: the deploy reads with the credentials it deploys with. In a connected account it assumes
+  that account's deploy role again with an
+  [STS session policy](https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRole.html)
+  that allows only `s3:GetObject` on that prefix (or that zip) and `s3:ListBucket` on the bucket
+  with an `s3:prefix` condition. Both the console's deploy role and a connected account's deploy
+  role already hold `ReadOnlyAccess`, so no IAM change is needed. A bucket policy or a KMS key on
+  your bucket must allow that role
+- S3 for a build in the console's own account (no connected account): only buckets listed in
+  `-c codeSourceBuckets=a,b` / `code_source_buckets = ["a", "b"]` (empty by default, so S3 code
+  sources need a connected account), and never the console's own buckets (builds, CDK staging, or
+  any bucket tagged `agentexpress:*`). The deploy is refused before it starts otherwise
+- Limits: 250 MB unzipped and 10,000 files for a function (the
+  [Lambda deployment package limit](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html)),
+  50,000 bytes for a Run code script. A zip member outside its folder, or a symbolic link, is refused
+- A fetched function goes to `app/tools/_code/<key>/` before its `requirements.txt` is installed, so
+  CDK and Terraform package it exactly like written code. A fetched script is deployed as the
+  step's `task.code`. A destroy fetches nothing
+- The Assistant knows the keys, and takes a file you attach to a message as a tool's file
 
 ### AWS Agent Registry
 A Builder console works with the AWS Agent Registries in its own account and region
@@ -943,6 +1012,7 @@ Edit `orchestrator/app/workflow.json`, then re-deploy.
 | Turn policy off | `orchestrator.policy.enabled: false` (no engine is created) |
 | Hide or restrict the assistant | `orchestrator.chatbot.enabled: false`, or `chatbot.tools.*` (`rerun`, `review`, `runEval`) set to `false` |
 | Move an agent to its own runtime | `"runtime": "dedicated"` |
+| Cache an agent's prompt | `agents.<id>.promptCache` ([reference](orchestrator/docs/WORKFLOW_REFERENCE.md#promptcache-prompt-caching)); no IAM change, cache calls use `bedrock:InvokeModel` like any model call |
 | Add a data source or agent | see [GETTING_STARTED.md](GETTING_STARTED.md) |
 | Reduce span-indexing cost | `transaction_search_indexing_percentage` / `-c transactionSearchIndexingPercentage` (1% is free) |
 
@@ -1056,6 +1126,103 @@ resources and grants. In the Builder, the agent's settings panel has a section f
   (`BedrockAgentCoreHarnessEndpoints` in `deploy-role-policy.json`).
 - **A harness of your own** (`harness.arn`, in this account and region): nothing is created for
   that agent; the orchestrator's role may invoke exactly that ARN (and its endpoint).
+
+## Running AgentCore Runtimes in your VPC
+
+Every AgentCore Runtime is `PUBLIC` unless `workflow.json` says otherwise. `orchestrator.network`
+puts the shared orchestrator Runtime in your VPC, and with it every `main` and `task` agent. A
+`dedicated` agent sets its own `agents.<id>.network`; it does not inherit the orchestrator's.
+Both take `{"mode": "VPC", "subnetIds": ["subnet-..."], "securityGroupIds": ["sg-..."]}` (1-16 of
+each), and both can be set in the Builder: **Settings → Network** for the orchestrator, and the
+**Network** section of a dedicated agent's panel. Harness agents keep `harness.network`, and a
+[hosted MCP server](#hosted-mcp-servers) takes `tools.<key>.hosted.network`. An `a2a`
+agent runs on its owner's network, so it has no setting here. The Assistant can set each of these
+from chat. The keys are in
+[WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#orchestrator).
+
+What the AgentCore docs say the VPC needs
+([VPC configuration](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html)):
+
+- Subnets in the Availability Zone IDs AgentCore supports in your Region. A subnet in another AZ
+  fails the create. For example, us-east-1 supports `use1-az1`, `use1-az2` and `use1-az4`. Check a
+  subnet with `aws ec2 describe-subnets --subnet-ids <id> --query 'Subnets[0].AvailabilityZoneId'`.
+  Two private subnets in different AZs are recommended.
+- No internet access by default, even in a public subnet. For the internet, use private subnets
+  that route `0.0.0.0/0` to a NAT gateway.
+- These VPC endpoints. They are required without internet access, and recommended with a NAT
+  gateway: `com.amazonaws.<region>.ecr.dkr`, `com.amazonaws.<region>.ecr.api`,
+  `com.amazonaws.<region>.logs`, and the S3 gateway endpoint `com.amazonaws.<region>.s3`, which
+  holds the image layers.
+- Outbound security group rules that allow whatever the Runtime calls. It needs no inbound rule.
+
+The docs list only those four endpoints. The agents also call other AWS services: Bedrock model
+calls, DynamoDB, Secrets Manager, and AgentCore Memory, Identity and Gateway
+([AgentCore VPC endpoints](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/vpc-interface-endpoints.html)).
+`a2a` agents, LiteLLM and run export reach hosts on the internet. Without a NAT gateway, each of
+these needs its own endpoint. Which endpoints a build needs has not been checked live.
+
+AgentCore creates the network interfaces with the service-linked role
+`AWSServiceRoleForBedrockAgentCoreNetwork`. The first VPC Runtime creates it, which needs
+`iam:CreateServiceLinkedRole` for `network.bedrock-agentcore.amazonaws.com`
+([service-linked roles](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/service-linked-roles.html)).
+The console's deploy role already allows that (`IamServiceLinkedRoles` in
+`terraform/deploy-role-policy.json`). The Runtimes' execution roles need nothing new.
+
+Two more effects. VPC mode can make session startup slower. After a Runtime is deleted, its
+network interface can remain for up to 8 hours, which blocks deleting its subnets or security
+groups until it is gone.
+
+## Hosted MCP servers
+
+An MCP tool can name a server you already run (`endpoint`), or one the build hosts:
+`tools.<key> = {"type": "mcp", "hosted": {"code": ..., "network": ...}}`. The deploy runs the
+server on its own AgentCore Runtime with protocol `MCP` and registers it as an MCP server target of
+the build's Gateway. Agents call its tools like any Gateway tool, so Cedar policies, interceptors,
+guardrails and Observability work the same. In the Builder, pick **Host it here** in the tool's
+**MCP server** panel. The Assistant can also write one.
+
+- Code. Leave `code` out to write or upload `server.py`, `requirements.txt` and an optional
+  `Dockerfile` in the build. Set `{"git": {...}}` or `{"s3": {...}}` to fetch it at deploy
+  ([code sources](#code-from-files-git-or-s3-code-sources)). Set
+  `{"image": "<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>"}` to use an image you built
+  (a private ECR URI with a tag or a `sha256` digest). `image` is accepted only here. With no
+  Dockerfile, the deploy builds an ARM64 Python 3.13 image that installs `requirements.txt` and
+  runs `python server.py`; without a `server.py` at the root the deploy stops.
+- Dependencies. The starter `requirements.txt`, from the canvas or the Assistant, pins
+  `mcp==1.30.0` and `pydantic==2.13.5`, the versions the framework itself is tested with (an
+  older MCP SDK fails to import with a current pydantic). Only `name==version` lines are installed.
+- Contract. The server must be an ARM64 container that serves MCP over streamable HTTP on
+  `0.0.0.0:8000` at `/mcp`, stateless by default
+  ([MCP protocol contract](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-mcp-protocol-contract.html)).
+  It must offer tools. The container publishes no port; only AgentCore reaches it.
+- Auth. The Runtime keeps the default IAM SigV4 inbound auth. The Gateway signs with its own role
+  for the `bedrock-agentcore` service, and that role alone is granted
+  `bedrock-agentcore:InvokeAgentRuntime` on the server
+  ([target authorization](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-building-adding-targets-authorization.html)).
+  Leave `auth` and `service` unset. The target passes `Mcp-Session-Id` both ways, as the
+  [MCP server target](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-MCPservers.html)
+  page advises for a server on AgentCore Runtime.
+- Network. `hosted.network` takes the same shape as an agent's (see the section above). It
+  defaults to `PUBLIC`.
+- Names. The Runtime is `<agentName>_mcp_<key>`, so a hosted tool key can be at most 32
+  characters.
+- Images. CDK builds it as a container asset; export `CDK_DOCKER=finch` to build with Finch.
+  Terraform builds and pushes it to `agentcore-<agentName>-mcp-<key>` with `container_engine`
+  (for example `"finch"`). The console's deploy uses the CodeBuild container engine, as for the
+  orchestrator image.
+- Tool names. The Gateway publishes each of the server's tools as `<key>___<tool>`, as for any
+  MCP target; `call` takes the tool name without the `<key>___` part.
+- Tools that change. The Gateway lists the server's tools when the target is created or updated.
+  After you change them, redeploy, or call `SynchronizeGatewayTargets`.
+- IAM. The deploy role may create and pass the server's role, `AgentCoreMcp-<agentName>-<key>`
+  (`terraform/deploy-role-policy.json`). A connected account set up before this change needs
+  **Connect** again: that updates its role in place (same stack, same External ID) to the current
+  permissions.
+
+Not in v1: AWS permissions for the server's own calls, the build's credential providers for its
+outbound calls, a resource policy on the Runtime, and a separate setup for outside MCP clients.
+Outside clients can already reach the Gateway, which serves the hosted server's tools, with a
+token its JWT authorizer accepts.
 
 ## Limits on spend and runs
 
@@ -1532,8 +1699,10 @@ clear it on purpose with `aws dynamodb update-table --table-name <agentName>_bui
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `cdk destroy`: `DELETE_FAILED` on `Orchestrator`, `NotStabilized` | AgentCore was still draining the runtime | Run `cdk destroy` again |
+| `cdk destroy`: `DELETE_FAILED` on `Orchestrator` or another Runtime, `NotStabilized` ("Request timed out while deleting") | AgentCore was still draining the runtime | Run `cdk destroy` again. The console's destroy waits 60 s and destroys again itself, up to 3 more times. It reads every stack resource with `ListStackResources`, paged, so a failed Runtime is found on a stack with more than 100 resources too |
+| `cdk destroy`: `DELETE_FAILED` on a Runtime, "Access denied for operation 'AWS::BedrockAgentCore::Runtime'", after a `NotStabilized` retry | AgentCore had already deleted the runtime (`aws bedrock-agentcore-control get-agent-runtime` returns `ResourceNotFoundException`) | Run `cdk destroy` again. The console's destroy does this itself, within its retry budget, once `GetAgentRuntime` confirms the runtime is gone |
 | `cdk destroy`: `DELETE_FAILED` on `UiLogsBucket`, "bucket … not empty" | CloudFront delivered a late access log after the stack emptied the bucket | `aws s3 rm s3://<UiLogsBucket name> --recursive`, then `cdk destroy` |
+| `terraform destroy`: `NotStabilized` on `awscc_bedrockagentcore_runtime`, or Cloud Control's "Request timed out while deleting AWS::BedrockAgentCore::Runtime" with no resource address | AgentCore was still deleting the runtime when Cloud Control gave up | Run `terraform destroy` again. The console's destroy waits 60 s and destroys again itself, up to 3 more times, rebuilding the UI step first |
 | `terraform destroy`: `NotStabilized` on `awscc_bedrockagentcore_runtime`, then `Invalid for_each argument ... data.external.ui_dist.result` on the retry | The first destroy removed the UI build step from state | `terraform apply -target=null_resource.ui_build`, then `terraform destroy` |
 
 Terraform empties the UI logs bucket in the same step that deletes it (`force_destroy`), so the

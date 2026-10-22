@@ -47,7 +47,9 @@ FORMATS = vocabulary.values("taskOutputFormats")
 FEATURES = vocabulary.values("taskExtractFeatures")
 
 #: The keys each kind reads; any other is refused (it would look like a setting and do nothing).
-KEYS_OF = {"tool": ("kind", "tool", "arguments"), "code": ("kind", "language", "code"),
+#: A code step's `codeSource` (git or S3) is read by the deployer, which deploys the script
+#: as `code` in its place (deployer/code_fetch.py read_script, runner.materialise_code_sources).
+KEYS_OF = {"tool": ("kind", "tool", "arguments"), "code": ("kind", "language", "code", "codeSource"),
            "extract": ("kind", "file", "features"), "output": ("kind", "format", "name", "from")}
 
 # --- code -------------------------------------------------------------------------------
@@ -134,6 +136,9 @@ def problem(agent_id: str, spec: dict, tools: dict) -> str:
         return f"agent {agent_id!r}: task.tool {task.get('tool')!r} is not a key in the `tools` block"
     if kind == "code":
         code = task.get("code")
+        if "codeSource" in task and not isinstance(code, str):
+            return (f"agent {agent_id!r}: task.codeSource was not fetched at deploy, so the step "
+                    "has no script; deploy the build again")
         if not isinstance(code, str) or not code.strip():
             return f"agent {agent_id!r}: a code step needs task.code, the script to run"
         if len(code.encode("utf-8")) > MAX_CODE_BYTES:

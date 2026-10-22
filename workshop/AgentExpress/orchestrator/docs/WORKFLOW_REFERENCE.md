@@ -160,7 +160,8 @@ does not turn tests red.
 | `models.overrides` | `bff/model_override.py`; `app/common/model_routing.py` | OPTIONAL. Up to 20 model ids a person may pick on **Start run** (Advanced), for every agent or per agent, for that run only. Needs a group granted `override` in `authorization.actions` (closed unless granted); the server refuses a pick from anyone else, and any model not on this list. The run stores its pick (`modelOverride`, shown as "Model override" on the run page), keeps it through every gate and re-run, and sends a dedicated agent only its own model. An overridden agent uses that model only: no `route`, no `fallback`. Harness agents, remote agents and task steps keep their own models. Not for a Builder build started from the console. |
 | `limits.monthlyUsd` | `bff/limits.py`; `features/observability/spend.py` | OPTIONAL, off unless set. The most this **deployment** may spend in a calendar month, for everyone together (US dollars, Eastern time; `0` = no limit). Once reached, every new run is refused with HTTP 429 until the 1st, and a run in progress stops at its next step, as with `userDailyUsd`. It is one running total for the app, kept like the daily one, and it is cut by the date each cost was incurred. It is a brake on a runaway app or trigger, not a bill: it counts what this app's own observability meters, which is as exact as the model prices behind it. |
 | `export` | `app/features/observability/runexport.py`; `export.tf` / `cdk/lib/export.ts`; `bff/export_check.py` | OPTIONAL, off unless set. Sends each run, once it ends, to an observability tool: `destination` `langfuse`, `datadog`, `grafana` (Grafana Cloud), `honeycomb` or `otlp` (any OTLP/HTTP backend). `region`: Langfuse `us`, `eu` (default) or `self-hosted`; your Datadog site (default `datadoghq.com`); Honeycomb `us` (default) or `eu`. `endpoint`: the https address, only for `otlp`, `grafana` and self-hosted Langfuse. `secret`: the NAME of the build secret of kind `exportHeaders` holding the HTTP headers with the key (a JSON object), or the full ARN of a Secrets Manager secret; never the key itself. `project`: optional, the Langfuse project id or the Datadog service name, for the console's links (Datadog also gets it as `service.name`). `send`: `content` (default `false`: prompts, answers, tool input and output, the request and result), `evals` (default `true`), `metrics` (default `true`; Datadog, Honeycomb and `otlp` only). One trace per run (agents, model calls with tokens and cost, tool calls, guardrail, Cedar, memory and HITL events, evaluation scores); the run records `export.status`. Not set: nothing is sent, read or created. With the `otlp_*` deploy settings too, this wins. See [DEPLOYMENT](../../DEPLOYMENT.md#send-runs-to-langfuse-datadog-and-others). Not run live yet. |
-| `interceptors.request` / `interceptors.response` | `tool-plane.ts` / `interceptors.tf`; `app/tools/_code/interceptor-<point>/` | A Lambda the Gateway calls before each MCP request and/or after each answer (at most one each). Exactly one of `code` (written in the build, generated from `templates`: request `audit`, `blockTools`, `argumentGuard`, `injectContext`, `custom`; response `audit`, `redactPii`, `hideTools`, `capResult`, `custom`) or `lambdaArn`. `passRequestHeaders` (default false) hands it the headers, with `x-ax-session` / `x-ax-agent` / `x-ax-user`. A refusal is `Refused by interceptor: <reason>` on the timeline. Needs the Gateway. |
+| `network` | `main.tf` / `cdk/lib/runtime-network.ts`; `bff/network_check.py`, `networkCheck.ts` | OPTIONAL. The shared orchestrator AgentCore Runtime's network, which every `main` and `task` agent runs in: `{"mode": "VPC", "subnetIds": ["subnet-..."], "securityGroupIds": ["sg-..."]}` or `{"mode": "PUBLIC"}`. `mode` is required, `PUBLIC` or `VPC` (the API's `networkMode`); with `VPC`, 1-16 subnet ids (`subnet-` + 8-17 letters or digits) and 1-16 security group ids (`sg-` + 8-17), and neither with `PUBLIC`. Not set: `PUBLIC`, and the deploy is what it was. A `dedicated` agent does not inherit it: it sets its own `agents.<id>.network`. What the VPC needs: [DEPLOYMENT](../../DEPLOYMENT.md#running-agentcore-runtimes-in-your-vpc). |
+| `interceptors.request` / `interceptors.response` | `tool-plane.ts` / `interceptors.tf`; `app/tools/_code/interceptor-<point>/` | A Lambda the Gateway calls before each MCP request and/or after each answer (at most one each). Exactly one of `code` (written in the build, generated from `templates`: request `audit`, `blockTools`, `argumentGuard`, `injectContext`, `custom`; response `audit`, `redactPii`, `hideTools`, `capResult`, `custom`; or fetched at deploy with `code.codeSource`, see [code sources](#code-sources-git-s3-or-an-image)) or `lambdaArn`. `passRequestHeaders` (default false) hands it the headers, with `x-ax-session` / `x-ax-agent` / `x-ax-user`. A refusal is `Refused by interceptor: <reason>` on the timeline. Needs the Gateway. |
 | `triggers.<name>` | `bff/triggers.py`; `triggers.tf` / `orchestrator-stack.ts` | What starts a run without anyone typing it: `type` `webhook` (`signature`), `schedule` (`expression`, `timezone`), `eventbridge` (`pattern`, `bus`), `s3` (`bucket`, `prefix`) or `sqs` (`queueArn`, or none for a created queue with a dead-letter queue). `prompt` with `{{placeholders}}` from the delivery; `enabled`, `runAs` (`owner` or `service`), `approvers`, `gates` (`inherit` or `auto`), `maxRunsPerHour` (60), `attachPayload`, `idempotencyKey`. Webhooks arrive at `POST /api/hooks/<name>`, the one route without a JWT, proven by the signature. |
 
 You never write Cedar by hand — the rules are generated from the `tools` block.
@@ -196,8 +197,10 @@ the id becomes part of an AgentCore Runtime name.
 | `task` | `registry.py` → `app/common/task_agent.py`; `bff/task_check.py`, `taskCheck.ts`; `tasks.tf` / `cdk/lib/tasks.ts` | **`runtime: "task"` only, and required there.** What the step does: `{"kind": "tool" \| "code" \| "extract" \| "output", ...}`. See [task steps](#runtime-task--a-step-with-no-model). |
 | `model` | `registry.py` | **Optional.** Omit to use `orchestrator.defaultModel`. No shipped agent sets it; the mechanism is there when you want a bigger model for one step. `litellm/<name>` (e.g. `litellm/gpt-4o`) is a non-Bedrock model served by the deployment's LiteLLM proxy (`litellm_base_url` / `-c litellmBaseUrl`; DEPLOYMENT.md "Using non-Bedrock models through LiteLLM"). Not for `orchestrator.defaultModel` or an evaluator's judge `model`. |
 | `models` | `app/common/model_routing.py` (from `ctx.llm` and the tool-calling turn); `bff/model_routing_check.py`, `modelRoutingCheck.ts` | **Optional; `main` and `dedicated` only.** `{"route": [...], "fallback": [...]}`. `route`: up to 10 rules, first match wins, else the agent's model: `{"model": m, "inputTokensOver": N}` (the call's system + user text, estimated at 4 characters per token, is over N, 1-1000000) or `{"model": m, "matches": "invoice\|refund"}` (a case-insensitive regular expression, 1-200 characters, searched in the run's request and its subject). `fallback`: up to 3 models tried in order when the call fails with Bedrock `ThrottlingException`, `ServiceUnavailableException` or `ModelNotReadyException` (or HTTP 429/503 from a LiteLLM proxy); never on any other error (validation, access, timeout, guardrail). A run with a model override uses neither. Each call's telemetry row records the model and `chosen_by` (`route N`, `fallback N`, `override`). No IAM change: the runtimes may already call any foundation model and any inference profile in this region and account. |
+| `promptCache` | `registry.py` → `app/common/prompt_cache.py` → `app/common/llm.py`; `bff/prompt_cache_check.py`, `promptCacheCheck.ts` | **Optional; `main` and `dedicated` only.** Bedrock prompt caching for this agent's model calls: `{"system": true, "tools": true, "messages": true, "ttl": "5m"}`. Off unless set. See [prompt caching](#promptcache-prompt-caching). |
 | `instructions` | `harness.tf` / `cdk/lib/harness.ts` → the harness's system prompt; `harness_agent.py` | **`runtime: "harness"` only, and required there (except with `harness.arn`).** The harness agent's system prompt. Set on the harness at deploy time, so a change needs a deploy (live config does not change it). |
 | `harness` | `harness.tf` / `cdk/lib/harness.ts`; `harness_agent.py`; `bff/harness_check.py`, `harnessCheck.ts` | **`runtime: "harness"` only.** `{"maxIterations": 1-100, "timeoutSeconds": 1-900, "shell": false, "provider", "apiKey", "apiBase", "browser", "codeInterpreter", "mcp", "skills", "memory", "container", "mounts", "network", "endpoint"}`, or `{"arn": "<harness ARN>", "endpoint", "maxIterations", "timeoutSeconds"}` to use a harness made elsewhere. A harness agent's `tool` is the Gateway tools its harness calls. See [harness agents](#runtime-harness--an-agent-run-by-agentcore-harness). |
+| `network` | `subagent_runtimes.tf` / `cdk/lib/runtime-network.ts`; `bff/network_check.py`, `networkCheck.ts` | **`runtime: "dedicated"` only.** This agent's own AgentCore Runtime network, the same shape as [`orchestrator.network`](#orchestrator). Not set: `PUBLIC`; it is not inherited from `orchestrator.network`. On a `main` or `task` agent it is rejected (they run in the shared orchestrator Runtime: set `orchestrator.network`, or make the agent `dedicated`); on a `harness` agent use `harness.network`; on an `a2a` agent it is rejected, since a remote agent runs on its owner's network, outside this build. |
 | `maxTokens` | `registry.py` → `agent.max_tokens` | Output budget in tokens for this agent's model calls. A call may take up to 300 s to answer (`BEDROCK_READ_TIMEOUT_SECONDS` on the runtime; boto3's own 60 s cut off an 8000-token report), with one retry. |
 | `temperature` | `registry.py` | **Optional**, defaults to 0. |
 | `tool` | `registry.py` | A key in the `tools` block, or a list of keys (`["policyDocs", "claimsDb"]`). Each tool is queried before the agent reasons and its results reach the model as labelled evidence (`_shared/evidence.gather`). Validated — a name that doesn't resolve fails at plan/synth. Omit and the agent reasons purely over upstream outputs. On a `runtime: "harness"` agent: the Gateway tools its harness calls itself ([harness agents](#runtime-harness--an-agent-run-by-agentcore-harness)). |
@@ -432,7 +435,7 @@ is JSON that a later agent reads with `ctx.input("<id>")`. Only `name`, `kind`, 
 | `task.kind` | Keys | What it does |
 |---|---|---|
 | `tool` | `tool` (required), `arguments` | Calls the tool through the Gateway with `arguments`, as one call. The Cedar policy, interceptors and the tool's `approval` apply as for an agent's call; the tool's fixed `args` win over `arguments`. A target that publishes several tools needs `call` on the tool. Output: `{"result": <the tool's answer as data>, "text": ...}`. |
-| `code` | `code` (required, ≤ 50,000 bytes), `language` (`python` default, `javascript`, `typescript`) | Runs the script once in the AWS-managed AgentCore Code Interpreter (`aws.codeinterpreter.v1`), a fresh session that is always stopped. The script reads `in/request.txt`, `in/outputs.json` (earlier outputs, parsed when they are JSON) and, with `attachments`, the run's files as `in/<name>`. What it prints is the output (`output`, parsed when it is JSON); files it writes to `out/` are kept as run files (up to 20); the script and its log go to `runs/<session>/code/` when the deployment keeps files. A non-zero exit fails the step with the end of stderr. Up to 120 s. |
+| `code` | `code` (≤ 50,000 bytes) or `codeSource` (git or S3, read at deploy: [code sources](#code-sources-git-s3-or-an-image)), `language` (`python` default, `javascript`, `typescript`) | Runs the script once in the AWS-managed AgentCore Code Interpreter (`aws.codeinterpreter.v1`), a fresh session that is always stopped. The script reads `in/request.txt`, `in/outputs.json` (earlier outputs, parsed when they are JSON) and, with `attachments`, the run's files as `in/<name>`. What it prints is the output (`output`, parsed when it is JSON); files it writes to `out/` are kept as run files (up to 20); the script and its log go to `runs/<session>/code/` when the deployment keeps files. A non-zero exit fails the step with the end of stderr. Up to 120 s. |
 | `extract` | `file`, `features` (`TABLES`, `FORMS`; default both) | Reads the run's PDF, PNG and JPEG files (or the one named `file`) with Amazon Textract: an image with `AnalyzeDocument`, a PDF with the asynchronous `StartDocumentAnalysis` (the synchronous call reads one page only), polled for up to 300 s. Output per file: `pages`, `text` (cut at 50,000 characters), `tables` (rows of cell text) and `forms` (`key`/`value`). Needs `attachments: true`. |
 | `output` | `format` (required: `csv`, `json`, `markdown`, `txt`), `name`, `from` | Writes a file from earlier outputs and keeps it with the run (`runs/<session>/outputs/`, on the run's Files tab). `from` lists step ids or `<step>.<field>` (default: every earlier output); a CSV takes the rows of a list of objects. Needs `orchestrator.files`. No Excel or PDF writer: that is a code step's job. |
 
@@ -550,6 +553,44 @@ These were literals buried at each call site until they were moved here. Nothing
 `app/subagents/` passes `max_tokens` any more, and a test enforces that — otherwise
 the number in this file would be quietly overridden by code.
 
+### `promptCache`: prompt caching
+
+Per agent, off unless set; there is no build-wide default. `main` and `dedicated` agents only
+(a harness, task or `a2a` step has no setting here). In the Builder: the agent panel's
+**Prompt caching** section; the AgentExpress Assistant can also turn it on or off.
+
+```json
+"triage": { "name": "Triage", "toolMode": "model", "tool": ["policyDocs"],
+            "promptCache": { "system": true, "tools": true, "messages": true, "ttl": "5m" } }
+```
+
+| Key | Notes |
+|---|---|
+| `system` | Cache the system prompt (instructions and skills). Recalled memory and today's date come after the cache point, uncached. |
+| `tools` | Cache the tool definitions of a tool-calling turn (`toolMode: "model"`). |
+| `messages` | Cache the conversation so far in tool-calling turns (`toolMode: "model"`). |
+| `ttl` | `"5m"` (default), `"1h"` or `"30m"`, and only a value the model's row lists. |
+
+What each model supports comes from `promptCacheModels` in `app/vocabulary.json`, copied from the
+[Bedrock prompt caching](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html)
+table, by base model id (an inference profile's geography prefix is dropped):
+
+- `byModel`: per model `fields` (which of `tools`, `system`, `messages` it caches), `ttls`,
+  `minTokens` / `minTokensText` (tokens per checkpoint, counted over tools, system and messages
+  together) and `maxCheckpoints`. Claude models take all three fields; Amazon Nova takes `system`
+  and `messages` with a 5-minute TTL.
+- `openaiExplicit`: the OpenAI rows marked `"api": "InvokeModel"` (GPT-5.6 Sol, Terra and Luna,
+  GPT-6 Astra, GPT-6.1 Sol). Only the system prompt of a single model call is cached, through
+  InvokeModel with an explicit breakpoint, TTL `30m`; tool-calling turns stay on Converse,
+  uncached.
+- A model in no row gets no cache point and the Build view warns. Other OpenAI models cache
+  implicitly (`implicitOnly`); any cache tokens they report are still recorded.
+
+`tools` or `messages` on a model whose row lacks that field, or a `ttl` it does not list, is an
+error. Below the minimum the call still runs, uncached. If Bedrock refuses the cache point, the
+call is retried once without it. Each call's telemetry row records the cache read and write
+tokens and their cost; Observability shows them per call, per run and on the Insights tab.
+
 ### `agents.<id>.agentcore` — the AgentCore feature switches
 
 The framework applies these around the agent's `run()`, so turning a capability on
@@ -605,7 +646,7 @@ Seven types:
 |---|---|---|
 | `kb` | Bedrock Knowledge Base: over `kb_docs/` / uploads (S3 Vectors), over your own bucket (`s3Uri`, optional `kmsKeyArn`), or your existing one (`knowledgeBaseId`) | `corpora` |
 | `websearch` | The AWS-managed AgentCore Web Search connector | — |
-| `mcp` | Any remote MCP server over Streamable HTTP | `endpoint` |
+| `mcp` | Any remote MCP server over Streamable HTTP, or one the build hosts on its own AgentCore Runtime | `endpoint` **or** `hosted` |
 | `openapi` | Any REST API, from an OpenAPI 3 document: in S3, in `app/tools/`, or inline | `schemaS3Uri` **or** `source` **or** `schema` |
 | `apigateway` | A stage of an API Gateway REST API in the deploy's account and region | `restApiId`, `stage`, `toolFilters` |
 | `lambda` | A Lambda — yours, or one the framework deploys | `lambdaArn` **or** `source`, plus `toolSchema` |
@@ -875,6 +916,28 @@ fine; nothing splits on `___`.
 paginated, and a target whose tools land on page two looks empty if you only read
 page one.
 
+**A server the build hosts: `hosted`.** Set `hosted` instead of `endpoint`, and the deploy
+runs the server on its own AgentCore Runtime (protocol MCP, an ARM64 container serving
+streamable HTTP on `0.0.0.0:8000/mcp`) and registers it on the build's Gateway. Its tools
+are published as `<key>___<tool>`, like any MCP target. In the Builder: **Host it here** in
+the tool's MCP server panel.
+
+```json
+"facts": { "type": "mcp", "description": "Look up reference facts.", "call": "lookup_fact", "arg": "query",
+           "hosted": { "code": { "git": { "url": "https://git.example.com/team/facts-mcp.git", "ref": "v1.2.0" } },
+                       "network": { "mode": "PUBLIC" } } }
+```
+
+| Key | Notes |
+|---|---|
+| `hosted.code` | Optional. Exactly one of `{"git": {...}}`, `{"s3": {...}}` (the [code source](#code-sources-git-s3-or-an-image) shapes) or `{"image": "<account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag \| @sha256:<digest>]"}` (a private ECR image; only here). Omitted: the files written or uploaded in the build, `toolCode.<key>`: `server.py`, `requirements.txt` (starts as `mcp==1.30.0`, `pydantic==2.13.5`) and an optional `Dockerfile`. |
+| `hosted.network` | Optional. The server Runtime's network, the same shape as [`orchestrator.network`](#orchestrator). Omitted: `PUBLIC`. |
+
+`hosted` and `endpoint` are mutually exclusive. `auth` is unset or `sigv4` (the Gateway signs
+with its own role) and `service` unset. The key is at most 32 characters, because it is part
+of the Runtime name `<agentName>_mcp_<key>`. What the server must serve, the IAM and the
+images: [DEPLOYMENT](../../DEPLOYMENT.md#hosted-mcp-servers).
+
 ### `type: "openapi"`
 
 For a service that already speaks HTTP and already has a contract: an internal
@@ -1040,6 +1103,40 @@ name a property of the called tool. Both are checked at plan/synth time, along w
 the ARN format, an empty schema, a tool with no properties, and an unsupported
 property type. All of those would otherwise be accepted by the API and then publish
 a tool the agent cannot call — which shows up as an empty answer, not an error.
+
+### Code sources: git, S3 or an image
+
+Code written in the build (a `lambda` tool's `code`, an interceptor's `code`, a Run code
+step's `task.code`, a hosted MCP server's files) can come from somewhere else, fetched by the
+deploy (`deployer/code_fetch.py`). Checked by `bff/code_source.py` and `codeSource.ts`; in the
+Builder, **Where the code comes from**.
+
+| Where | Key |
+|---|---|
+| `lambda` tool | `tools.<key>.code.codeSource` |
+| Interceptor | `orchestrator.interceptors.<request\|response>.code.codeSource` |
+| Run code step | `agents.<id>.task.codeSource`, instead of `task.code` (one script, at most 50,000 bytes) |
+| Hosted MCP server | `tools.<key>.hosted.code` |
+
+Exactly one key:
+
+```json
+{ "git":   { "url": "https://git.example.com/team/tools.git", "ref": "v1.4.0", "path": "orders", "token": "gitDeployToken" } }
+{ "s3":    { "uri": "s3://amzn-s3-demo-bucket/tools/orders/", "path": "src" } }
+{ "image": "111122223333.dkr.ecr.us-east-1.amazonaws.com/facts-mcp:1.0" }
+```
+
+- `git.url`: `https://` only, no user name, password, query or fragment. `ref` (required): a
+  branch, a tag or a commit. `path`: the folder inside the repository (for Run code, the
+  script file). `token`: the NAME of a build secret of kind `gitTokens`, never the token.
+- `s3.uri`: `s3://<bucket>/<prefix>/` (ending in `/`) or `s3://<bucket>/<key>.zip`. `path`: a
+  folder inside it. In the console's own account only buckets in `codeSourceBuckets` /
+  `code_source_buckets` are read, and never the console's own buckets.
+- `image`: hosted MCP servers only, a private ECR image URI with an optional tag or `sha256`
+  digest.
+- Not set: the files are written or uploaded in the build, as before. A bundle carries git and
+  S3 sources as references only, never the fetched code. Limits and IAM:
+  [DEPLOYMENT](../../DEPLOYMENT.md#code-from-files-git-or-s3-code-sources).
 
 ### `source: "codeInterpreter"` — run code in a sandbox
 

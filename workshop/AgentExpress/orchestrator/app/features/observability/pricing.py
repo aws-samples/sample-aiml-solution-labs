@@ -18,6 +18,10 @@ which of these priced it.
 The non-model rates (embedding, AgentCore Runtime compute, Gateway) are AWS public list
 prices for us-east-1 as of 2026-08-20, overridable per key with `orchestrator.serviceRates`.
 
+Prompt-cache tokens are priced only at a rate AWS publishes (or orchestrator.modelRates
+`cacheRead`/`cacheWrite5m`/`cacheWrite1h`/`cacheWrite30m`): a cache token with no rate is reported as
+cost unknown, never priced at another rate (call_cost).
+
 All of it is an ESTIMATE for planning, not your bill: private pricing, discounts and
 reconciliation differ. Everything returns a Decimal USD amount so the sums are exact.
 """
@@ -153,6 +157,98 @@ def cost_at(in_rate: Decimal, out_rate: Decimal, input_tokens: int, output_token
     """USD for a token count at given per-1M rates."""
     return (Decimal(max(0, input_tokens)) / _MTOK * in_rate
             + Decimal(max(0, output_tokens)) / _MTOK * out_rate)
+
+
+def cache_rates(model_id: str, source: str) -> tuple[dict[str, Decimal], str]:
+    """({kind: USD per 1M tokens}, source) for the model's prompt-cache tokens, kinds
+    `cacheRead`, `cacheWrite5m`, `cacheWrite1h`. From the `orchestrator.modelRates` entry
+    that priced the input when it carries any of those keys, else the AWS Price List
+    (pricelist.lookup_cache), when the input was priced by one of those two. Never the
+    snapshot table or the fallback: they have no cache rates, and a cache token is
+    never priced at a rate AWS does not publish (https://aws.amazon.com/bedrock/pricing/)."""
+    from app.common.config import MODEL_RATES
+    mid = (model_id or "").lower()
+    kinds = ("cacheRead", "cacheWrite5m", "cacheWrite1h", "cacheWrite30m")
+    if source == "config":
+        for key, rates in sorted((MODEL_RATES or {}).items(), key=lambda kv: len(kv[0]),
+                                 reverse=True):
+            if str(key).lower() in mid and isinstance(rates, dict):
+                out: dict[str, Decimal] = {}
+                for k in kinds:
+                    with contextlib.suppress(TypeError, ValueError, ArithmeticError):
+                        if rates.get(k) is not None:
+                            out[k] = Decimal(str(rates[k]))
+                if out:
+                    return out, "config"
+                break
+    if source in ("config", "pricelist") and _price_list_enabled():
+        from app.features.observability import pricelist
+        listed = pricelist.lookup_cache(model_id)
+        if listed:
+            return listed, "pricelist"
+    return {}, ""
+
+
+def call_cost(model_id: str, input_tokens: int, output_tokens: int,
+              read: int = 0, write5m: int = 0, write1h: int = 0, write_unknown: int = 0,
+              write30m: int = 0) -> dict:
+    """One Converse call's cost with its prompt-cache tokens.
+
+    `input_tokens` is the TOTAL input (inputTokens + cacheReadInputTokens +
+    cacheWriteInputTokens, https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html),
+    so the uncached part is what is left after the cache tokens. Uncached input is billed
+    at the input rate, reads at the cache-read rate, writes at the write rate of their TTL
+    (same page; rates from https://aws.amazon.com/bedrock/pricing/ via the Price List).
+    A cache token with no published rate is left OUT of the cost and the result says
+    `cache_cost_known: False`: never priced at another rate.
+
+    `write30m` (OpenAI GPT-5.6+, 30-minute TTL) is priced at the Price List's 30-minute
+    write row; where there is none, at the documented multiple of the input rate for the
+    models whose vocabulary row carries `writeRateOfInput` ("Tokens written to cache are
+    billed at 1.25x the uncached input token rate",
+    https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html, "Prompt
+    caching for models from OpenAI"), and only when that input rate is a published or
+    configured one (never the fallback guess).
+
+    `cache_saving_usd` = the cached tokens at the input rate minus what they cost (negative
+    when writes outweigh reads)."""
+    in_rate, out_rate, source = price(model_id)
+    writes = write5m + write1h + write30m + write_unknown
+    uncached = max(0, int(input_tokens or 0) - read - writes)
+    cost = cost_at(in_rate, out_rate, uncached, output_tokens)
+    rates, cache_source = cache_rates(model_id, source) if (read or writes) else ({}, "")
+    if write30m and "cacheWrite30m" not in rates and source in ("config", "pricelist"):
+        from app.common import prompt_cache
+        multiple = (prompt_cache.support(model_id) or {}).get("writeRateOfInput")
+        if multiple:
+            rates = {**rates, "cacheWrite30m": in_rate * Decimal(str(multiple))}
+            cache_source = f"{cache_source}+doc" if cache_source else "doc"
+    known = write_unknown == 0
+    read_cost = write_cost = Decimal(0)
+    for tokens, kind, bucket in ((read, "cacheRead", "r"), (write5m, "cacheWrite5m", "w"),
+                                 (write1h, "cacheWrite1h", "w"), (write30m, "cacheWrite30m", "w")):
+        if not tokens:
+            continue
+        if kind not in rates:
+            known = False
+            continue
+        part = Decimal(tokens) / _MTOK * rates[kind]
+        if bucket == "r":
+            read_cost += part
+        else:
+            write_cost += part
+    cost += read_cost + write_cost
+    saving = Decimal(0)
+    if known and source != "fallback" and (read or writes):
+        saving = Decimal(read + writes) / _MTOK * in_rate - read_cost - write_cost
+    return {"cost_usd": cost, "in_rate": in_rate, "out_rate": out_rate, "rates_source": source,
+            "cache_read_cost_usd": read_cost, "cache_write_cost_usd": write_cost,
+            "cache_saving_usd": saving, "cache_cost_known": known,
+            "cache_read_rate": rates.get("cacheRead", Decimal(0)),
+            "cache_write_5m_rate": rates.get("cacheWrite5m", Decimal(0)),
+            "cache_write_1h_rate": rates.get("cacheWrite1h", Decimal(0)),
+            "cache_write_30m_rate": rates.get("cacheWrite30m", Decimal(0)),
+            "cache_rates_source": cache_source}
 
 
 def embedding_cost(tokens: int) -> Decimal:

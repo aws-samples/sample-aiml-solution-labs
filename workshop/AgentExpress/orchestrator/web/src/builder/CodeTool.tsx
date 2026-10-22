@@ -22,6 +22,8 @@ import Textarea from "@cloudscape-design/components/textarea";
 import Toggle from "@cloudscape-design/components/toggle";
 import { useState } from "react";
 
+import type { CodeSource } from "./codeSource";
+import { CodeSourceField } from "./CodeSourceField";
 import type { Entry, Json, Project, ToolFiles } from "./model";
 import { codeTool, type CodeCheck, type ToolTest } from "./storage";
 
@@ -29,7 +31,7 @@ type Grants = {
   secret?: string; table?: string; tableAccess?: string; s3Prefix?: string; s3Access?: string;
   vpc?: { subnetIds: string[]; securityGroupIds: string[] };
 };
-export interface Code { grants?: Grants; timeoutSeconds?: number; memoryMB?: number; environment?: Record<string, string> }
+export interface Code { grants?: Grants; timeoutSeconds?: number; memoryMB?: number; environment?: Record<string, string>; codeSource?: CodeSource }
 
 const ACCESS = [{ value: "read", label: "Read" }, { value: "readwrite", label: "Read and write" }];
 
@@ -260,6 +262,18 @@ export function CodeTool({ project, id, onChange, server }: {
     ...(code ? { toolCode: { ...(project.toolCode ?? {}), [id]: code } } : {}),
   });
   const setFiles = (f: ToolFiles) => onChange({ ...project, toolCode: { ...(project.toolCode ?? {}), [id]: f } });
+  const code = (tool.code ?? {}) as Code;
+  const fetched = code.codeSource !== undefined;
+  /** Git or S3: the files are fetched at deploy, so the build keeps none for it. */
+  const setSource = (s: CodeSource | undefined) => {
+    const { codeSource: _cs, ...rest } = code;
+    const next = { ...project, workflow: { ...project.workflow, tools: { ...project.workflow.tools,
+      [id]: { ...tool, code: (s ? { ...rest, codeSource: s } : rest) as unknown as Json } as Entry } } };
+    // Files written before are kept in the draft (switching back finds them); the bundle
+    // leaves them out while a codeSource is set (bff/buildstore.py written_functions).
+    if (s) onChange(next);
+    else onChange(Object.keys(files).length ? next : { ...next, toolCode: { ...(project.toolCode ?? {}), [id]: starterFiles(id, tool) } });
+  };
   return (
     <SpaceBetween size="m">
       <FormField label="The function" description={written ? "Written here, deployed by the framework with only the grants below."
@@ -278,12 +292,14 @@ export function CodeTool({ project, id, onChange, server }: {
       </FormField>
       {written ? (
         <>
-          <Files files={files} onChange={setFiles} />
+          <CodeSourceField source={code.codeSource} onSource={setSource} onFiles={setFiles}
+            buildId={server ? project.id : undefined} path={`tools.${id}.code.codeSource`} />
+          {fetched ? null : <Files files={files} onChange={setFiles} />}
           <ExpandableSection headerText="What it may reach" variant="container" defaultExpanded>
             <GrantsForm code={(tool.code ?? {}) as Code}
               onChange={(c) => setTool({ ...tool, code: c as unknown as Json } as Entry)} />
           </ExpandableSection>
-          {server ? (
+          {server && !fetched ? (
             <ExpandableSection headerText="Check and run" variant="container" defaultExpanded
               headerDescription="Syntax, lint and a security scan, then each test event in an AgentCore Code Interpreter sandbox.">
               <SpaceBetween size="s">

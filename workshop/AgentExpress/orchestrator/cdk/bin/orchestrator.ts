@@ -139,6 +139,8 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   // Buckets (or bucket/prefix) the AgentExpress Assistant may read when a message names
   // s3://... (bff/designer.py). Comma-separated; none by default.
   designerS3Buckets: String(ctx("designerS3Buckets", "")).split(",").map((s) => s.trim()).filter(Boolean),
+  // S3 code sources a build in this console's own account may read (bff/code_source.py).
+  codeSourceBuckets: String(ctx("codeSourceBuckets", "")).split(",").map((s) => s.trim()).filter(Boolean),
   // The AgentExpress Assistant's model and the small model that condenses long
   // conversations. Empty = bff/designer.py's defaults (Claude Sonnet 5.5; the deployment's
   // default model), in the console region's inference-profile geography.
@@ -146,6 +148,8 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   designerSummaryModel: ctx("designerSummaryModel", ""),
   // How hard the Assistant's model reasons: medium (default) | low | high | model.
   designerEffort: ctx("designerEffort", ""),
+  // The model that reviews the Assistant's changes. Empty = bff/review.py's default.
+  designerReviewModel: ctx("designerReviewModel", ""),
   // Serve this workflow to other teams' agents over A2A (lib/a2a-server.ts). Off unless
   // -c exposeA2a=true. Without a created Cognito pool, -c a2aIdentity='{"audience":...,
   // "scope":...,"clientIds":[...]}' says whose machine tokens to accept. -c a2aApprovers=a,b

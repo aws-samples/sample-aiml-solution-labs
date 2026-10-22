@@ -513,7 +513,7 @@ def test_terraform_grants_the_secret_only_when_on_and_only_on_that_arn():
     runtime = tf.split('resource "aws_iam_role_policy" "runtime_otlp_export"')[1].split("\n}\n")[0]
     sub = tf.split('resource "aws_iam_role_policy" "subagent_otlp_export"')[1].split("\n}\n")[0]
     assert "count  = local.workflow_plane && local.otlp_export_enabled ? 1 : 0" in runtime
-    assert "for_each = local.otlp_export_enabled ? local.dedicated_agents : {}" in sub
+    assert "for_each = { for id, a in local.dedicated_agents : id => id if local.otlp_export_enabled }" in sub
     policy = tf.split("otlp_export_policy = ")[1].split("\n  })\n")[0]
     assert 'Action   = ["secretsmanager:GetSecretValue"]' in policy
     assert "Resource = var.otlp_headers_secret_arn" in policy

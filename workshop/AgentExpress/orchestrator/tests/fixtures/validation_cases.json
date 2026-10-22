@@ -11633,7 +11633,7 @@
       "id": "step"
      },
      "path": "agents.step.task.bogus",
-     "message": "unknown key; allowed: kind, tool, arguments, language, code, file, features, format, name, from"
+     "message": "unknown key; allowed: kind, tool, arguments, language, code, codeSource, file, features, format, name, from"
     }
    ]
   },
@@ -15569,6 +15569,1450 @@
      "message": "must be a string"
     }
    ]
+  },
+  {
+   "name": "promptCache on a Claude agent is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "tools": true,
+      "messages": true,
+      "ttl": "1h"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "promptCache ttl must be 5m, 1h or 30m",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "ttl": "10m"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.ttl",
+     "message": "must be \"5m\", \"1h\" or \"30m\""
+    }
+   ]
+  },
+  {
+   "name": "promptCache unknown key",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "prefix": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.prefix",
+     "message": "unknown key; allowed: system, tools, messages, ttl"
+    }
+   ]
+  },
+  {
+   "name": "promptCache flag must be a boolean",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": "yes"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.system",
+     "message": "must be a boolean"
+    }
+   ]
+  },
+  {
+   "name": "promptCache does not apply to an a2a agent",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "promptCache"
+     ],
+     {
+      "system": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.promptCache",
+     "message": "`promptCache` does not apply to runtime \"a2a\" — a key that looks like a setting and controls nothing is rejected, not ignored"
+    }
+   ]
+  },
+  {
+   "name": "promptCache tools on Nova is an error",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "us.amazon.nova-lite-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "tools": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.tools",
+     "message": "Amazon Nova Lite caches the system prompt and messages only, not tool definitions"
+    }
+   ]
+  },
+  {
+   "name": "promptCache 1h on Nova is an error",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "us.amazon.nova-lite-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "messages": true,
+      "ttl": "1h"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.ttl",
+     "message": "Amazon Nova Lite caches for 5 minutes only; use \"5m\""
+    }
+   ]
+  },
+  {
+   "name": "promptCache on an undocumented model warns",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "meta.llama3-3-70b-instruct-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache",
+     "message": "meta.llama3-3-70b-instruct-v1:0 has no documented explicit prompt caching through Converse (AWS table copied 2026-10-21); calls to it are sent without cache points"
+    }
+   ]
+  },
+  {
+   "name": "promptCache system on OpenAI GPT-5.6 Sol is valid (InvokeModel)",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "openai.gpt-5.6-sol"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "promptCache 30m on a us. OpenAI GPT-6 Astra profile is valid",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "us.openai.gpt-6-astra"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "ttl": "30m"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "promptCache 1h on OpenAI GPT-5.6 Sol is an error",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "us.openai.gpt-5.6-sol"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "ttl": "1h"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.ttl",
+     "message": "GPT-5.6 Sol caches for 30 minutes; use \"30m\" or leave ttl out"
+    }
+   ]
+  },
+  {
+   "name": "promptCache tools and messages on OpenAI GPT-5.6 Luna are errors",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "global.openai.gpt-5.6-luna"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "tools": true,
+      "messages": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.tools",
+     "message": "GPT-5.6 Luna caches the system prompt only: tool-calling turns go through Converse, which takes no explicit cache point for this model"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.messages",
+     "message": "GPT-5.6 Luna caches the system prompt only: tool-calling turns go through Converse, which takes no explicit cache point for this model"
+    }
+   ]
+  },
+  {
+   "name": "promptCache on OpenAI GPT-6 Sol (not in the AWS table) warns",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "us.openai.gpt-6-sol"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache",
+     "message": "us.openai.gpt-6-sol has no documented explicit prompt caching through Converse (AWS table copied 2026-10-21); calls to it are sent without cache points"
+    }
+   ]
+  },
+  {
+   "name": "promptCache 30m on Claude is an error",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "ttl": "30m"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.promptCache.ttl",
+     "message": "Claude Haiku 4.5 has no 30-minute TTL; use \"5m\" or \"1h\""
+    }
+   ]
+  },
+  {
+   "name": "promptCache on a global profile resolves to its base model",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": true,
+      "ttl": "1h"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "promptCache all off checks no model",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "model"
+     ],
+     "meta.llama3-3-70b-instruct-v1:0"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "promptCache"
+     ],
+     {
+      "system": false
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "network: orchestrator VPC, a dedicated agent's VPC and a dedicated agent's PUBLIC are valid",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "network"
+     ],
+     {
+      "mode": "VPC",
+      "subnetIds": [
+       "subnet-0123456789abcdef0",
+       "subnet-0fedcba9876543210"
+      ],
+      "securityGroupIds": [
+       "sg-0123456789abcdef0"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "network"
+     ],
+     {
+      "mode": "VPC",
+      "subnetIds": [
+       "subnet-0123456789abcdef0"
+      ],
+      "securityGroupIds": [
+       "sg-0123456789abcdef0"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "web_search",
+      "network"
+     ],
+     {
+      "mode": "PUBLIC"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "network: mode VPC with no subnets or security groups is an error",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "network"
+     ],
+     {
+      "mode": "VPC"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "web_search",
+      "network"
+     ],
+     {
+      "mode": "VPC",
+      "subnetIds": [],
+      "securityGroupIds": [
+       "sg-0123456789abcdef0"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.network.subnetIds",
+     "message": "mode \"VPC\" needs 1-16 ids, each subnet-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.network.securityGroupIds",
+     "message": "mode \"VPC\" needs 1-16 ids, each sg-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "web_search"
+     },
+     "path": "agents.web_search.network.subnetIds",
+     "message": "mode \"VPC\" needs 1-16 ids, each subnet-..."
+    }
+   ]
+  },
+  {
+   "name": "network: a missing or unknown mode, malformed ids and more than 16 are errors",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "network"
+     ],
+     {
+      "mode": "vpc",
+      "subnetIds": [
+       "subnet-0123456789abcdef0",
+       "subnet-0fedcba9876543210"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "knowledge_research",
+      "network"
+     ],
+     {
+      "subnetIds": [
+       "subnet-0123456789abcdef0",
+       "subnet-0fedcba9876543210"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "documentation_search",
+      "network"
+     ],
+     {
+      "mode": "VPC",
+      "subnetIds": [
+       "subnet-xyz",
+       "vpc-0123456789abcdef0"
+      ],
+      "securityGroupIds": [
+       "sg-0123456789abcd000",
+       "sg-0123456789abcd001",
+       "sg-0123456789abcd002",
+       "sg-0123456789abcd003",
+       "sg-0123456789abcd004",
+       "sg-0123456789abcd005",
+       "sg-0123456789abcd006",
+       "sg-0123456789abcd007",
+       "sg-0123456789abcd008",
+       "sg-0123456789abcd009",
+       "sg-0123456789abcd010",
+       "sg-0123456789abcd011",
+       "sg-0123456789abcd012",
+       "sg-0123456789abcd013",
+       "sg-0123456789abcd014",
+       "sg-0123456789abcd015",
+       "sg-0123456789abcd016"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "web_search",
+      "network"
+     ],
+     {
+      "mode": "VPC",
+      "subnetIds": "subnet-0123456789abcdef0",
+      "securityGroupIds": [
+       "sg-0123456789abcdef0"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.network.mode",
+     "message": "\"vpc\" is not one of: PUBLIC, VPC"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "knowledge_research"
+     },
+     "path": "agents.knowledge_research.network.mode",
+     "message": "is required: one of PUBLIC, VPC"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.network.subnetIds",
+     "message": "1-16 ids, each subnet-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "documentation_search"
+     },
+     "path": "agents.documentation_search.network.securityGroupIds",
+     "message": "1-16 ids, each sg-..."
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "web_search"
+     },
+     "path": "agents.web_search.network.subnetIds",
+     "message": "must be an array"
+    }
+   ]
+  },
+  {
+   "name": "network: ids on mode PUBLIC and an unknown key are errors",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "network"
+     ],
+     {
+      "mode": "PUBLIC",
+      "subnetIds": [
+       "subnet-0123456789abcdef0",
+       "subnet-0fedcba9876543210"
+      ],
+      "securityGroupIds": [
+       "sg-0123456789abcdef0"
+      ],
+      "vpcId": "vpc-0123456789abcdef0"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.network.vpcId",
+     "message": "unknown key; allowed: mode, subnetIds, securityGroupIds"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.network.subnetIds",
+     "message": "applies to mode \"VPC\" only"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.network.securityGroupIds",
+     "message": "applies to mode \"VPC\" only"
+    }
+   ]
+  },
+  {
+   "name": "network on a main, an a2a or a harness agent is rejected with what to set instead",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "network"
+     ],
+     {
+      "mode": "VPC",
+      "subnetIds": [
+       "subnet-0123456789abcdef0",
+       "subnet-0fedcba9876543210"
+      ],
+      "securityGroupIds": [
+       "sg-0123456789abcdef0"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "analysis",
+      "network"
+     ],
+     {
+      "mode": "PUBLIC"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write the draft. Return JSON.",
+      "network": {
+       "mode": "VPC",
+       "subnetIds": [
+        "subnet-0123456789abcdef0",
+        "subnet-0fedcba9876543210"
+       ],
+       "securityGroupIds": [
+        "sg-0123456789abcdef0"
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.network",
+     "message": "`network` does not apply to runtime \"main\" — it runs inside the shared orchestrator Runtime: set orchestrator.network, or switch this agent to runtime \"dedicated\" to give it its own network"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "analysis"
+     },
+     "path": "agents.analysis.network",
+     "message": "`network` does not apply to runtime \"a2a\" — a remote agent runs on its owner's network, outside this build"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.network",
+     "message": "`network` does not apply to runtime \"harness\" — set a harness agent's network in harness.network"
+    }
+   ]
+  },
+  {
+   "name": "code source: a Lambda tool from git, pinned, with a token secret",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "git": {
+         "url": "https://github.com/example-org/tools.git",
+         "ref": "v1.2.0",
+         "path": "tools/lookup",
+         "token": "tools-repo"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "code source: a ref with a trailing newline is refused on both sides",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "git": {
+         "url": "https://github.com/example-org/tools.git",
+         "ref": "main\n",
+         "path": "tools/lookup",
+         "token": "tools-repo"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource.git.ref",
+     "message": "must pin a branch, a tag or a commit (no spaces, no leading -, no ..)"
+    }
+   ]
+  },
+  {
+   "name": "code source: a Lambda tool from an S3 zip",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "s3": {
+         "uri": "s3://amzn-s3-demo-bucket/tools/lookup.zip",
+         "path": "src"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "code source: a Lambda tool from an S3 prefix",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "s3": {
+         "uri": "s3://amzn-s3-demo-bucket/tools/lookup/"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "code source: a bad git source is refused field by field",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "git": {
+         "url": "http://user:pw@example.com/r.git",
+         "ref": "-x",
+         "path": "../up",
+         "token": "has space",
+         "branch": "main"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource.git.branch",
+     "message": "unknown key; git takes: url, ref, path, token"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource.git.url",
+     "message": "must be an https:// repository URL with no user name, password, query or fragment"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource.git.ref",
+     "message": "must pin a branch, a tag or a commit (no spaces, no leading -, no ..)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource.git.token",
+     "message": "must be the name of a build secret (letters, digits, _ . -), never the token itself"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource.git.path",
+     "message": "must be a relative path inside the source (no leading /, no ..)"
+    }
+   ]
+  },
+  {
+   "name": "code source: an image is for a hosted MCP server only",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "image": "111122223333.dkr.ecr.us-east-1.amazonaws.com/tools:1"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource",
+     "message": "must have exactly one of: git or s3"
+    }
+   ]
+  },
+  {
+   "name": "code source: exactly one of git or s3, and an S3 URI that is neither a prefix nor a zip",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "lookup"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "git": {
+         "url": "https://example.com/r.git",
+         "ref": "main"
+        },
+        "s3": {
+         "uri": "s3://b/k"
+        }
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "other"
+     ],
+     {
+      "type": "lambda",
+      "description": "Lookups, from code elsewhere.",
+      "toolSchema": [
+       {
+        "name": "lookup",
+        "description": "Look up.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What."
+         }
+        }
+       }
+      ],
+      "code": {
+       "codeSource": {
+        "s3": {
+         "uri": "s3://amzn-s3-demo-bucket/tools/lookup.py"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "lookup"
+     },
+     "path": "tools.lookup.code.codeSource",
+     "message": "must have exactly one of: git or s3"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "other"
+     },
+     "path": "tools.other.code.codeSource.s3.uri",
+     "message": "must be s3://<bucket>/<prefix>/ (ending in /) or s3://<bucket>/<key>.zip"
+    }
+   ]
+  },
+  {
+   "name": "code source: a Run code step's script from git",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "code",
+       "language": "python",
+       "codeSource": {
+        "git": {
+         "url": "https://github.com/example-org/scripts.git",
+         "ref": "0123456789abcdef0123456789abcdef01234567",
+         "path": "jobs/run.py"
+        }
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "code source: a Run code step takes code or codeSource, not both",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "code",
+       "code": "print(1)",
+       "codeSource": {
+        "s3": {
+         "uri": "s3://amzn-s3-demo-bucket/scripts/",
+         "path": "run.py"
+        }
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.codeSource",
+     "message": "use one of code (written or uploaded here) or codeSource, not both"
+    }
+   ]
+  },
+  {
+   "name": "code source: a Run code step's source is checked",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "step"
+     ],
+     {
+      "name": "A step",
+      "runtime": "task",
+      "task": {
+       "kind": "code",
+       "codeSource": {
+        "s3": {
+         "uri": "https://amzn-s3-demo-bucket/run.py"
+        }
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "step"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "step"
+     },
+     "path": "agents.step.task.codeSource.s3.uri",
+     "message": "must be s3://<bucket>/<prefix>/ (ending in /) or s3://<bucket>/<key>.zip"
+    }
+   ]
+  },
+  {
+   "name": "code source: an interceptor from S3",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "interceptors"
+     ],
+     {
+      "request": {
+       "code": {
+        "codeSource": {
+         "s3": {
+          "uri": "s3://amzn-s3-demo-bucket/interceptors/request/"
+         }
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
   }
  ]
 }

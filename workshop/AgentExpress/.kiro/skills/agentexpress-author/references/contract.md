@@ -19,7 +19,7 @@ the rest.
 |---|---|---|
 | `kb` | `corpora`, `maxResults`, `policy`, or `s3Uri` / `knowledgeBaseId`; optional `chunking`, `parsing`, `rerank`, `vectorStore` (your own store), `dataSource` (web, Confluence, SharePoint, Salesforce; needs an OpenSearch Serverless store) | A Bedrock Knowledge Base. Each top-level folder in `kb_docs/` is a corpus |
 | `websearch` | `maxResults`, `domains` | Web search (us-east-1, eu-west-1, ap-northeast-1 only) |
-| `mcp` | `endpoint`, `call`, `arg`, `args`, `listingMode`, `auth` / `identity` | An existing MCP server |
+| `mcp` | `endpoint` **or** `hosted` (`code`, `network`), `call`, `arg`, `args`, `listingMode`, `auth` / `identity` | An existing MCP server, or one the build hosts on its own AgentCore Runtime |
 | `openapi` | `schema` (inline), `schemaS3Uri` or `source`, `call`, `arg`, `auth` / `identity`, `rowFields`, `rowPath` | A REST API |
 | `lambda` | `code` **or** `lambdaArn` **or** `source`, `call`, `arg`, `toolSchema`, `rowFields` | Anything else |
 | `apigateway` | `restApiId`, `stage`, `toolFilters`, `toolOverrides`, `auth` (`sigv4`/`apikey`) / `identity` | An API Gateway REST API |
@@ -71,6 +71,41 @@ deploys it (Python 3.12) with a role of logs plus only the grants listed:
 (`s3Access`) and a `vpc`; the role is capped by a permissions boundary of the same, and a
 grant only reaches a resource tagged `agentexpress:code-tools=true` (a bucket also needs S3 ABAC on). Nothing
 else (no managed policies).
+
+### Code sources: code fetched at deploy
+
+Instead of files in `toolCode`, a function's code can come from git or S3, fetched by the deploy.
+The key is `tools.<key>.code.codeSource`, `orchestrator.interceptors.<point>.code.codeSource`,
+`agents.<id>.task.codeSource` (a Run code step, instead of `task.code`) or `tools.<key>.hosted.code`
+(a hosted MCP server). Exactly one of:
+
+```json
+{ "git":   { "url": "https://git.example.com/team/tools.git", "ref": "v1.4.0", "path": "orders", "token": "gitDeployToken" } }
+{ "s3":    { "uri": "s3://amzn-s3-demo-bucket/tools/orders/", "path": "src" } }
+{ "image": "111122223333.dkr.ecr.us-east-1.amazonaws.com/facts-mcp:1.0" }
+```
+
+- `git.url` is `https://` with no credentials in it; `ref` (a branch, tag or commit) is required;
+  `token` is the NAME of a `gitTokens` build secret, never the token.
+- `s3.uri` ends in `/` (a prefix) or `.zip`. A build deployed into the console's own account may
+  read only buckets the operator listed (`codeSourceBuckets` / `code_source_buckets`, empty by
+  default); a connected account reads with its own deploy role.
+- `image` (a private ECR URI) is for `hosted.code` only.
+
+### `mcp` with `hosted`: a server the build runs
+
+```json
+"facts": { "type": "mcp", "description": "Look up reference facts.", "call": "lookup_fact", "arg": "query",
+           "hosted": { "network": { "mode": "PUBLIC" } } }
+```
+
+With no `hosted.code`, the files are in the bundle's `toolCode.facts`: `server.py` serving MCP over
+streamable HTTP on `0.0.0.0:8000` at `/mcp` (stateless; with the MCP Python SDK, `FastMCP(host="0.0.0.0",
+stateless_http=True)` and `mcp.run(transport="streamable-http")`), `requirements.txt` starting with
+`mcp==1.30.0` and `pydantic==2.13.5`, and an optional `Dockerfile` (without one the deploy builds an
+ARM64 Python 3.13 image running `python server.py`). Leave `endpoint`, `auth` and `service` unset: the
+Gateway reaches it with SigV4. The key is at most 32 characters. Tools are published as
+`<key>___<tool>`; `call` is the tool name without the prefix.
 
 ### `lambda`: `lambdaArn` for a function you already own, `source` only for shipped functions
 
@@ -194,6 +229,8 @@ Other agent keys an author uses:
 | `skills` | Names in the top-level `skills` map |
 | `askPerson` | `true` or `{"maxQuestions", "timeout"}`: the agent may ask a person mid-step (`main`, `toolMode: "model"`) |
 | `models` | `{"route": [{"model", "inputTokensOver" or "matches"}], "fallback": [up to 3 models]}` (`main`, `dedicated`) |
+| `promptCache` | `{"system": true, "tools": true, "messages": true, "ttl": "5m"}` (`main`, `dedicated`; off unless set). Only what the model's row in `app/vocabulary.json` `promptCacheModels` lists: Claude all three (`ttl` `1h` where listed), Amazon Nova `system` and `messages` (5m), the listed OpenAI models (GPT-5.6 Sol, Terra, Luna, GPT-6 Astra, GPT-6.1 Sol) `system` only with `ttl` `30m` or none. A field or `ttl` the row lacks is an error; an unlisted model is a warning (sent uncached) |
+| `network` | `{"mode": "VPC", "subnetIds": ["subnet-..."], "securityGroupIds": ["sg-..."]}` (1-16 each) or `{"mode": "PUBLIC"}`: this agent's own Runtime network, `dedicated` only (`main` and `task` agents use `orchestrator.network`, `harness` agents `harness.network`, `a2a` none). Omitted: `PUBLIC` |
 | `model: "litellm/<name>"` | A non-Bedrock model through the deployment's LiteLLM proxy |
 
 `agentcore` holds `guardrails` (`input`/`output`, `use`: a named guardrail), `memory`
@@ -228,6 +265,9 @@ Defined once, used by name:
   read only `context.input.<argument>`. `orchestrator.policy` sets `enabled` and `mode`
   (`ENFORCE` or `LOG_ONLY`).
 - `orchestrator.gatewayIdentity: "perAgent"` gives each tool-using agent its own Gateway client.
+- `orchestrator.network`: the shared orchestrator Runtime's network, for every `main` and `task`
+  agent, the same shape as an agent's `network`; omitted: `PUBLIC`. A `dedicated` agent does not
+  inherit it.
 - `orchestrator.interceptors.request` / `.response`: exactly one of `code` (files in the bundle's
   `toolCode["interceptor-request"]` / `["interceptor-response"]`, `handler.py` with
   `lambda_handler(event, context)` returning `{"interceptorOutputVersion": "1.0", "mcp": {...}}`)
@@ -334,7 +374,8 @@ Two ways to work on it:
   while it still carries the Builder's marker, and an `agent.py` is never touched.
 
 Keep `{"library": "<id>"}` entries as they are, put no secret in the file (secrets stay in the
-console), and a code tool may hold only `*.py`, `requirements.txt` and `events.json`.
+console), and a code tool may hold only `*.py`, `requirements.txt` and `events.json` (a hosted
+MCP server: `*.py`, `requirements.txt` and `Dockerfile`).
 
 ## `scaffold.py` CLI
 

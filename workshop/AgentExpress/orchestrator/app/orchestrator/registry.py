@@ -65,6 +65,8 @@ def _configure(agent: Agent, agent_id: str, spec: dict) -> Agent:
     agent.image = dict(spec.get("image") or {})
     # Images from earlier agents this agent's model reads (ctx.llm; see images.load_for).
     agent.vision = dict(spec.get("vision") or {})
+    # Bedrock prompt caching for this agent's model calls (app/common/prompt_cache.py).
+    agent.prompt_cache = dict(spec.get("promptCache") or {})
     # The files the run was started with (uploads, s3:// paths), as model content; see
     # app/common/attachments.py.
     agent.attachments = spec.get("attachments", defaults.get("agent", "attachments")) is True
@@ -363,7 +365,7 @@ def validate_runtimes() -> None:
         decorative = [k for k in ("model", "temperature", "topP", "stopSequences", "maxTokens",
                                   "access", "framework", "output", "image", "vision", "attachments",
                                   "toolMode", "maxToolCalls", "skills", "askPerson", "task",
-                                  "instructions", "harness", "models") if k in spec]
+                                  "instructions", "harness", "models", "promptCache") if k in spec]
         if decorative:
             # All three configure ctx.llm, and a remote agent never calls it — its
             # model, its temperature, its budget. Left settable, they would read as
@@ -372,6 +374,12 @@ def validate_runtimes() -> None:
                 f"agent {agent_id!r} has runtime \"a2a\" and also {', '.join(decorative)}. Those "
                 f"configure this deployment's model call, which a remote agent does not make — it "
                 f"chooses its own model and owns its own token budget. Remove them.")
+        if "network" in spec:
+            # `network` places a Runtime this deployment creates; a remote agent has none here.
+            raise ValueError(
+                f"agent {agent_id!r} has runtime \"a2a\" and also network. A remote agent runs on "
+                f"its owner's network, outside this build, so there is no Runtime here to place "
+                f"in a VPC. Remove it.")
         if spec.get("tool") or spec.get("corpus"):
             # The remote agent owns its own tools. A `tool` here would look like this
             # deployment governs that access through its Gateway and Cedar policy,

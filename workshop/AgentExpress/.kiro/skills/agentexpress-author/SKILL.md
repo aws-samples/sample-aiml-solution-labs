@@ -22,7 +22,7 @@ targets, Cedar policies, the Bedrock Guardrail, IAM roles, the console UI and th
 |---|---|---|
 | `orchestrator/app/workflow.json` | Always | Agents, topology, tools, gates, RBAC, guardrail policy, UI strings |
 | `orchestrator/app/subagents/<id>/` | Always | One folder per agent: `agent.py`, `prompts.py`, `__init__.py` |
-| `orchestrator/app/tools/<name>/` | Only for a tool shipping code | `openapi.json` for `type: openapi`; a code tool's `handler.py` under `app/tools/_code/<key>/` (`tools.<key>.code`) |
+| `orchestrator/app/tools/<name>/` | Only for a tool shipping code | `openapi.json` for `type: openapi`; a code tool's `handler.py` under `app/tools/_code/<key>/` (`tools.<key>.code`); a hosted MCP server's `server.py` there too (`tools.<key>.hosted`) |
 | `orchestrator/kb_docs/<corpus>/` | Only for a Knowledge Base tool | The customer's documents; each top-level folder is one corpus |
 
 A reasoning-only workflow touches two. A workflow with its own data source touches three
@@ -116,6 +116,17 @@ A failure here means the customer's config is wrong, not that a test is stale.
 - **Steps without agent code:** `runtime: "task"` (tool, code, extract, output) and
   `runtime: "harness"` (an AgentCore Harness from `instructions`, or `harness.arn`) need no folder
   under `app/subagents/`. See [references/contract.md](references/contract.md).
+- **Hosted MCP servers** (`tools.<key>.hosted` instead of `endpoint`) run on their own AgentCore
+  Runtime behind the Gateway: the key is at most 32 characters, `auth` stays unset, and the starter
+  `requirements.txt` pins `mcp==1.30.0` and `pydantic==2.13.5` (an older MCP SDK fails to import).
+- **Code sources** (`code.codeSource`, `task.codeSource`, `hosted.code`) take git or S3 instead of
+  files in the bundle; a git `token` is a secret's NAME. S3 in the console's own account works only
+  for buckets the operator listed.
+- **Prompt caching** (`agents.<id>.promptCache`) is per agent, `main` and `dedicated` only, and
+  limited to what the model's row in `promptCacheModels` (`app/vocabulary.json`) lists.
+- **Runtime network**: `orchestrator.network` for `main` and `task` agents, `agents.<id>.network`
+  for `dedicated` ones, `harness.network` for harness agents; `a2a` agents take none. The default is
+  `PUBLIC`.
 - **The topology is a declared DAG.** Dynamic agent-to-agent routing is not expressible;
   `branch` covers conditional paths.
 - **`app/keys.json` is the source of truth**, not `workflow.schema.json` — the schema is

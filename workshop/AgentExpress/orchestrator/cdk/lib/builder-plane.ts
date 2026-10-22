@@ -99,6 +99,8 @@ export interface BuilderPlaneProps {
   iamRolePath?: string;
   /** This console's LiteLLM proxy and key (lib/litellm.ts), passed on to every build. */
   litellmEnv?: Record<string, string>;
+  /** Buckets an S3 code source may name in this console's own account (deployer/runner.py). */
+  codeSourceBuckets?: string[];
 }
 
 export class BuilderPlane extends Construct {
@@ -206,6 +208,8 @@ export class BuilderPlane extends Construct {
         TERRAFORM_VERSION: { value: TERRAFORM_VERSION },
         SECRETS_PREFIX: { value: this.secretsPrefix },
         CONSOLE_NAME: { value: agentName },
+        // S3 code sources a build in this account may read (runner.py code_source_s3).
+        CODE_SOURCE_BUCKETS: { value: (props.codeSourceBuckets ?? []).join(",") },
         // The organisation's boundary and role path, for every build's roles.
         ...Object.fromEntries(Object.entries(buildGuardrailEnv({
           permissionsBoundaryArn: props.permissionsBoundaryArn ?? "", iamRolePath: props.iamRolePath ?? "/",

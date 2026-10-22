@@ -233,8 +233,10 @@ def bundle_of(project: dict, version: int) -> dict:
     prompts = {aid: p for aid, p in (project.get("prompts") or {}).items()
                if aid in agents and (agents[aid] or {}).get("runtime") != "a2a"}
     # The files of each function written in the build (tools.<key>.code and
-    # orchestrator.interceptors.<point>.code), and only those.
-    coded = code_functions(workflow)
+    # orchestrator.interceptors.<point>.code), and only those, plus hosted MCP servers written
+    # in the build. One whose codeSource (or hosted.code) is git or S3 travels as that
+    # reference only: the deployer fetches it (deployer/code_fetch.py).
+    coded = written_functions(workflow) + hosted_mcp_code(workflow)
     code = {k: files for k, files in (project.get("toolCode") or {}).items() if k in coded}
     return {"format": "agentexpress-bundle", "version": 1,
             "framework": {"version": FRAMEWORK_VERSION},
@@ -265,6 +267,22 @@ def code_interceptors(workflow: dict) -> list[str]:
 def code_functions(workflow: dict) -> list[str]:
     """Every function written in the build: code tools, then interceptors."""
     return code_tools(workflow) + code_interceptors(workflow)
+
+
+def written_functions(workflow: dict) -> list[str]:
+    """The code functions whose files the build holds (toolCode): not those fetched from
+    git or S3 at deploy time (their `codeSource`, bff/code_source.py)."""
+    import code_source
+    fetched = code_source.fetched_functions(workflow)
+    return [k for k in code_functions(workflow) if k not in fetched]
+
+
+def hosted_mcp_code(workflow: dict) -> list[str]:
+    """Hosted MCP servers whose code is written in the build (tools.<key>.hosted with no
+    `code`): their files are toolCode[<key>] (scaffold.py writes them to app/tools/_code/<key>/)."""
+    return [k for k, t in (workflow.get("tools") or {}).items()
+            if isinstance(t, dict) and str(t.get("type") or "").lower() == "mcp"
+            and isinstance(t.get("hosted"), dict) and t["hosted"].get("code") is None]
 
 
 def needs_gateway(workflow: dict) -> bool:

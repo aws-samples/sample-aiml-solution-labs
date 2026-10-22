@@ -456,9 +456,10 @@ export const codeTool = {
 };
 // --- a build's secrets and documents ---------------------------------------------------
 
-export type SecretKind = "toolApiKeys" | "a2aTokens" | "identitySecrets";
+/** gitTokens: a private repository's token, named by a git code source (codeSource.ts). */
+export type SecretKind = "toolApiKeys" | "a2aTokens" | "identitySecrets" | "gitTokens";
 /** Which secrets are set, by kind — names only; no route ever returns a value. */
-export type SecretNames = Record<SecretKind, string[]>;
+export type SecretNames = Record<Exclude<SecretKind, "gitTokens">, string[]> & { gitTokens?: string[] };
 
 export const buildSecrets = {
   names: (id: string) => api.get<SecretNames>(`/api/builds/${enc(id)}/secrets`),
@@ -546,7 +547,11 @@ export interface DesignTurn {
   changes?: DesignChange[];
   /** Files the user's message brought: uploads, or objects named by an s3:// path. */
   attachments?: { name: string; source: "upload" | "s3"; uri?: string; size?: number }[];
+  /** How the second-model review of this reply's change went (bff/review.py); none when off. */
+  review?: { status: "ok" | "applied" | "noted" | "skipped" | "unavailable"; count?: number };
 }
+/** Review changes: whether a second model checks the Assistant's changes before they're saved. */
+export type ReviewMode = "off" | "auto" | "always";
 
 export interface DesignDoc {
   turns: DesignTurn[];
@@ -562,9 +567,10 @@ export interface DesignDoc {
 
 export const designer = {
   get: (id: string) => api.get<DesignDoc>(`/api/builds/${encodeURIComponent(id)}/design`),
-  send: (id: string, message: string, attachments: { key: string; name: string }[] = []) =>
+  send: (id: string, message: string, attachments: { key: string; name: string }[] = [],
+    review: ReviewMode = "auto") =>
     api.post<DesignDoc>(`/api/builds/${encodeURIComponent(id)}/design`,
-      attachments.length ? { message, attachments } : { message }),
+      attachments.length ? { message, attachments, review } : { message, review }),
   /** Upload one file for the next message, straight to S3 with a presigned POST. */
   attach: async (id: string, file: File): Promise<{ key: string; name: string }> => {
     const { url, fields, key, name } = await api.post<{ url: string; fields: Record<string, string>; key: string; name: string }>(

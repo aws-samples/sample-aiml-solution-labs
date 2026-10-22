@@ -87,6 +87,21 @@ export function codeInterceptors(wf: Workflow): string[] {
 export function codeFunctions(wf: Workflow): string[] {
   return [...codeTools(wf), ...codeInterceptors(wf)];
 }
+/** The code functions whose files the build holds: not those whose `code.codeSource` (git or
+ *  S3) is fetched at deploy. Mirrors bff/buildstore.py written_functions. */
+export function writtenFunctions(wf: Workflow): string[] {
+  const has = (c: unknown) => !!c && typeof c === "object" && !Array.isArray(c) && "codeSource" in (c as object);
+  const orch = wf.orchestrator as Record<string, Record<string, Record<string, unknown>>> | undefined;
+  return codeFunctions(wf).filter((k) => !(k.startsWith("interceptor-")
+    ? has(orch?.interceptors?.[k.slice("interceptor-".length)]?.code) : has(wf.tools?.[k]?.code)));
+}
+/** Hosted MCP servers whose code is written in the build (tools.<key>.hosted with no `code`):
+ *  their files are toolCode[<key>]. Mirrors bff/buildstore.py hosted_mcp_code. */
+export function hostedMcpCode(wf: Workflow): string[] {
+  return Object.entries(wf.tools ?? {}).filter(([, t]) => String(t.type ?? "").toLowerCase() === "mcp"
+    && !!(t as Record<string, unknown>).hosted && typeof (t as Record<string, unknown>).hosted === "object"
+    && ((t as Record<string, any>).hosted.code === undefined || (t as Record<string, any>).hosted.code === null)).map(([k]) => k);
+}
 
 export type StageKind = "single" | "parallel" | "sequence";
 
@@ -595,7 +610,8 @@ export interface Bundle {
 export function toBundle(project: Project, now = new Date()): Bundle {
   const prompts = Object.fromEntries(Object.entries(project.prompts)
     .filter(([id]) => id in project.workflow.agents && project.workflow.agents[id].runtime !== "a2a"));
-  const coded = codeFunctions(project.workflow);
+  // Git and S3 code sources travel as references only (bff/buildstore.py bundle_of).
+  const coded = [...writtenFunctions(project.workflow), ...hostedMcpCode(project.workflow)];
   const toolCode = Object.fromEntries(Object.entries(project.toolCode ?? {}).filter(([k]) => coded.includes(k)));
   return {
     format: BUNDLE_FORMAT, version: BUNDLE_VERSION,
@@ -666,7 +682,7 @@ export function replaceWorkflow(project: Project, text: string, now = new Date()
   const got = fromFile(text, project.name, now);
   const kept = Object.fromEntries(Object.entries(project.prompts)
     .filter(([id]) => id in got.workflow.agents));
-  const coded = codeFunctions(got.workflow);
+  const coded = [...codeFunctions(got.workflow), ...hostedMcpCode(got.workflow)];
   const code = Object.fromEntries(Object.entries({ ...(project.toolCode ?? {}), ...(got.toolCode ?? {}) })
     .filter(([k]) => coded.includes(k)));
   return { ...project, workflow: got.workflow, prompts: { ...kept, ...got.prompts },

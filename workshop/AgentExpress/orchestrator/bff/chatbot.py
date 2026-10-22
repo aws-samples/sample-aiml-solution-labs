@@ -161,13 +161,41 @@ def _t_costs(args, ctx, si):
     rows = _tel_rows(sid)
     if not rows:
         return {"error": "no telemetry for this run"}, None
-    per, total = {}, 0.0
+    per, total, cache, known = {}, 0.0, {}, True
     for r in rows:
         c = _num(r.get("cost_usd"))
-        per[r.get("agent_id", "?")] = per.get(r.get("agent_id", "?"), 0.0) + c
+        aid = r.get("agent_id", "?")
+        per[aid] = per.get(aid, 0.0) + c
         total += c
-    return {"session_id": sid, "totalCostUsd": round(total, 4),
-            "byAgent": {k: round(v, 4) for k, v in sorted(per.items(), key=lambda x: -x[1])}}, None
+        # Prompt caching (llm rows): the tokens, what they cost (already inside cost_usd, so
+        # inside totalCostUsd) and the saving against the normal input rate.
+        read, write = int(_num(r.get("cache_read_tokens"))), int(_num(r.get("cache_write_tokens")))
+        if r.get("kind") == "llm" and (read or write):
+            a = cache.setdefault(aid, {"cacheReadTokens": 0, "cacheWriteTokens": 0,
+                                       "cacheCostUsd": 0.0, "cacheSavingUsd": 0.0, "known": True})
+            a["cacheReadTokens"] += read
+            a["cacheWriteTokens"] += write
+            a["cacheCostUsd"] += _num(r.get("cache_read_cost_usd")) + _num(r.get("cache_write_cost_usd"))
+            a["cacheSavingUsd"] += _num(r.get("cache_saving_usd"))
+            a["known"] = a["known"] and r.get("cache_cost_known") is not False
+            known = known and r.get("cache_cost_known") is not False
+    out = {"session_id": sid, "totalCostUsd": round(total, 4),
+           "byAgent": {k: round(v, 4) for k, v in sorted(per.items(), key=lambda x: -x[1])}}
+    if cache:
+        # An agent whose cache tokens have no published rate gets "unknown", as Observability
+        # shows it, never a $0 the model would repeat as a price.
+        out["promptCacheByAgent"] = {
+            k: {"cacheReadTokens": v["cacheReadTokens"], "cacheWriteTokens": v["cacheWriteTokens"],
+                "cacheCostUsd": round(v["cacheCostUsd"], 6) if v["known"] else "unknown",
+                "cacheSavingUsd": round(v["cacheSavingUsd"], 6) if v["known"] else "unknown"}
+            for k, v in cache.items()}
+        out["promptCacheNote"] = (
+            "totalCostUsd and byAgent include the cache cost (cache reads and writes at their "
+            "AWS Price List rates). cacheSavingUsd is the cached tokens at the normal input rate "
+            "minus that cost; negative when writes outweigh reads."
+            + ("" if known else " Some cache tokens had no published rate: they are left out "
+                                "of the cost (unknown, not estimated)."))
+    return out, None
 
 
 def _t_latency(args, ctx, si):
@@ -470,16 +498,29 @@ def _converse(model, system, messages, tool_config):
     # Omit toolConfig entirely in that case so the assistant still answers (it just
     # has nothing to look anything up with) instead of returning a ValidationError.
     extra = {"toolConfig": tool_config} if tool_config.get("tools") else {}
+    inference = {"maxTokens": 1500, "temperature": 0}
     for attempt in range(3):
         try:
             return _bedrock.converse(
                 modelId=model, system=system, messages=messages, **extra,
-                inferenceConfig={"maxTokens": 1500, "temperature": 0},
+                inferenceConfig=inference,
             )
         except ClientError as e:
             last = e
-            if e.response.get("Error", {}).get("Code", "") in transient:
+            code = e.response.get("Error", {}).get("Code", "")
+            if code in transient:
                 time.sleep(0.6 * (attempt + 1))
+                continue
+            # Newer models refuse a temperature ("`temperature` is deprecated for this
+            # model", Claude Haiku 5.5 / Sonnet 5): retry once without it, as
+            # app/common/llm.py _refused_setting does for agent calls.
+            text = str(e).lower()
+            if (code == "ValidationException" and "temperature" in inference
+                    and "temperature" in text
+                    and any(r in text for r in ("deprecated", "not supported", "cannot both",
+                                                "only one", "doesn't support",
+                                                "does not support", "unsupported"))):
+                inference = {k: v for k, v in inference.items() if k != "temperature"}
                 continue
             raise
     raise last  # type: ignore[misc]

@@ -59,6 +59,33 @@ def _text_of(content) -> str:
     return content if isinstance(content, str) else str(content)
 
 
+_runtime = None
+
+
+def _bedrock_runtime():
+    global _runtime
+    if _runtime is None:
+        import boto3
+        _runtime = boto3.client("bedrock-runtime", region_name=REGION, config=_client_config())
+    return _runtime
+
+
+async def _invoke_openai(model: str, body: dict):
+    """One InvokeModel call of an OpenAI model with a Chat Completions body, as an
+    AIMessage (prompt_cache.openai_message). Same IAM action as Converse
+    (bedrock:InvokeModel)."""
+    import asyncio
+
+    from app.common import prompt_cache as _pc
+
+    def _call() -> dict:
+        resp = _bedrock_runtime().invoke_model(modelId=model, body=json.dumps(body),
+                                               contentType="application/json",
+                                               accept="application/json")
+        return json.loads(resp["body"].read())
+    return _pc.openai_message(await asyncio.to_thread(_call))
+
+
 def _refused_setting(error: Exception, sampling: dict) -> str | None:
     """The sampling setting a model refused, if that is what `error` says.
 
@@ -99,7 +126,8 @@ async def run_llm(name: str, system: str, user: str,
                   max_tokens: int = 300, top_p: float | None = None,
                   stop_sequences: list[str] | None = None,
                   images: list[dict] | None = None,
-                  files: list[dict] | None = None) -> tuple[str, bool]:
+                  files: list[dict] | None = None,
+                  prompt_cache: dict | None = None) -> tuple[str, bool]:
     """Call the model and return (text, hit_token_ceiling).
 
     The second value is the one that is easy to lose and expensive to lose. When a
@@ -136,39 +164,78 @@ async def run_llm(name: str, system: str, user: str,
     sampling: dict = {"temperature": temperature}
     if top_p is not None:
         sampling["top_p"] = top_p
+    from app.common import prompt_cache as _pc
+    plan = _pc.plan(model, prompt_cache, call="single")
+    if plan.api == "InvokeModel" and (images or files or stop_sequences):
+        # The OpenAI InvokeModel path carries text only, and these models refuse `stop`
+        # (checked live: "'stop' is not supported with this model"). Such a call stays on
+        # Converse as before, with no explicit cache point (Converse has none for them).
+        plan = _pc.OFF
     try:
         import time as _t
 
         from langchain_aws import ChatBedrockConverse
+        from langchain_core.messages import SystemMessage
         _start = _t.perf_counter()
         # Models differ in what a call may carry. Each refusal below is one the model
         # names precisely, so the call is adjusted and retried; any other error fails it.
         system_in_user = False
         for _attempt in range(5):
+            if plan.api == "InvokeModel" and not system_in_user:
+                # OpenAI GPT-5.6+ with promptCache: explicit caching is not on Converse, so
+                # the call is an InvokeModel with an OpenAI Chat Completions body carrying a
+                # cache breakpoint on the system prompt (prompt_cache.openai_body). Same
+                # sampling, refusals, telemetry and errors as the Converse call below.
+                try:
+                    msg = await _invoke_openai(
+                        model, _pc.openai_body(system, user, plan, max_tokens=max_tokens,
+                                               sampling=sampling))
+                    break
+                except Exception as refusal:
+                    dropped = _refused_setting(refusal, sampling)
+                    limit = _token_limit(refusal)
+                    if _pc.refused(refusal):
+                        print(f"[llm] {model} refused the cache breakpoint; calling '{name}' "
+                              f"through Converse without it")
+                        plan = _pc.OFF
+                    elif dropped:
+                        print(f"[llm] {model} refused `{dropped}`; calling '{name}' without it")
+                        sampling.pop(dropped)
+                    elif limit and limit < max_tokens:
+                        max_tokens = limit
+                    else:
+                        raise
+                    continue
             llm = ChatBedrockConverse(model=model, region_name=REGION, max_tokens=max_tokens,
                                       config=_client_config(), **sampling,
                                       **({"stop_sequences": list(stop_sequences)}
                                          if stop_sequences else {}))
+            # The system prompt with its cache point (app/common/prompt_cache.py), else as text.
+            cached = _pc.system_content(system, plan)
             if images or files:
-                from langchain_core.messages import HumanMessage, SystemMessage
+                from langchain_core.messages import HumanMessage
 
                 from app.common import attachments as _att
                 # A block with no "type" is passed to Converse as it is.
                 blocks = [{"image": {"format": i["format"], "source": {"bytes": i["bytes"]}}}
                           for i in images] + _att.blocks(files)
                 text = f"{system}\n\n{user}" if system_in_user else user
-                messages = ([] if system_in_user else [SystemMessage(content=system)]) + [
+                messages = ([] if system_in_user else [SystemMessage(content=cached or system)]) + [
                     HumanMessage(content=[{"type": "text", "text": text}, *blocks])]
             else:
                 messages = ([("human", f"{system}\n\n{user}")] if system_in_user
-                            else [("system", system), ("human", user)])
+                            else [SystemMessage(content=cached) if cached else ("system", system),
+                                  ("human", user)])
             try:
                 msg = await llm.ainvoke(messages)
                 break
             except Exception as refusal:
                 dropped = _refused_setting(refusal, sampling)
                 limit = _token_limit(refusal)
-                if dropped:
+                if plan.sections and _pc.refused(refusal):
+                    print(f"[llm] {model} refused the cache point; calling '{name}' without it")
+                    plan = _pc.OFF
+                elif dropped:
                     print(f"[llm] {model} refused `{dropped}`; calling '{name}' without it")
                     sampling.pop(dropped)
                 elif limit and limit < max_tokens:
@@ -184,7 +251,7 @@ async def run_llm(name: str, system: str, user: str,
         _latency_ms = int((_t.perf_counter() - _start) * 1000)
         out_text = _text_of(msg.content)
         _meter_llm(model, msg, system, shown, out_text, _latency_ms, mode="bedrock",
-                   temperature=temperature, max_tokens=max_tokens, name=name)
+                   temperature=temperature, max_tokens=max_tokens, name=name, cache_plan=plan)
         with contextlib.suppress(Exception):
             from app.features.observability import otel as _otel
             _otel.capture_output(out_text)  # pair this call's response with its prompt
@@ -193,7 +260,7 @@ async def run_llm(name: str, system: str, user: str,
         # Record the failure, then fail the run — see the module docstring: a model
         # call that did not happen must never look like one that returned nothing.
         _meter_llm(model, None, system, shown, "", 0, mode="error",
-                   temperature=temperature, max_tokens=max_tokens, name=name)
+                   temperature=temperature, max_tokens=max_tokens, name=name, cache_plan=plan)
         raise ModelUnavailable(
             f"Bedrock model call '{name}' failed on {model}: {type(e).__name__}: {e}. "
             f"Check that the region has model access enabled for this model id and that "
@@ -205,7 +272,7 @@ async def run_llm(name: str, system: str, user: str,
 
 async def run_llm_tools(name: str, system: str, messages: list, tools: list[dict],
                         model: str | None = None, temperature: float = 0,
-                        max_tokens: int = 1500):
+                        max_tokens: int = 1500, prompt_cache: dict | None = None):
     """One model turn that may call tools (toolMode "model", app/common/tool_loop.py).
 
     `messages` are langchain messages after the system prompt (HumanMessage, AIMessage,
@@ -221,6 +288,8 @@ async def run_llm_tools(name: str, system: str, messages: list, tools: list[dict
     sampling: dict = {"temperature": temperature}
     specs = [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                "parameters": t["input_schema"]}} for t in tools]
+    from app.common import prompt_cache as _pc
+    plan = _pc.plan(model, prompt_cache, call="tools", has_tools=bool(specs))
     try:
         import time as _t
 
@@ -229,20 +298,29 @@ async def run_llm_tools(name: str, system: str, messages: list, tools: list[dict
         _start = _t.perf_counter()
         system_in_user = False
         for _attempt in range(5):
+            # Cache points (app/common/prompt_cache.py): after the tool list, after the
+            # system prompt, and in the conversation, as the agent's promptCache and the
+            # model allow. New lists each attempt; the caller's are never changed.
             llm = ChatBedrockConverse(model=model, region_name=REGION, max_tokens=max_tokens,
-                                      config=_client_config(), **sampling).bind_tools(specs)
+                                      config=_client_config(), **sampling).bind_tools(
+                                          _pc.tools_with_point(specs, plan))
             if system_in_user:
                 first, rest = messages[0], messages[1:]
                 convo = [HumanMessage(content=f"{system}\n\n{first.content}"), *rest]
             else:
-                convo = [SystemMessage(content=system), *messages]
+                cached = _pc.system_content(system, plan)
+                convo = [SystemMessage(content=cached if cached else system), *messages]
+            convo = _pc.with_message_point(convo, plan)
             try:
                 msg = await llm.ainvoke(convo)
                 break
             except Exception as refusal:
                 dropped = _refused_setting(refusal, sampling)
                 limit = _token_limit(refusal)
-                if dropped:
+                if plan.sections and _pc.refused(refusal):
+                    print(f"[llm] {model} refused the cache point; calling '{name}' without it")
+                    plan = _pc.OFF
+                elif dropped:
                     sampling.pop(dropped)
                 elif limit and limit < max_tokens:
                     max_tokens = limit
@@ -257,11 +335,11 @@ async def run_llm_tools(name: str, system: str, messages: list, tools: list[dict
         shown_in = "\n\n".join(str(getattr(m, "content", ""))[:2000] for m in messages)
         _meter_llm(model, msg, system, shown_in, said + (f"\n[tool calls] {calls}" if calls else ""),
                    latency_ms, mode="bedrock", temperature=temperature, max_tokens=max_tokens,
-                   name=name)
+                   name=name, cache_plan=plan)
         return msg
     except Exception as e:
         _meter_llm(model, None, system, "", "", 0, mode="error", temperature=temperature,
-                   max_tokens=max_tokens, name=name)
+                   max_tokens=max_tokens, name=name, cache_plan=plan)
         raise ModelUnavailable(
             f"Bedrock model call '{name}' (choosing tools) failed on {model}: "
             f"{type(e).__name__}: {e}. The model must support tool use through Converse."
@@ -283,10 +361,16 @@ def _finish_reason_of(msg) -> str:
 
 
 def _meter_llm(model, msg, system, user, output_text, latency_ms, mode,
-               temperature: float = 0.0, max_tokens: int = 0, name: str = "") -> None:
+               temperature: float = 0.0, max_tokens: int = 0, name: str = "",
+               cache_plan=None) -> None:
     """Best-effort observability hook (isolated in app/features/observability)."""
     with contextlib.suppress(Exception):  # metering must never break a call
         usage = getattr(msg, "usage_metadata", None) or {} if msg is not None else {}
+        # input_tokens is LangChain's total input: it already includes the cache read and
+        # write tokens, which `cache` breaks out (prompt_cache.usage_of). Recorded with or
+        # without promptCache: implicit caching can return them too.
+        from app.common import prompt_cache as _pc
+        cache = _pc.usage_of(msg)
         input_tokens = int(usage.get("input_tokens", 0) or 0)
         output_tokens = int(usage.get("output_tokens", 0) or 0)
         # Stamp real token usage onto the OTEL agent span (ADOT's auto "chat"
@@ -303,4 +387,5 @@ def _meter_llm(model, msg, system, user, output_text, latency_ms, mode,
             user_input=user, output_text=output_text,
             temperature=temperature, max_tokens=max_tokens,
             finish_reason=_finish_reason_of(msg), prompt=name,
+            cache=cache, cache_plan=cache_plan or _pc.OFF,
         )

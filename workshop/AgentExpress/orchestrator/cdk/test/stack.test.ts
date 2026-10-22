@@ -195,6 +195,7 @@ describe("the BFF deployment package", () => {
       "BFF_ROLE_ARN",
       "BUILDS_BUCKET",
       "BUILDS_TABLE",
+      "CODE_SOURCE_BUCKETS",
       "DEPLOY_PROJECT",
       "DEPLOY_ROLE_ARN",
       "EVENTS_TABLE",
@@ -723,7 +724,7 @@ describe("the Builder control plane", () => {
     const spec = JSON.parse(project.Properties.Source.BuildSpec);
     expect(spec.phases.build.commands.join("\n")).toContain("python3 deployer/runner.py");
     const names = project.Properties.Environment.EnvironmentVariables.map((v: any) => v.Name).sort();
-    expect(names).toEqual(["BUILDS_BUCKET", "BUILDS_TABLE", "CONSOLE_NAME", "SECRETS_PREFIX", "SOURCE_URI",
+    expect(names).toEqual(["BUILDS_BUCKET", "BUILDS_TABLE", "CODE_SOURCE_BUCKETS", "CONSOLE_NAME", "SECRETS_PREFIX", "SOURCE_URI",
       "TERRAFORM_VERSION"]);
   });
 
@@ -1034,6 +1035,16 @@ describe("image agents", () => {
   });
 });
 
+describe("the AgentExpress Assistant's reviewer model", () => {
+  it("is bff/review.py's default unless -c designerReviewModel names one", () => {
+    const fn = (t: Template) => Object.values<any>(t.findResources("AWS::Lambda::Function"))
+      .find((f) => f.Properties.FunctionName === "AgentCoreBFF-multiagent_orchestrator");
+    expect(fn(template).Properties.Environment.Variables.DESIGNER_REVIEW_MODEL).toBeUndefined();
+    const t = synth({ designerReviewModel: "global.openai.gpt-6.1-sol" });
+    expect(fn(t).Properties.Environment.Variables.DESIGNER_REVIEW_MODEL).toBe("global.openai.gpt-6.1-sol");
+  });
+});
+
 describe("the AgentExpress Assistant's attachments", () => {
   it("reads s3:// paths only from the buckets the console allows", () => {
     const none = JSON.stringify(template.findResources("AWS::IAM::Policy"));
@@ -1049,6 +1060,22 @@ describe("the AgentExpress Assistant's attachments", () => {
     expect(st.find((x) => x.Sid === "AssistantListsS31").Condition).toEqual(
       { StringLike: { "s3:prefix": ["team/specs/*", "team/specs"] } });
     expect(JSON.stringify(t.findResources("AWS::ApiGatewayV2::Route"))).toContain("POST /api/builds/{id}/design/attachments");
+  });
+});
+
+describe("S3 code sources for builds in the console's own account", () => {
+  it("passes -c codeSourceBuckets to the BFF and the deploy project, empty by default", () => {
+    const env = (t: any) => ({
+      bff: Object.values<any>(t.findResources("AWS::Lambda::Function"))
+        .find((f) => f.Properties.FunctionName === "AgentCoreBFF-multiagent_orchestrator").Properties.Environment.Variables,
+      deploy: Object.values<any>(t.findResources("AWS::CodeBuild::Project"))[0].Properties.Environment.EnvironmentVariables
+        .find((v: any) => v.Name === "CODE_SOURCE_BUCKETS").Value,
+    });
+    expect(env(template).bff.CODE_SOURCE_BUCKETS).toBe("");
+    expect(env(template).deploy).toBe("");
+    const t = synth({ codeSourceBuckets: ["code-bucket", "other-bucket"] });
+    expect(env(t).bff.CODE_SOURCE_BUCKETS).toBe("code-bucket,other-bucket");
+    expect(env(t).deploy).toBe("code-bucket,other-bucket");
   });
 });
 

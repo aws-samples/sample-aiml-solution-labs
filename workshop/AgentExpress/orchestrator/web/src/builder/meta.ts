@@ -28,6 +28,8 @@ export interface KeySpec {
   properties?: Record<string, { type?: string; items?: string; doc: string }>;
   default?: unknown;
   defaultFor?: Record<string, unknown>;
+  /** Per variant the key does not apply to: what to set instead (appended to the rejection). */
+  notApplicable?: Record<string, string>;
   doc: string;
   reads?: string;
 }
