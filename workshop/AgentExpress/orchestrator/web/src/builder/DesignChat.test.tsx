@@ -27,7 +27,8 @@ vi.mock("../api", () => {
 });
 
 import { Builder } from "./Builder";
-import { defaultsUsed, openInputs, REVIEW_HELP, REVIEW_LABEL, reviewLine, secretsNeeded, when } from "./DesignChat";
+import { ASSISTANT_HELP, defaultsUsed, hintFull, openInputs, readExpanded, REVIEW_HELP, REVIEW_LABEL, reviewLine,
+  secretsNeeded, when } from "./DesignChat";
 import { record, redo, start, undo } from "./history";
 import { Markdown } from "./markdown";
 import { addAgent, migrateFramework, newProject, replaceWorkflow, type Project } from "./model";
@@ -262,17 +263,27 @@ describe("the AgentExpress Assistant tab", () => {
     [`POST ${path}`]: [doc({ status: "thinking", turns: [user] })] };
     let view!: ReturnType<typeof render>;
     await act(async () => { view = render(<Builder notify={vi.fn()} store={serverStore(state)} />); });
-    await waitFor(() => expect(screen.getAllByText(REVIEW_LABEL).length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByTestId("design-review-control")).toBeTruthy());
     expect(REVIEW_LABEL).toBe("Review changes");
+    // In the input's toolbar, beside Attach files: no separate block under the input.
+    const toolbar = createWrapper(view.container).findPromptInput()!.findSecondaryActions()!;
+    const control = toolbar.findButtonDropdown()!;
+    expect(control.findNativeButton().getElement().textContent).toBe("Review: Auto");   // the default
+    expect(control.findNativeButton().getElement().getAttribute("aria-label")).toBe(`${REVIEW_LABEL}: Auto`);
+    expect(view.container.querySelector("[class*='segmented-control']")).toBeNull();
+    // Its description is in its info icon.
+    const info = toolbar.find("[data-docs-feature='assistant.review'] button")!;
+    await act(async () => { info.click(); });
     expect(screen.getByText(REVIEW_HELP)).toBeTruthy();
-    const control = createWrapper(view.container).findSegmentedControl()!;
-    expect(control.findSegments().map((s) => s.getElement().textContent)).toEqual(["Off", "Auto", "Always"]);
-    expect(control.findSelectedSegment()!.getElement().textContent).toBe("Auto");   // the default
     // One muted line per reviewed reply.
     expect(screen.getAllByTestId("design-review").map((e) => e.textContent))
       .toEqual(["Reviewed: 2 suggestions applied", "Review skipped (small change)", "Review unavailable"]);
-    await act(async () => { control.findSegments()[2].click(); });
+    await act(async () => { control.openDropdown(); });
+    expect(control.findItems().map((i) => i.getElement().textContent)).toEqual(["Off", "Auto", "Always"]);
+    expect(control.findItemCheckedById("auto")).toBe("true");
+    await act(async () => { control.findItemById("always")!.click(); });
     expect(localStorage.getItem("agentexpress.assistant.review")).toBe("always");
+    expect(control.findNativeButton().getElement().textContent).toBe("Review: Always");
     const prompt = createWrapper(view.container).findPromptInput()!;
     await act(async () => { prompt.setTextareaValue("Add a fraud check"); });
     await act(async () => { prompt.findActionButton().click(); });
@@ -282,6 +293,73 @@ describe("the AgentExpress Assistant tab", () => {
     expect(reviewLine({ status: "noted", count: 1 })).toBe("Reviewed: 1 suggestion noted");
     expect(reviewLine({ status: "ok" })).toBe("Reviewed: no issues");
     expect(reviewLine(undefined)).toBe("");
+  });
+  it("keeps the input's hint to one line, with the full text in its tooltip and its info icon", async () => {
+    replies = { "GET /api/builds/pclaims01/design": [doc()] };
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    const hint = await waitFor(() => screen.getByTestId("design-hint"));
+    expect(hint.textContent).toBe("Enter to send · Shift+Enter for a new line · up to 5 files or S3 paths");
+    expect(hint.getAttribute("title")).toBe(hintFull(5));
+    expect(hintFull(5)).toMatch(/s3:\/\/bucket\/folder\/.*It never deploys; you do that from Deploy\.$/);
+    expect(screen.queryByText(/Attach files for context/)).toBeNull();
+    // The info icon is there with docs off too, and holds the same text.
+    const info = view.container.querySelector(".axd-hint [data-docs-feature] button") as HTMLButtonElement;
+    expect(info.getAttribute("aria-label")).toBe("About Sending messages");
+    await act(async () => { fireEvent.click(info); });
+    expect(screen.getByText(hintFull(5))).toBeTruthy();
+    // One line when empty, growing to six.
+    const box = view.container.querySelector("textarea[aria-label='Message to the designer']") as HTMLTextAreaElement;
+    expect(box.getAttribute("rows")).toBe("1");
+  });
+  it("shows the description and the starters only on a new conversation, the starters in one row", async () => {
+    const path = "/api/builds/pclaims01/design";
+    const user = { id: "u1", role: "user" as const, text: "Triage claims", at: "" };
+    replies = { [`GET ${path}`]: [doc()], [`POST ${path}`]: [doc({ turns: [user,
+      { id: "a1", role: "assistant", text: "Done.", at: "", status: "done" }] })] };
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    await waitFor(() => expect(screen.getByText(ASSISTANT_HELP)).toBeTruthy());
+    const starters = createWrapper(view.container).findByClassName("axd-empty")!;
+    expect(starters.getElement().textContent).toContain("Claims triage");
+    // One wrapping row of chips: the group is not in its stacked (vertical) layout.
+    const chip = starters.getElement().querySelector("[class*='awsui_support-prompt_']")!;
+    expect(chip.textContent).toBe("Claims triage");
+    expect(chip.parentElement!.className).not.toMatch(/vertical/);
+    await act(async () => { fireEvent.click(screen.getByText("Claims triage")); });
+    await waitFor(() => expect(screen.getByText("Done.")).toBeTruthy());
+    expect(screen.queryByText(ASSISTANT_HELP)).toBeNull();         // only in the ⓘ now
+    expect(screen.queryByText("Claims triage")).toBeNull();
+    const info = view.container.querySelector("[data-docs-feature='assistant'] button") as HTMLButtonElement;
+    await act(async () => { fireEvent.click(info); });
+    expect(screen.getByText(ASSISTANT_HELP)).toBeTruthy();
+  });
+  it("expands to the whole build area, remembers it, and collapses on Esc with focus back on the button", async () => {
+    replies = { "GET /api/builds/pclaims01/design": [doc()] };
+    let view!: ReturnType<typeof render>;
+    await act(async () => { view = render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    const expand = await waitFor(() => screen.getByRole("button", { name: "Expand Assistant" }));
+    expect(screen.getByText("Workflow")).toBeTruthy();
+    await act(async () => { fireEvent.click(expand); });
+    expect(view.container.querySelector(".axd-layout.axd-expanded")).toBeTruthy();
+    expect(screen.queryByText("Workflow")).toBeNull();
+    expect(localStorage.getItem("agentexpress.assistant.expanded")).toBe("1");
+    const collapse = screen.getByRole("button", { name: "Collapse Assistant" });
+    expect(collapse.getAttribute("aria-expanded")).toBe("true");
+    // Esc with focus on the button itself (as after a click) collapses too.
+    collapse.focus();
+    await act(async () => { fireEvent.keyDown(collapse, { key: "Escape" }); });
+    expect(view.container.querySelector(".axd-expanded")).toBeNull();
+    expect(screen.getByText("Workflow")).toBeTruthy();
+    expect(localStorage.getItem("agentexpress.assistant.expanded")).toBe("0");
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Expand Assistant" }));
+    // Remembered: a fresh view opens expanded.
+    view.unmount();
+    localStorage.setItem("agentexpress.assistant.expanded", "1");
+    await act(async () => { render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Collapse Assistant" })).toBeTruthy());
+    expect(readExpanded()).toBe(true);
   });
   it("offers the demo video only to someone who owns no builds yet", async () => {
     const url = "https://videos.example.com/demo";
@@ -352,7 +430,7 @@ describe("the AgentExpress Assistant tab", () => {
       [`POST ${path}`]: [sent] };
     let view!: ReturnType<typeof render>;
     await act(async () => { view = render(<Builder notify={vi.fn()} store={serverStore(state)} />); });
-    await waitFor(() => expect(screen.getByText(/S3 paths can be in: data-bucket/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("design-hint").getAttribute("title")).toMatch(/S3 paths can be in: data-bucket/));
     const input = createWrapper(view.container).findPromptInput()!.findSecondaryActions()!
       .getElement().querySelector("input[type=file]") as HTMLInputElement;
     await act(async () => { fireEvent.change(input, { target: { files: [new File(["# spec"], "spec.md", { type: "text/markdown" })] } }); });

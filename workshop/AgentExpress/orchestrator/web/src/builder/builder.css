@@ -203,6 +203,19 @@
   .axd-layout { grid-template-columns: 1fr; }
   .axd-chat-cell { min-height: 70vh; }
 }
+/* Expanded: the chat alone, the whole width of the build area and the window's height. */
+.axd-layout.axd-expanded { grid-template-columns: 1fr; }
+.axd-expanded .axd-chat-cell { min-height: calc(100vh - 88px); }
+.axd-expanded .axd-chat-fill { height: calc(100vh - 88px); }
+/* The input's toolbar: attach, then the Review control and its info icon. */
+.axd-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.axd-review { display: inline-flex; align-items: center; }
+.axd-hint {
+  display: flex; align-items: center; gap: 2px; min-width: 0;
+  font-size: 12px; line-height: 16px;
+  color: var(--color-text-body-secondary, #5f6b7a);
+}
+.axd-hint > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .axd-chat { position: relative; height: 100%; }
 .axd-log {
   display: flex;

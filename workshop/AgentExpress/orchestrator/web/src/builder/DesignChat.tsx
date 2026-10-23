@@ -10,16 +10,15 @@ import Avatar from "@cloudscape-design/chat-components/avatar";
 import ChatBubble from "@cloudscape-design/chat-components/chat-bubble";
 import SupportPromptGroup from "@cloudscape-design/chat-components/support-prompt-group";
 import Box from "@cloudscape-design/components/box";
-import Button from "@cloudscape-design/components/button";
+import Button, { type ButtonProps } from "@cloudscape-design/components/button";
+import ButtonDropdown from "@cloudscape-design/components/button-dropdown";
 import Container from "@cloudscape-design/components/container";
 import CopyToClipboard from "@cloudscape-design/components/copy-to-clipboard";
 import FileInput from "@cloudscape-design/components/file-input";
 import FileTokenGroup from "@cloudscape-design/components/file-token-group";
-import FormField from "@cloudscape-design/components/form-field";
 import Header from "@cloudscape-design/components/header";
 import Link from "@cloudscape-design/components/link";
 import PromptInput from "@cloudscape-design/components/prompt-input";
-import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import Spinner from "@cloudscape-design/components/spinner";
 import StatusIndicator from "@cloudscape-design/components/status-indicator";
@@ -74,6 +73,28 @@ export function readReview(): ReviewMode {
 }
 function writeReview(v: ReviewMode): void {
   try { localStorage.setItem(REVIEW_KEY, v); } catch { /* private mode: not remembered */ }
+}
+
+/** Expanded: the chat takes the whole build area, the workflow beside it hidden. */
+const EXPAND_KEY = "agentexpress.assistant.expanded";
+export function readExpanded(): boolean {
+  try { return localStorage.getItem(EXPAND_KEY) === "1"; } catch { return false; }
+}
+function writeExpanded(v: boolean): void {
+  try { localStorage.setItem(EXPAND_KEY, v ? "1" : "0"); } catch { /* private mode: not remembered */ }
+}
+
+/** The Assistant's description: under the header on a new conversation, and always in its ⓘ. */
+export const ASSISTANT_HELP = "Say what you want to build. It drafts the workflow, asks what it needs, and updates the build as you talk. Undo any change from the toolbar.";
+/** The one line under the input; the full text is in its ⓘ and its tooltip. */
+export function hintShort(maxFiles: number): string {
+  return `Enter to send · Shift+Enter for a new line · up to ${maxFiles} files or S3 paths`;
+}
+export function hintFull(maxFiles: number, s3: string[] = []): string {
+  return "Enter sends, Shift+Enter adds a line. Attach files for context, or refer to the S3 path where your files "
+    + `reside (s3://bucket/file, or s3://bucket/folder/ for the files in it), up to ${maxFiles} files per message.`
+    + (s3.length ? ` S3 paths can be in: ${s3.join(", ")}.` : "")
+    + " It never deploys; you do that from Deploy.";
 }
 /** The muted line under a reviewed reply. */
 export function reviewLine(r: DesignTurn["review"]): string {
@@ -252,6 +273,31 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [review, setReview] = useState<ReviewMode>(readReview);
+  const [expanded, setExpandedState] = useState<boolean>(readExpanded);
+  const expandRef = useRef<ButtonProps.Ref>(null);
+  const setExpanded = useCallback((v: boolean) => {
+    setExpandedState(v);
+    writeExpanded(v);
+    setTimeout(() => {
+      // Expanded, the chat's top comes up under the top bar, so it has the window's height.
+      const top = cellRef.current?.getBoundingClientRect().top;
+      if (v && top !== undefined && top > 80) window.scrollBy?.({ top: top - 72 });
+      // The button changes icon in place; keep focus on it so a keyboard user stays put.
+      expandRef.current?.focus();
+    }, 0);
+  }, []);
+  // Esc collapses, unless it is closing a popover or a menu inside the page.
+  useEffect(() => {
+    if (!expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target as Element | null;
+      if (t?.closest?.('[role="dialog"], [role="menu"], [aria-haspopup][aria-expanded="true"]')) return;
+      setExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [expanded, setExpanded]);
   /** Files picked for the next message, each uploaded as soon as it is picked. */
   const [files, setFiles] = useState<{ file: File; key?: string; name?: string; loading: boolean; error?: string }[]>([]);
   const uploading = files.some((f) => f.loading);
@@ -366,29 +412,38 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
     (project.workflow.identities ?? {}) as Record<string, unknown>, gitTokenNames(project.workflow)),
     [changes, project.workflow]);
   const errors = issues.filter((i) => i.severity === "error").length;
+  const reviewText = REVIEW_OPTIONS.find((o) => o.id === review)?.text ?? "Auto";
+  const hint = hintFull(doc?.attach?.maxFiles ?? 5, doc?.attach?.s3 ?? []);
 
   if (!doc) {
     return error ? <StatusIndicator type="error">{error}</StatusIndicator> : <Spinner size="large" />;
   }
 
   return (
-    <div className="axd-layout">
+    <div className={`axd-layout${expanded ? " axd-expanded" : ""}`}>
       {/* The chat is as tall as the column beside it (the workflow, and whatever shows
           under it): it fills its cell and scrolls, so it never sets the row's height. */}
       <div className="axd-chat-cell" ref={cellRef} onScrollCapture={onScroll}><div className="axd-chat-fill">
       <Container fitHeight
         header={
           <Header variant="h2"
-            description="Say what you want to build. It drafts the workflow, asks what it needs, and updates the build as you talk. Undo any change from the toolbar."
-            info={infoSlot(docs, "assistant")}
-            actions={doc.turns.length ? <Button iconName="refresh" onClick={() => void startOver()} disabled={thinking}>Start over</Button> : undefined}>
+            description={doc.turns.length ? undefined : ASSISTANT_HELP}
+            info={<InfoLink feature="assistant" text={ASSISTANT_HELP} always />}
+            actions={
+              <SpaceBetween direction="horizontal" size="xs" alignItems="center">
+                {doc.turns.length ? <Button iconName="refresh" onClick={() => void startOver()} disabled={thinking}>Start over</Button> : null}
+                <Button ref={expandRef} variant="icon" iconName={expanded ? "shrink" : "expand"}
+                  ariaLabel={expanded ? "Collapse Assistant" : "Expand Assistant"} ariaExpanded={expanded}
+                  onClick={() => setExpanded(!expanded)} data-testid="design-expand" />
+              </SpaceBetween>
+            }>
             AgentExpress Assistant
           </Header>
         }
         footer={
-          <SpaceBetween size="xs">
+          <SpaceBetween size="xxs">
             <PromptInput
-              value={text} minRows={2} maxRows={10}
+              value={text} minRows={1} maxRows={6}
               disabled={sending}
               placeholder={doc.turns.length ? "Reply, or ask for a change" : "What would you like to build?"}
               ariaLabel="Message to the designer"
@@ -398,9 +453,20 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
               onChange={({ detail }) => setText(detail.value)}
               onAction={() => void send(text)}
               secondaryActions={
-                <FileInput variant="icon" multiple value={[]} ariaLabel="Attach files"
-                  accept={(doc.attach?.types ?? []).map((t) => `.${t}`).join(",")}
-                  onChange={({ detail }) => pick(detail.value)}>Attach files</FileInput>
+                <div className="axd-toolbar">
+                  <FileInput variant="icon" multiple value={[]} ariaLabel="Attach files"
+                    accept={(doc.attach?.types ?? []).map((t) => `.${t}`).join(",")}
+                    onChange={({ detail }) => pick(detail.value)}>Attach files</FileInput>
+                  <span className="axd-review" data-testid="design-review-control">
+                    <ButtonDropdown variant="normal" expandToViewport
+                      ariaLabel={`${REVIEW_LABEL}: ${reviewText}`}
+                      items={REVIEW_OPTIONS.map((o) => ({ id: o.id, text: o.text, itemType: "checkbox" as const, checked: o.id === review }))}
+                      onItemClick={({ detail }) => { const v = detail.id as ReviewMode; setReview(v); writeReview(v); }}>
+                      {`Review: ${reviewText}`}
+                    </ButtonDropdown>
+                    <InfoLink feature="assistant.review" title={REVIEW_LABEL} text={REVIEW_HELP} always />
+                  </span>
+                </div>
               }
               secondaryContent={files.length ? (
                 <FileTokenGroup alignment="horizontal" showFileSize
@@ -410,17 +476,10 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
                     limitShowFewer: "Show fewer", limitShowMore: "Show more", formatFileSize: (b) => `${(b / 1e6).toFixed(2)} MB` }} />
               ) : undefined}
             />
-            <Box fontSize="body-s" color="text-body-secondary">
-              Enter sends, Shift+Enter adds a line. Attach files for context, or refer to the S3 path where
-              your files reside (s3://bucket/file, or s3://bucket/folder/ for the files in it), up to{" "}
-              {doc.attach?.maxFiles ?? 5} files per message.
-              {doc.attach?.s3?.length ? <> S3 paths can be in: {doc.attach.s3.join(", ")}.</> : null} It never
-              deploys; you do that from Deploy.
-            </Box>
-            <FormField label={REVIEW_LABEL} description={REVIEW_HELP} info={infoSlot(docs, "assistant.review")}>
-              <SegmentedControl label={REVIEW_LABEL} selectedId={review} options={REVIEW_OPTIONS}
-                onChange={({ detail }) => { const v = detail.selectedId as ReviewMode; setReview(v); writeReview(v); }} />
-            </FormField>
+            <div className="axd-hint">
+              <span title={hint} data-testid="design-hint">{hintShort(doc.attach?.maxFiles ?? 5)}</span>
+              <InfoLink feature="assistant" title="Sending messages" text={hint} always />
+            </div>
             {error ? <StatusIndicator type="error">{error}</StatusIndicator> : null}
           </SpaceBetween>
         }
@@ -442,7 +501,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
                   ) : null}
                   <SupportPromptGroup
                     ariaLabel="Starting points"
-                    alignment="vertical"
+                    alignment="horizontal"
                     items={doc.starters.map((s) => ({ id: s.title, text: s.title }))}
                     onItemClick={({ detail }) => {
                       const s = doc.starters.find((x) => x.title === detail.id);
@@ -471,7 +530,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
       </Container>
       </div></div>
 
-      <SpaceBetween size="m">
+      {expanded ? null : <SpaceBetween size="m">
         <Container header={<Header variant="h2"
           description={latest ? `Last change: ${unescape(latest.summary)}` : "The build, as the conversation shapes it."}
           info={<><StatusIndicator type={errors ? "warning" : "success"}>{errors ? `${errors} to fix` : "Valid"}</StatusIndicator>
@@ -513,7 +572,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
             <Button variant="inline-link" onClick={onShowProblems}>See the {errors} problem{errors > 1 ? "s" : ""} in Build manually</Button>
           </Box>
         ) : null}
-      </SpaceBetween>
+      </SpaceBetween>}
     </div>
   );
 }

@@ -14,10 +14,20 @@ import { DOCS, docsHref, useDocsBase, type DocsFeature } from "./docsLinks";
  *  Click (or Enter / Space on the focused icon) opens it: Cloudscape's Popover has no
  *  hover trigger, and a link inside a hover-only tooltip is out of reach of a keyboard
  *  or a screen reader. */
-export function InfoLink({ feature }: { feature: DocsFeature }) {
+export function InfoLink({ feature, title: titleOver, text, always }: {
+  feature: DocsFeature;
+  /** The popover's header, when it is not the feature's name. */
+  title?: string;
+  /** What the popover says, when it is not the feature's description. */
+  text?: ReactNode;
+  /** Shown without a documentation URL too (with no Documentation link), for text that
+   *  is only in the popover and must not be lost when docs are off. */
+  always?: boolean;
+}) {
   const base = useDocsBase();
-  if (!base) return null;
-  const { title, description } = DOCS[feature];
+  if (!base && !always) return null;
+  const title = titleOver ?? DOCS[feature].title;
+  const description = text ?? DOCS[feature].description;
   return (
     <span className="ax-docs-info" data-docs-feature={feature} style={{ marginInlineStart: 4 }}>
       <Popover
@@ -27,8 +37,10 @@ export function InfoLink({ feature }: { feature: DocsFeature }) {
         content={(
           <SpaceBetween size="xs">
             <Box variant="p">{description}</Box>
-            <Link href={docsHref(base, feature)} external target="_blank"
-              ariaLabel={`Documentation: ${title} (opens in a new tab)`}>Documentation</Link>
+            {base ? (
+              <Link href={docsHref(base, feature)} external target="_blank"
+                ariaLabel={`Documentation: ${DOCS[feature].title} (opens in a new tab)`}>Documentation</Link>
+            ) : null}
           </SpaceBetween>
         )}
       >

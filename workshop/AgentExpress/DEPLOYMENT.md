@@ -498,7 +498,7 @@ app links to the same documentation.
 
 **Where the links go: `docsUrl`.** By default, the public [user guide](docs/user-guide/README.md) on
 GitHub, pinned to the release's tag:
-`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.6/workshop/AgentExpress/docs/user-guide/`.
+`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.7/workshop/AgentExpress/docs/user-guide/`.
 A section's link is `<docsUrl><page>.md#<slug>`, GitHub's id for the heading (lower case, punctuation
 but `-` and `_` removed, spaces as `-`, a repeated heading `-1`, `-2`). An organisation that keeps the
 guide in an XWiki space, typically for internal or production deployments, points `docsUrl` at that
