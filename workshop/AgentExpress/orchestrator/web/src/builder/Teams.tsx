@@ -16,6 +16,8 @@ import Table from "@cloudscape-design/components/table";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { currentWorkspace, moveBuild, setWorkspace, type BuildSummary } from "./storage";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 export type Role = "owner" | "editor" | "viewer";
 export interface TeamMember { email: string; role: Role }
@@ -112,7 +114,7 @@ function TeamModal({ team, admin, onDismiss, onSaved, notify }: {
     }
   };
   return (
-    <Modal visible onDismiss={onDismiss} size="large" header={fresh ? "New team" : `Team ${team.name}`}
+    <Modal visible onDismiss={onDismiss} size="large" header={<>{fresh ? "New team" : `Team ${team.name}`}<InfoLink feature="teams.edit" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>{canManage ? "Cancel" : "Close"}</Button>
         {canManage ? <Button variant="primary" loading={busy} disabled={!name.trim()} onClick={() => void save()}>Save</Button> : null}
@@ -148,6 +150,7 @@ function TeamModal({ team, admin, onDismiss, onSaved, notify }: {
 }
 
 export function TeamsPage({ admin, notify }: { admin: boolean; notify: Notify }) {
+  const docs = useDocsBase();
   const [items, setItems] = useState<Team[] | null>(null);
   const [editing, setEditing] = useState<Team | "new" | null>(null);
   const load = useCallback(() => {
@@ -157,7 +160,7 @@ export function TeamsPage({ admin, notify }: { admin: boolean; notify: Notify })
   return (
     <SpaceBetween size="m">
       <Table items={items ?? []} loading={items === null} loadingText="Loading teams" trackBy="id"
-        header={<Header variant="h1"
+        header={<Header variant="h1" info={infoSlot(docs, "teams")}
           description="A team shares a workspace of builds. Editors change and deploy them; viewers only look."
           actions={admin ? <Button onClick={() => setEditing("new")}>New team</Button> : undefined}>Teams</Header>}
         columnDefinitions={[
@@ -225,7 +228,7 @@ export function MoveToTeam({ build, onDismiss, onMoved, notify }: {
     }
   };
   return (
-    <Modal visible onDismiss={onDismiss} header="Move to team"
+    <Modal visible onDismiss={onDismiss} header={<>Move to team<InfoLink feature="teams.move" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" loading={busy} disabled={to === null} onClick={() => void move()}>Move</Button>

@@ -18,6 +18,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ConnectAccountModal, RegionField } from "./DeployPanel";
 import { accountName, accounts, type Account } from "./storage";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 const at = (ts?: string) => (ts ? new Date(ts).toLocaleString() : "—");
 
@@ -41,7 +43,7 @@ function EditAccountModal({ account, onDismiss, onSaved }: {
     finally { setBusy(false); }
   };
   return (
-    <Modal visible={Boolean(account)} onDismiss={onDismiss} header={`Edit AWS account ${account?.accountId ?? ""}`}
+    <Modal visible={Boolean(account)} onDismiss={onDismiss} header={<>{`Edit AWS account ${account?.accountId ?? ""}`}<InfoLink feature="accounts.manage" /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -68,6 +70,7 @@ export function Accounts({ canConnect, notify }: {
   canConnect: boolean;
   notify: (type: "success" | "error" | "info", text: string) => void;
 }) {
+  const docs = useDocsBase();
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -138,6 +141,7 @@ export function Accounts({ canConnect, notify }: {
         header={
           <Header
             variant="awsui-h1-sticky"
+            info={infoSlot(docs, "accounts")}
             counter={loading ? undefined : `(${items.length})`}
             description="AWS accounts of yours that builds can deploy into, so their data, cost and resources stay yours. Only you see these."
             actions={
@@ -211,7 +215,7 @@ export function Accounts({ canConnect, notify }: {
         }} />
       <EditAccountModal account={editing} onDismiss={() => setEditing(null)}
         onSaved={(a) => { setEditing(null); notify("success", `Saved ${accountName(a)}.`); void load(); }} />
-      <Modal visible={Boolean(removing)} onDismiss={() => setRemoving(null)} header="Disconnect this account?"
+      <Modal visible={Boolean(removing)} onDismiss={() => setRemoving(null)} header={<>Disconnect this account?<InfoLink feature="accounts.manage" /></>}
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">

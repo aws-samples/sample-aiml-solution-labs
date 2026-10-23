@@ -22,6 +22,8 @@ import { layersOf, type LayerId } from "./layers";
 import type { Entry, Project, Workflow } from "./model";
 import { policyBlock } from "./Policies";
 import { triggersOf } from "./Triggers";
+import { useDocsBase, type DocsFeature } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export type RailId = "gateway" | "memory" | "policy" | "guardrail" | "identity" | "observability" | "triggers";
 
@@ -116,7 +118,13 @@ export function AgentCoreRail({ workflow, shown, dragging, selected, onSelect }:
 }
 
 /** The inspector for a rail item: what it is, what this build has, and who uses it. */
+/** Each deployment-wide feature's documentation (docs/docsLinks.ts). */
+const RAIL_DOCS: Record<RailId, DocsFeature> = {
+  gateway: "gateway", memory: "tab.memory", policy: "tab.policies", guardrail: "tab.guardrails",
+  identity: "tab.identity", observability: "observability", triggers: "tab.triggers",
+};
 export function CorePanel({ project, id, onSelect }: { project: Project; id: RailId; onSelect: (s: Selection) => void }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const it = railItems(wf).find((x) => x.id === id)!;
   const agentLink = (a: string) => (
@@ -142,7 +150,7 @@ export function CorePanel({ project, id, onSelect }: { project: Project; id: Rai
   };
   return (
     <SpaceBetween size="m">
-      <Header variant="h2" description="Deployment-wide (AgentCore)">{it.label}</Header>
+      <Header variant="h2" description="Deployment-wide (AgentCore)" info={infoSlot(docs, RAIL_DOCS[id])}>{it.label}</Header>
       <Box>{it.note}.</Box>
       <Box variant="small" color="text-body-secondary">{where[id]}</Box>
       {id === "gateway" ? (

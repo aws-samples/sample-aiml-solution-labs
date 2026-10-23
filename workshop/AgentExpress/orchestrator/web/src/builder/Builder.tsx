@@ -77,6 +77,8 @@ import { RegistryPublish } from "./RegistryPublish";
 import { MoveToTeam } from "./Teams";
 import { validate, type Issue } from "./validate";
 import { modelIssues, useModels } from "./models";
+import { DOCS, useDocsBase, type DocsFeature } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 import "./builder.css";
 
 /** The Connectors gallery, loaded when it is first opened: its OpenAPI documents are not needed to edit. */
@@ -98,7 +100,7 @@ function ImportModal({ visible, onDismiss, onPick }: {
   const [mode, setMode] = useState<"new" | "replace">("new");
   useEffect(() => { if (visible) setMode("new"); }, [visible]);
   return (
-    <Modal visible={visible} onDismiss={onDismiss} header="Import a file"
+    <Modal visible={visible} onDismiss={onDismiss} header={<>Import a file<InfoLink feature="import" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" onClick={() => {
@@ -168,7 +170,7 @@ function AddToolModal({ visible, onDismiss, onAdd, onConnector }: {
   const types = vocab("toolTypes");
   const typeDoc = block("tool").keys.type.doc;
   return (
-    <Modal visible={visible} onDismiss={onDismiss} header="Add a tool"
+    <Modal visible={visible} onDismiss={onDismiss} header={<>Add a tool<InfoLink feature="tool.add" /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -200,7 +202,7 @@ function AddToolModal({ visible, onDismiss, onAdd, onConnector }: {
 
 function ExportedModal({ name, onDismiss }: { name: string | null; onDismiss: () => void }) {
   return (
-    <Modal visible={name !== null} onDismiss={onDismiss} header="Bundle downloaded"
+    <Modal visible={name !== null} onDismiss={onDismiss} header={<>Bundle downloaded<InfoLink feature="export" /></>}
       footer={<Box float="right"><Button variant="primary" onClick={onDismiss}>Done</Button></Box>}>
       <SpaceBetween size="m">
         <Box>
@@ -288,16 +290,35 @@ export const TAB_LEVEL: Record<string, string> = {
   evals: "Agent level. Judges that score the output of the agents that use them.",
   tests: "Build level. Saved requests with fixed checks, run against the deployed build after each change.",
 };
+/** Each tab's documentation (docs/docsLinks.ts), shown at the end of its level note. The
+ *  workflow.json tab has its own heading, and Design a caption in the canvas
+ *  (DESIGN_CAPTION), which carry their icons instead. */
+const TAB_DOCS: Record<string, DocsFeature> = {
+  tools: "tab.tools", skills: "tab.skills", memory: "tab.memory", guardrails: "tab.guardrails",
+  identity: "tab.identity", policies: "tab.policies", interceptors: "tab.interceptors", triggers: "tab.triggers",
+  evals: "tab.evals", tests: "tab.tests", settings: "tab.settings",
+};
+/** The line beside the icon of a tab in TAB_DOCS that has no level note. */
+const TAB_CAPTION: Record<string, string> = {
+  settings: "Build-wide settings that apply to every agent",
+};
+/** The Design tab's caption, at the canvas's top left beside Show (wiki: Canvas). */
+export const DESIGN_CAPTION = "Stages run top to bottom, with each stage's agents inside";
 /** The tabs in TAB_ORDER, each with its level note on one row with the tab's own
- *  `actions` (buttons such as Add from registry), the note left and the buttons right. */
-function inTabOrder<T extends { id: string; content: ReactNode; actions?: ReactNode }>(tabs: T[]): Omit<T, "actions">[] {
+ *  `actions` (buttons such as Add from registry), the note left and the buttons right.
+ *  With a documentation URL (`docs`), every tab in TAB_DOCS has the row, for its info
+ *  icon; a tab with no level note (Settings) has its TAB_CAPTION there instead, so the
+ *  icon never stands alone. */
+function inTabOrder<T extends { id: string; content: ReactNode; actions?: ReactNode }>(tabs: T[], docs = false): Omit<T, "actions">[] {
   const at = (id: string) => (TAB_ORDER.indexOf(id) + TAB_ORDER.length + 1) % (TAB_ORDER.length + 1);
-  return [...tabs].sort((a, b) => at(a.id) - at(b.id)).map(({ actions, ...t }) => (TAB_LEVEL[t.id] || actions ? {
+  return [...tabs].sort((a, b) => at(a.id) - at(b.id)).map(({ actions, ...t }) => (TAB_LEVEL[t.id] || actions || (docs && TAB_DOCS[t.id]) ? {
     ...t,
     content: (
       <SpaceBetween size="s">
         <div className="axb-levelbar">
-          <Box variant="small" color="text-body-secondary" data-testid={`tab-level-${t.id}`}>{TAB_LEVEL[t.id] ?? ""}</Box>
+          <Box variant="small" color="text-body-secondary" data-testid={`tab-level-${t.id}`}>
+            {TAB_LEVEL[t.id] ?? (docs && TAB_DOCS[t.id] ? TAB_CAPTION[t.id] ?? DOCS[TAB_DOCS[t.id]].title : "")}
+            {TAB_DOCS[t.id] ? <InfoLink feature={TAB_DOCS[t.id]} /> : null}</Box>
           {actions ? <SpaceBetween direction="horizontal" size="xs">{actions}</SpaceBetween> : null}
         </div>
         {t.content}
@@ -607,6 +628,7 @@ function Editor({
   deployed?: boolean;
 }) {
   const [selection, setSelection] = useState<Selection>(null);
+  const docs = useDocsBase();
   /** The primitive being dragged from the palette, so the canvas highlights where it may go. */
   const [dragging, setDragging] = useState<Primitive | null>(null);
   const [tab, setTab] = useState("design");
@@ -834,6 +856,9 @@ function Editor({
   const count = (m: string) => Object.keys((project.workflow[m] ?? {}) as object).length;
 
   // The manual editor: the canvas, the tools, the settings, the file and its problems.
+  const settingsDocs: Record<(typeof singleBlocks)[number], DocsFeature> = {
+    ui: "settings.ui", orchestrator: "settings.orchestrator", authorization: "settings.authorization",
+  };
   const manual = (
       <Tabs
         activeTabId={tab} onChange={({ detail }) => setTab(detail.activeTabId)}
@@ -884,6 +909,10 @@ function Editor({
                   <PrimitivePalette workflow={wf} onDrag={setDragging} onOpen={(k) => setTab(PRIMITIVE_TAB[k])} />
                 </div>
                 <Canvas workflow={wf} issues={issues} selection={selection} onSelect={setSelection}
+                  caption={docs ? <>
+                    <span className="axb-canvas-caption-text" title={DESIGN_CAPTION}>
+                      <Box variant="small" color="text-body-secondary">{DESIGN_CAPTION}</Box></span>
+                    <InfoLink feature="tab.design" /></> : undefined}
                   onDropPayload={onDropPayload} onMoveAgent={onMoveAgent} dragging={dragging}
                   onAddChoice={addRow} onRemoveComponent={removeRow} onMoveComponent={moveRow} onCreate={createRow} />
                 <div className="axb-inspector">
@@ -988,7 +1017,8 @@ function Editor({
             content: <BuildTriggers project={project} setProject={setProject} issues={issues} />,
           },
           { id: "guardrails", label: `Guardrails (${count("guardrails")})`, content: named("guardrail", (
-            <Container header={<Header variant="h2" description="Applied to an agent that turns guardrails on without naming one below.">
+            <Container header={<Header variant="h2" description="Applied to an agent that turns guardrails on without naming one below."
+              info={infoSlot(docs, "guardrails.deployment")}>
               Deployment guardrail</Header>}>
               <EntryForm name="guardrail" entry={(wf.guardrail ?? {}) as Entry} issues={issues} pathPrefix="guardrail"
                 onChange={(e) => setProject({ ...project, workflow: { ...wf, guardrail: e } })} />
@@ -1026,7 +1056,8 @@ function Editor({
             content: (
               <SpaceBetween size="l">
                 {singleBlocks.map((name) => (
-                  <Container key={name} header={<Header variant="h2" description={block(name).$comment?.split(". ")[0]}>{name}</Header>}>
+                  <Container key={name} header={<Header variant="h2" description={block(name).$comment?.split(". ")[0]}
+                    info={infoSlot(docs, settingsDocs[name])}>{name}</Header>}>
                     <EntryForm name={name} entry={(wf[name] ?? {}) as Entry} issues={issues} pathPrefix={name}
                       overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true }, export: { hidden: true }, network: { hidden: true } }
                         : name === "authorization" ? SIGN_IN_HIDDEN : undefined}
@@ -1036,7 +1067,8 @@ function Editor({
                 ))}
                 <ExportSettings project={project} setProject={setProject} buildId={server ? build?.id : undefined} notify={notify} />
                 <Container header={<Header variant="h2"
-                  description="Where the shared orchestrator AgentCore Runtime runs: every main and task agent runs in it. A dedicated agent sets its own network in its panel; a remote (a2a) agent runs outside this build.">
+                  description="Where the shared orchestrator AgentCore Runtime runs: every main and task agent runs in it. A dedicated agent sets its own network in its panel; a remote (a2a) agent runs outside this build."
+                  info={infoSlot(docs, "settings.network")}>
                   Network</Header>}>
                   <NetworkFields value={(wf.orchestrator as Record<string, unknown> | undefined)?.network} path="orchestrator.network" issues={issues}
                     onChange={(net) => {
@@ -1052,13 +1084,14 @@ function Editor({
             id: "json", label: "workflow.json",
             content: (
               <Container header={<Header variant="h2" description="Exactly what the export writes — already in the canonical order `format_workflow.py --check` expects."
+                info={infoSlot(docs, "tab.json")}
                 actions={<CopyToClipboard textToCopy={json} copyButtonText="Copy" copySuccessText="Copied" copyErrorText="Could not copy" />}>
                 workflow.json</Header>}>
                 <pre className="axb-code axb-json">{json}</pre>
               </Container>
             ),
           },
-        ])}
+        ], Boolean(docs))}
       />
   );
 
@@ -1074,11 +1107,14 @@ function Editor({
           ) : null}
           Drag agents onto the canvas, give them tools, and gate the stages a person signs off.
           Then deploy anywhere in one click.</>}
-        info={<Button variant="inline-link" ariaLabel="Show the problems" onClick={() => setShowProblems(true)}>
-          <StatusIndicator type={errors ? "error" : warnings ? "warning" : "success"}>
-            {errors ? `${errors} error${errors > 1 ? "s" : ""}` : "Valid"}{warnings ? ` · ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}
-          </StatusIndicator>
-        </Button>}
+        info={<>
+          <Button variant="inline-link" ariaLabel="Show the problems" onClick={() => setShowProblems(true)}>
+            <StatusIndicator type={errors ? "error" : warnings ? "warning" : "success"}>
+              {errors ? `${errors} error${errors > 1 ? "s" : ""}` : "Valid"}{warnings ? ` · ${warnings} warning${warnings > 1 ? "s" : ""}` : ""}
+            </StatusIndicator>
+          </Button>
+          <InfoLink feature="builder" />
+        </>}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {/* Buttons with an icon and no text, so the header stays short beside Share,
@@ -1122,6 +1158,8 @@ function Editor({
                   setExported(name);
                 }
               }}>Export</ButtonDropdown>
+            {/* Only with a documentation URL: SpaceBetween spaces even an empty child. */}
+            {docs ? <InfoLink feature="export" /> : null}
           </SpaceBetween>
         }
       >
@@ -1207,7 +1245,7 @@ function Editor({
         </Suspense>
       ) : null}
       <Modal visible={showProblems} onDismiss={() => setShowProblems(false)} size="large"
-        header={`Problems (${issues.length})`}>
+        header={<>{`Problems (${issues.length})`}<InfoLink feature="builder.problems" /></>}>
         {issues.length ? <IssueList issues={issues} onPick={pickProblem} />
           : <StatusIndicator type="success">No problems. This build is ready to deploy.</StatusIndicator>}
       </Modal>

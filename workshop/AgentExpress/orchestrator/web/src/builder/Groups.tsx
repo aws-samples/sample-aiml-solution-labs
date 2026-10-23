@@ -12,8 +12,11 @@ import Table from "@cloudscape-design/components/table";
 import Textarea from "@cloudscape-design/components/textarea";
 import { useCallback, useEffect, useState } from "react";
 import { groups as groupsApi, type Group } from "./storage";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 export function Groups({ notify }: { notify: (type: "success" | "error" | "info", text: string) => void }) {
+  const docs = useDocsBase();
   const [items, setItems] = useState<Group[] | null>(null);
   const [editing, setEditing] = useState<Group | "new" | null>(null);
   const [name, setName] = useState("");
@@ -45,6 +48,7 @@ export function Groups({ notify }: { notify: (type: "success" | "error" | "info"
     <SpaceBetween size="m">
       <Table items={items ?? []} loading={items === null} loadingText="Loading groups" trackBy="name"
         header={<Header variant="h3" description="Anyone can share a build or a library item with a group; only an admin changes who is in it."
+          info={infoSlot(docs, "admin.groups")}
           actions={<Button onClick={() => setEditing("new")}>New group</Button>}>Groups</Header>}
         columnDefinitions={[
           { id: "name", header: "Group", isRowHeader: true, cell: (g) => <Link href="#" onFollow={(e) => { e.preventDefault(); setEditing(g); }}>{g.name}</Link> },
@@ -56,7 +60,7 @@ export function Groups({ notify }: { notify: (type: "success" | "error" | "info"
             }} />) },
         ]}
         empty={<Box color="text-body-secondary">No groups yet.</Box>} />
-      <Modal visible={editing !== null} onDismiss={() => setEditing(null)} header={editing === "new" ? "New group" : `Group ${name}`}
+      <Modal visible={editing !== null} onDismiss={() => setEditing(null)} header={<>{editing === "new" ? "New group" : `Group ${name}`}<InfoLink feature="admin.groups" /></>}
         footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
           <Button variant="link" onClick={() => setEditing(null)}>Cancel</Button>
           <Button variant="primary" loading={busy} disabled={!name.trim()} onClick={() => void save()}>Save</Button>

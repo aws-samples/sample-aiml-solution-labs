@@ -395,6 +395,8 @@ telemetry still work.
 | `builder` | `true` | Builder control plane |
 | `consoleMode` | `app` | `builder` for a [Builder console](#deploy-a-builder-console) |
 | `demoVideoUrl` | empty | An `https://` link to a demo video, shown in a Builder console's About panel and first-run view; empty shows none (Terraform `demo_video_url`) |
+| `docsUrl` | the public [user guide](docs/user-guide/README.md) on GitHub at the release tag | The documentation the top bar's **Documentation** link and each feature's info icon link to ([In-product documentation links](#in-product-documentation-links)): the GitHub guide, or an XWiki copy of it. A console passes it on to the builds it deploys. Empty shows no documentation link anywhere (Terraform `docs_url`) |
+| `docsLinks` | `true` | `false` shows no info icon and no Documentation link anywhere, on the console and on every build it deploys (Terraform `docs_links`) |
 | `tags` | | JSON object of extra tags |
 | Others | off | [Organisation guardrails](#organisation-guardrails), [A2A](#serving-the-workflow-over-a2a), [Export to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others), [OTLP](#sending-traces-to-another-otlp-backend), [LiteLLM](#using-non-bedrock-models-through-litellm), [teardown](#tear-down); every flag is in [cdk/README.md](orchestrator/cdk/README.md#configuration-context-keys) |
 
@@ -485,6 +487,67 @@ re-runs and the assistant is in [GETTING_STARTED.md](GETTING_STARTED.md).
 the run, its telemetry and `/api/limits`, and exits `0` (passed), `1` (a check failed) or `2` (could not
 run). It works against any deployed app and needs only the URL and a token:
 see [scripts/README.md](orchestrator/scripts/README.md).
+
+### In-product documentation links
+
+The top bar has a **Documentation** link, and each feature (every Builder tab and Settings section, each
+agent and tool panel section, the deploy dialog, the Assistant, and the execution plane's pages) has an
+info icon. Its popover names the feature, says in a sentence what it is, and links to the feature's
+section in a new tab. A Builder console passes its settings on to every build it deploys, so a build's own
+app links to the same documentation.
+
+**Where the links go: `docsUrl`.** By default, the public [user guide](docs/user-guide/README.md) on
+GitHub, pinned to the release's tag:
+`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.6/workshop/AgentExpress/docs/user-guide/`.
+A section's link is `<docsUrl><page>.md#<slug>`, GitHub's id for the heading (lower case, punctuation
+but `-` and `_` removed, spaces as `-`, a repeated heading `-1`, `-2`). An organisation that keeps the
+guide in an XWiki space, typically for internal or production deployments, points `docsUrl` at that
+space instead, and the links follow the wiki's shape (`<docsUrl><page>#H<heading>`), chosen because the
+path contains `/bin/view/`:
+
+```bash
+npx cdk deploy -c docsUrl=https://wiki.example.com/bin/view/AgentExpress/
+# Terraform: docs_url = "https://wiki.example.com/bin/view/AgentExpress/"
+```
+
+An empty `docsUrl` renders no documentation link or icon anywhere. Anything but an `https://` URL fails
+the synth or the plan.
+
+**The default's release tag** is one constant, `ref` in
+[`orchestrator/docs_default.json`](orchestrator/docs_default.json). CDK (`cdk/lib/docs-default.ts`) and
+Terraform (`local.docs_default` in `terraform/builder.tf`) both read that file, so both paths deploy the
+same default. Bump `ref` to the new tag when you cut a release; nothing else names it.
+
+**Turn the links off: `docsLinks`.** `-c docsLinks=false` (Terraform `docs_links = false`) renders no
+info icon and no Documentation link anywhere, on the console and on every build it deploys.
+
+**Each person's choice: Show help icons.** Where a deployment has documentation links, the top bar's
+account menu (or, without sign-in, its **Settings** menu) has a **Show help icons** checkbox. It is on by
+default; off hides every info icon and the Documentation link for that person. The choice is kept in the
+browser's local storage, like the Assistant's Review changes setting.
+
+Every page and section is named in one file, `orchestrator/web/src/docs/docsLinks.ts`, beside each
+feature's title and description: the page, and the heading's text, from which each target's anchor is
+computed. `docsLinks.test.tsx` checks every entry against the headings of `docs/user-guide/*.md` (it fails
+if the guide is missing; `AX_USER_GUIDE_DIR` checks another copy), and against an XWiki copy's page
+sources when `AX_WIKI_DIR` names their directory. `orchestrator/scripts/check_docs_links.py` checks the
+links the popovers render. It is not part of CI. Run it after the documentation changes:
+
+```bash
+cd orchestrator
+# The GitHub guide: against the local Markdown, then also against github.com (public, no sign-in).
+python3 scripts/check_docs_links.py --target github
+python3 scripts/check_docs_links.py --target github --live
+# An XWiki copy, in Chromium with a signed-in session.
+pip install playwright==1.64.0 && playwright install chromium
+python3 scripts/check_docs_links.py --target wiki --base-url https://wiki.example.com/bin/view/AgentExpress/ \
+  --cookies ~/cookies.txt --signin-hint "sign in again to refresh ~/cookies.txt"
+```
+
+`--cookies` is a Netscape-format cookie file with a signed-in session, for a site that needs one. A page
+that lands on another host is taken as its sign-in page: the check stops with exit code `2` and prints
+`--signin-hint`. Exit `0` means every anchor was found, `1` that one or more is missing; every option is
+in `--help` and [scripts/README.md](orchestrator/scripts/README.md#check_docs_linkspy-check-the-in-product-documentation-links).
 
 ### The Timeline chart on a run
 

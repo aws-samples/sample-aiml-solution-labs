@@ -47,6 +47,7 @@ import { validateKbVectorStore } from "./kb-vector-store";
 import { validateKbConnector } from "./kb-data-source";
 import { taskStatements } from "./tasks";
 import { harnessAgents } from "./harness";
+import { DEFAULT_DOCS_URL } from "./docs-default";
 
 /** Regions where the managed AgentCore Web Search connector is available. */
 /**
@@ -1411,6 +1412,16 @@ export interface OrchestratorStackProps extends cdk.StackProps {
    *  "builder") in the About panel and the first-run view. An https URL or empty (the
    *  default: no link). `-c demoVideoUrl`. Mirrors var.demo_video_url in terraform/builder.tf. */
   demoVideoUrl?: string;
+  /** The documentation base URL the UI links each feature's info icon to, and the top
+   *  bar's Documentation link; on a control plane and on a workflow's own app, and passed
+   *  on to every build this console deploys. An https URL, or empty for none. Unset: the
+   *  public user guide at the release tag (lib/docs-default.ts, orchestrator/docs_default.json).
+   *  `-c docsUrl`. Mirrors var.docs_url in terraform/builder.tf. */
+  docsUrl?: string;
+  /** false: no info icons and no Documentation link anywhere, here or on the builds this
+   *  console deploys. Default true. `-c docsLinks=false`. Mirrors var.docs_links in
+   *  terraform/builder.tf. */
+  docsLinks?: boolean;
   /** Leave the builds table deletion-protected when this stack is destroyed, so a destroy
    *  stops at the table. Default false: destroy clears the protection just before it
    *  deletes the table. `-c keepBuildsTableProtected=true`. Mirrors
@@ -1512,6 +1523,17 @@ export class OrchestratorStack extends cdk.Stack {
     if (demoVideoUrl && !/^https:\/\/[^\s/?#]+[^\s]*$/.test(demoVideoUrl)) {
       throw new Error(`demoVideoUrl must be an https:// URL or empty, not "${demoVideoUrl}"`);
     }
+    // The same rule for docsUrl (var.docs_url's validation in terraform/builder.tf). Unset:
+    // the public user guide at the release tag (local.docs_url in terraform/builder.tf).
+    const docsUrl = props.docsUrl === undefined || props.docsUrl === null ? DEFAULT_DOCS_URL : String(props.docsUrl);
+    if (docsUrl && !/^https:\/\/[^\s/?#]+[^\s]*$/.test(docsUrl)) {
+      throw new Error(`docsUrl must be an https:// URL or empty, not "${docsUrl}"`);
+    }
+    // Links on (DOCS_URL), or off (DOCS_LINKS=false) with -c docsLinks=false or an empty
+    // docsUrl: for this BFF and for every build this console deploys. Mirrors
+    // local.docs_env in terraform/builder.tf.
+    const docsEnv: Record<string, string> = props.docsLinks !== false && docsUrl
+      ? { DOCS_URL: docsUrl } : { DOCS_LINKS: "false" };
     const workflowPlane = consoleMode !== "builder";
     const enableGateway = props.enableGateway && workflowPlane;
     // Checked here, before anything is made from them (lib/hardening.ts).
@@ -3079,6 +3101,7 @@ export class OrchestratorStack extends cdk.Stack {
         keepTableProtected: props.keepBuildsTableProtected,
         permissionsBoundaryArn: guardrails.permissionsBoundaryArn, iamRolePath: guardrails.iamRolePath,
         litellmEnv: bffLitellm.env,
+        docsEnv,
         codeSourceBuckets: props.codeSourceBuckets,
       });
     // The same list for the deploy check (bff/builds.py deploy).
@@ -3125,6 +3148,9 @@ export class OrchestratorStack extends cdk.Stack {
     // The demo video link a console shows (GET /api/me demoVideoUrl). Mirrors
     // local.console_mode_env in terraform/builder.tf.
     if (consoleMode === "builder" && demoVideoUrl) bff.addEnvironment("DEMO_VIDEO_URL", demoVideoUrl);
+    // The documentation links (GET /api/me docsUrl, or docsLinks false), on any console.
+    // Mirrors local.docs_env in terraform/builder.tf.
+    for (const [k, v] of Object.entries(docsEnv)) bff.addEnvironment(k, v);
     // A build's own app keeps its own activity log (bff/audit.py): who signed in, and who
     // started, decided, cancelled, re-ran or deleted a run. A console keeps it with its
     // builds. Mirrors aws_dynamodb_table.audit in terraform/audit.tf.

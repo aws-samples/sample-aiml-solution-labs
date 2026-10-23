@@ -26,6 +26,8 @@ import type { CodeSource } from "./codeSource";
 import { CodeSourceField } from "./CodeSourceField";
 import type { Entry, Json, Project, ToolFiles } from "./model";
 import { codeTool, type CodeCheck, type ToolTest } from "./storage";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 type Grants = {
   secret?: string; table?: string; tableAccess?: string; s3Prefix?: string; s3Access?: string;
@@ -250,6 +252,7 @@ function TestTool({ buildId, id, tool, files }: { buildId: string; id: string; t
 export function CodeTool({ project, id, onChange, server }: {
   project: Project; id: string; onChange: (p: Project) => void; server?: boolean;
 }) {
+  const docs = useDocsBase();
   const tool = project.workflow.tools[id];
   const written = tool.code !== undefined;
   const files = project.toolCode?.[id] ?? {};
@@ -276,7 +279,7 @@ export function CodeTool({ project, id, onChange, server }: {
   };
   return (
     <SpaceBetween size="m">
-      <FormField label="The function" description={written ? "Written here, deployed by the framework with only the grants below."
+      <FormField label="The function" info={infoSlot(docs, "tool.lambdaFunction")} description={written ? "Written here, deployed by the framework with only the grants below."
         : tool.source ? "One the framework ships." : "One you deployed yourself, by its ARN."}>
         <SegmentedControl selectedId={written ? "code" : "arn"}
           options={[{ id: "arn", text: tool.source ? "Framework's" : "Yours, by ARN" }, { id: "code", text: "Write it here" }]}
@@ -295,12 +298,12 @@ export function CodeTool({ project, id, onChange, server }: {
           <CodeSourceField source={code.codeSource} onSource={setSource} onFiles={setFiles}
             buildId={server ? project.id : undefined} path={`tools.${id}.code.codeSource`} />
           {fetched ? null : <Files files={files} onChange={setFiles} />}
-          <ExpandableSection headerText="What it may reach" variant="container" defaultExpanded>
+          <ExpandableSection headerText="What it may reach" variant="container" defaultExpanded headerInfo={infoSlot(docs, "tool.code")}>
             <GrantsForm code={(tool.code ?? {}) as Code}
               onChange={(c) => setTool({ ...tool, code: c as unknown as Json } as Entry)} />
           </ExpandableSection>
           {server && !fetched ? (
-            <ExpandableSection headerText="Check and run" variant="container" defaultExpanded
+            <ExpandableSection headerText="Check and run" variant="container" defaultExpanded headerInfo={infoSlot(docs, "tool.codeCheck")}
               headerDescription="Syntax, lint and a security scan, then each test event in an AgentCore Code Interpreter sandbox.">
               <SpaceBetween size="s">
                 <Button loading={checking} onClick={async () => {
@@ -315,7 +318,7 @@ export function CodeTool({ project, id, onChange, server }: {
             </ExpandableSection>
           ) : null}
           {server ? (
-            <ExpandableSection headerText="Test the deployed tool" variant="container">
+            <ExpandableSection headerText="Test the deployed tool" variant="container" headerInfo={infoSlot(docs, "tool.codeTest")}>
               <TestTool buildId={project.id} id={id} tool={tool} files={files} />
             </ExpandableSection>
           ) : null}

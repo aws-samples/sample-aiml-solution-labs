@@ -99,6 +99,9 @@ export interface BuilderPlaneProps {
   iamRolePath?: string;
   /** This console's LiteLLM proxy and key (lib/litellm.ts), passed on to every build. */
   litellmEnv?: Record<string, string>;
+  /** This console's documentation links, passed on to every build: DOCS_URL (-c docsUrl),
+   *  or DOCS_LINKS=false when they are off (deployer/runner.py docs_settings). */
+  docsEnv?: Record<string, string>;
   /** Buckets an S3 code source may name in this console's own account (deployer/runner.py). */
   codeSourceBuckets?: string[];
 }
@@ -216,6 +219,8 @@ export class BuilderPlane extends Construct {
         })).map(([k, v]) => [k, { value: v }])),
         // This console's LiteLLM proxy and key, for every build's litellm/ agents.
         ...Object.fromEntries(Object.entries(props.litellmEnv ?? {}).map(([k, v]) => [k, { value: v }])),
+        // This console's documentation links, for every build's app (runner.py docs_settings).
+        ...Object.fromEntries(Object.entries(props.docsEnv ?? {}).map(([k, v]) => [k, { value: v }])),
       },
       timeout: cdk.Duration.hours(2),
       logging: {

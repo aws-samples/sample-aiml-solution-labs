@@ -237,6 +237,7 @@ orchestrator/
 
 | Doc | Covers |
 |---|---|
+| [User guide](docs/user-guide/README.md) | Using AgentExpress, page by page: the control plane, every feature, deploying, running and observing. The app's info icons link here |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | Deploy the sample, connect your data, add agents, use the Builder |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Both IaC paths, sign-in, RBAC, every operational feature, teardown, troubleshooting |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Components, request flow, runtime, BFF, stores, security model |

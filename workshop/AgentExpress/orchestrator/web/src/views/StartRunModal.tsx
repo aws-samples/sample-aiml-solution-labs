@@ -32,6 +32,7 @@ import { overrideOf } from "../lib/modelOverride";
 import { REQUEST_MAX } from "../lib/request";
 import type { LimitsUsage, ModelOverride, RunAttach, UiConfig } from "../types";
 import { ModelOverrideFields } from "./ModelOverrideFields";
+import { InfoLink, InfoStrip } from "../docs/InfoLink";
 
 /** A file picked for the run, uploaded as soon as it is picked. */
 interface Picked { file: File; key?: string; name?: string; loading: boolean; error?: string }
@@ -117,7 +118,7 @@ export function StartRunModal({
       visible={visible}
       onDismiss={onDismiss}
       size="large"
-      header="Start run"
+      header={<>Start run<InfoLink feature="startRun" /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -135,7 +136,7 @@ export function StartRunModal({
             <SpaceBetween size="xs">
               {notice.alert ? <Alert type={notice.alert.type}>{notice.alert.text}</Alert> : null}
               <Box variant="small" color="text-body-secondary" data-testid="limits-usage">
-                {notice.lines.join(" · ")}
+                {notice.lines.join(" · ")}<InfoLink feature="limits" />
               </Box>
             </SpaceBetween>
           ) : null}
@@ -197,6 +198,7 @@ export function StartRunModal({
             </FormField>
           ) : null}
           <ExpandableSection headerText="Advanced">
+            <InfoStrip features={["startRun.advanced"]} />
             <FormField
               label="Subject (optional)"
               description={

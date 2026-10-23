@@ -20,6 +20,8 @@ import { GROUP_LABEL, fmtSize, type RunFile } from "../lib/files";
 import { requestTitle } from "../lib/request";
 import type { Workflow } from "../types";
 import { FileActions, FilePreview, agentName } from "./RunFiles";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 interface FilesPageBody {
   stored: boolean;
@@ -30,6 +32,7 @@ interface FilesPageBody {
 export function FilesPage({ workflow, canSeeEveryone, onOpenRun }: {
   workflow: Workflow; canSeeEveryone: boolean; onOpenRun: (sessionId: string) => void;
 }) {
+  const docs = useDocsBase();
   const [everyone, setEveryone] = useState(false);
   const [files, setFiles] = useState<RunFile[]>([]);
   const [next, setNext] = useState<number | null>(null);
@@ -77,6 +80,7 @@ export function FilesPage({ workflow, canSeeEveryone, onOpenRun }: {
         header={
           <Header
             variant="h1"
+            info={infoSlot(docs, "files")}
             counter={`(${filteredItemsCount ?? files.length})`}
             description="What your runs were started with, and what their agents made. Newest runs first."
             actions={canSeeEveryone ? (

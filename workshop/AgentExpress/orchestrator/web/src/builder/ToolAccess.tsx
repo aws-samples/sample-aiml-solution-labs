@@ -10,6 +10,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Entry, Json, Project } from "./model";
 import { buildSecrets, type SecretNames } from "./storage";
 import { connectionOf, fixedOf, iamNote, METHOD } from "./ToolConnect";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 type Row = { key: string; connects: string; sees: string; status: "ready" | "setup" | "unknown"; why?: string;
   /** For an IAM role: which role, on hover. */ tip?: string };
@@ -57,6 +59,7 @@ export function ToolAccess({ project, server, onEdit, savedLogins, agentName }: 
   /** The saved logins list (Identity's named entries). */
   savedLogins: ReactNode;
 }) {
+  const docs = useDocsBase();
   const [secrets, setSecrets] = useState<SecretNames | null>(null);
   useEffect(() => {
     if (!server) return;
@@ -68,7 +71,7 @@ export function ToolAccess({ project, server, onEdit, savedLogins, agentName }: 
   return (
     <SpaceBetween size="l">
       <Table items={rows} trackBy="key" variant="container" ariaLabels={{ tableLabel: "How each tool connects" }}
-        header={<Header variant="h2" description="Set on each tool. The agent never sees a key or a secret.">Tools</Header>}
+        header={<Header variant="h2" description="Set on each tool. The agent never sees a key or a secret." info={infoSlot(docs, "identity.toolAccess")}>Tools</Header>}
         empty="No tools yet."
         columnDefinitions={[
           { id: "tool", header: "Tool", isRowHeader: true, cell: (r) => r.key },
@@ -79,7 +82,8 @@ export function ToolAccess({ project, server, onEdit, savedLogins, agentName }: 
           { id: "edit", header: "", cell: (r) => <Button variant="inline-link" ariaLabel={`Edit ${r.key}`} onClick={() => onEdit(r.key)}>Edit</Button> },
         ]} />
       <SpaceBetween size="xs">
-        <Header variant="h2" description="An API key or OAuth client several tools can share. Rotate it here and every tool using it follows.">
+        <Header variant="h2" description="An API key or OAuth client several tools can share. Rotate it here and every tool using it follows."
+          info={infoSlot(docs, "identity.savedLogins")}>
           Saved logins</Header>
         {savedLogins}
       </SpaceBetween>

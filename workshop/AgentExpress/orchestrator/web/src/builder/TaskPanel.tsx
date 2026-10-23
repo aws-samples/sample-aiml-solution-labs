@@ -24,6 +24,8 @@ import {
 import { issuesFor, upstreamIds, type Issue } from "./validate";
 import type { CodeSource } from "./codeSource";
 import { CodeSourceField } from "./CodeSourceField";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 const opt = (v: string, label = v) => ({ value: v, label });
 
@@ -54,6 +56,7 @@ export function TaskPanel({ project, id, issues, onChange, onSelect, server }: {
   project: Project; id: string; issues: Issue[];
   onChange: (p: Project) => void; onSelect: (s: Selection) => void; server?: boolean;
 }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const agent = wf.agents[id];
   const task = (agent.task && typeof agent.task === "object" && !Array.isArray(agent.task) ? agent.task : {}) as Entry;
@@ -92,6 +95,7 @@ export function TaskPanel({ project, id, issues, onChange, onSelect, server }: {
   return (
     <SpaceBetween size="l">
       <Header variant="h2" description={`${taskLabel(kind)} — a step with no model, run in this deployment`}
+        info={infoSlot(docs, "task")}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {stage >= 0 ? <Button onClick={() => setWf(unplace(wf, id))}>Remove from canvas</Button> : null}

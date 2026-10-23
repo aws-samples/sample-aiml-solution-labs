@@ -25,6 +25,7 @@ import {
   a2aLambdaAgents, customEvaluatorsOf, customPoliciesOf, memoryStrategiesFor, OrchestratorStack, PRIVILEGED_ACTIONS,
   privilegedGrants, stageBffPackage, validateWorkflow,
 } from "../lib/orchestrator-stack";
+import { DEFAULT_DOCS_URL, DOCS_REF } from "../lib/docs-default";
 
 const ORCH_ROOT = path.join(__dirname, "..", "..");
 const shipped = require(`${ORCH_ROOT}/app/workflow.json`);
@@ -941,6 +942,53 @@ describe("self sign-up", () => {
     expect(() => synth({ consoleMode: "builder", demoVideoUrl: "http://videos.example.com/demo" }))
       .toThrow(/demoVideoUrl must be an https:\/\/ URL/);
     expect(() => synth({ consoleMode: "builder", demoVideoUrl: "javascript:alert(1)" })).toThrow(/demoVideoUrl/);
+  });
+  it("gives the BFF and the deploy project the documentation URL when set, and refuses one that is not https", () => {
+    const bffEnv = (t: Template) => Object.values<any>(t.findResources("AWS::Lambda::Function"))
+      .find((f) => f.Properties.FunctionName === "AgentCoreBFF-multiagent_orchestrator").Properties.Environment.Variables;
+    const deployEnv = (t: Template) => (Object.values<any>(t.findResources("AWS::CodeBuild::Project"))[0]
+      .Properties.Environment.EnvironmentVariables as { Name: string; Value: string }[]);
+    const url = "https://docs.example.com/product/";
+    const on = synth({ consoleMode: "builder", docsUrl: url });
+    expect(bffEnv(on).DOCS_URL).toBe(url);
+    // Passed on to every build the console deploys (deployer/runner.py docs_settings).
+    expect(deployEnv(on)).toEqual(expect.arrayContaining([{ Name: "DOCS_URL", Type: "PLAINTEXT", Value: url }]));
+    // A workflow's own app shows the links too.
+    expect(bffEnv(synth({ docsUrl: url })).DOCS_URL).toBe(url);
+    // An empty docsUrl: no links, here or on the builds.
+    const none = synth({ consoleMode: "builder", docsUrl: "" });
+    expect(bffEnv(none).DOCS_URL).toBeUndefined();
+    expect(bffEnv(none).DOCS_LINKS).toBe("false");
+    expect(deployEnv(none).map((v) => v.Name)).not.toContain("DOCS_URL");
+    expect(() => synth({ docsUrl: "http://docs.example.com/" })).toThrow(/docsUrl must be an https:\/\/ URL/);
+    expect(() => synth({ docsUrl: "javascript:alert(1)" })).toThrow(/docsUrl/);
+  });
+  it("links to the public user guide at the release tag by default, the same default Terraform reads", () => {
+    const bffEnv = (t: Template) => Object.values<any>(t.findResources("AWS::Lambda::Function"))
+      .find((f) => f.Properties.FunctionName === "AgentCoreBFF-multiagent_orchestrator").Properties.Environment.Variables;
+    const deployEnv = (t: Template) => (Object.values<any>(t.findResources("AWS::CodeBuild::Project"))[0]
+      .Properties.Environment.EnvironmentVariables as { Name: string; Value: string }[]);
+    expect(DOCS_REF).toMatch(/^agentexpress-v\d+\.\d+\.\d+$/);
+    expect(DEFAULT_DOCS_URL).toBe(
+      `https://github.com/aws-samples/sample-aiml-solution-labs/blob/${DOCS_REF}/workshop/AgentExpress/docs/user-guide/`);
+    const t = synth({ consoleMode: "builder" });
+    expect(bffEnv(t).DOCS_URL).toBe(DEFAULT_DOCS_URL);
+    expect(bffEnv(t).DOCS_LINKS).toBeUndefined();
+    expect(deployEnv(t)).toEqual(expect.arrayContaining([{ Name: "DOCS_URL", Type: "PLAINTEXT", Value: DEFAULT_DOCS_URL }]));
+    // Terraform reads the same file for the same default (local.docs_default).
+    const tf = fs.readFileSync(path.join(__dirname, "..", "..", "terraform", "builder.tf"), "utf8");
+    expect(tf).toContain('jsondecode(file("${path.module}/../docs_default.json"))');
+  });
+  it("turns the links off with -c docsLinks=false, for the BFF and every build", () => {
+    const bffEnv = (t: Template) => Object.values<any>(t.findResources("AWS::Lambda::Function"))
+      .find((f) => f.Properties.FunctionName === "AgentCoreBFF-multiagent_orchestrator").Properties.Environment.Variables;
+    const deployEnv = (t: Template) => (Object.values<any>(t.findResources("AWS::CodeBuild::Project"))[0]
+      .Properties.Environment.EnvironmentVariables as { Name: string; Value: string }[]);
+    const t = synth({ consoleMode: "builder", docsLinks: false, docsUrl: "https://docs.example.com/product/" });
+    expect(bffEnv(t).DOCS_LINKS).toBe("false");
+    expect(bffEnv(t).DOCS_URL).toBeUndefined();
+    expect(deployEnv(t)).toEqual(expect.arrayContaining([{ Name: "DOCS_LINKS", Type: "PLAINTEXT", Value: "false" }]));
+    expect(deployEnv(t).map((v) => v.Name)).not.toContain("DOCS_URL");
   });
 
   it("opened, puts every confirmed user in the default group", () => {

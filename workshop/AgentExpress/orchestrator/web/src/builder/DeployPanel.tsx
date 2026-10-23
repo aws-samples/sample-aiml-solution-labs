@@ -28,6 +28,7 @@ import {
   accountName, accounts, appLogin, deploymentHistory, jobActive, jobLog, type Account, type AccountLaunch, type AppLogin,
   type BuildSummary, type DeploymentHistory, type Tool,
 } from "./storage";
+import { InfoLink } from "../docs/InfoLink";
 
 /** Regions offered for a connected account. Any other can be typed. */
 export const REGIONS = ["us-east-1", "us-east-2", "us-west-2", "eu-west-1", "eu-central-1", "eu-west-2",
@@ -136,8 +137,8 @@ export function ConnectAccountModal({ visible, onDismiss, onConnected, resume }:
 
   return (
     <Modal visible={visible} onDismiss={onDismiss}
-      header={resume ? (resume.status === "connected" ? `Update the role in ${accountName(resume)}` : `Finish connecting ${accountName(resume)}`)
-        : "Connect an AWS account"}
+      header={<>{resume ? (resume.status === "connected" ? `Update the role in ${accountName(resume)}` : `Finish connecting ${accountName(resume)}`)
+        : "Connect an AWS account"}<InfoLink feature={resume ? "accounts.manage" : "accounts"} /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -228,7 +229,7 @@ function DeployModal({ build, visible, onDismiss, onDeploy }: {
     ...(lockedAccount === undefined ? [{ value: "__connect", label: "Connect an AWS account…" }] : []),
   ];
   return (
-    <Modal visible={visible && !connecting} onDismiss={onDismiss} header={`Deploy version ${next}`}
+    <Modal visible={visible && !connecting} onDismiss={onDismiss} header={<>{`Deploy version ${next}`}<InfoLink feature="deploy.dialog" /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -382,7 +383,7 @@ export function DeployPanel({ build, errors, can, onDeploy, onDestroy, onRun, si
   return (
     <ExpandableSection variant="container" expanded={expanded} onChange={({ detail }) => toggle(detail.expanded)}
       headerText="Deployment"
-      headerInfo={<StatusIndicator type={state.type}>{state.text}</StatusIndicator>}
+      headerInfo={<><StatusIndicator type={state.type}>{state.text}</StatusIndicator><InfoLink feature="deploy" /></>}
       // Collapsed, the header is one line: the name, the status and the actions.
       headerDescription={expanded && build?.agentName
         ? `Deploys as ${build.tool || build.deployed ? stackOf(build) : "its own stack"}. Every AWS name in it starts with ${build.agentName}.`
@@ -464,7 +465,7 @@ export function HistoryModal({ build, onDismiss }: { build: BuildSummary; onDism
       result: d.result, tool: d.tool, where: whereOf(d.account, d.region), by: d.by, error: d.error })),
   ];
   return (
-    <Modal visible onDismiss={onDismiss} size="max" header={`Deployment history: ${build.name}`}
+    <Modal visible onDismiss={onDismiss} size="max" header={<>{`Deployment history: ${build.name}`}<InfoLink feature="deploy.history" /></>}
       footer={<Box float="right"><Button variant="primary" onClick={onDismiss}>Close</Button></Box>}>
       {error ? <StatusIndicator type="error">{error}</StatusIndicator> : (
         <Table variant="embedded" wrapLines loading={!got} loadingText="Reading the history" items={rows}

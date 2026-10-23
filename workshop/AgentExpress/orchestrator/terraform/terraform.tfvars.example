@@ -133,6 +133,8 @@ region = "us-east-1"
 # designer_effort          = ""   # low | medium (default) | high | model
 # designer_review_model    = ""   # reviews the Assistant's changes; empty: us.openai.gpt-6.1-sol
 # demo_video_url           = ""   # https:// link to a demo video, shown on a console_mode = "builder" console; empty: none
+# docs_url                 = "https://wiki.example.com/bin/view/AgentExpress/"   # documentation each feature's info icon links to; unset: the public user guide at the release tag (../docs_default.json); "": none
+# docs_links               = false   # no info icons and no Documentation link anywhere (default true)
 # container_engine         = "finch"                     # or "docker" / "podman"
 # memory_event_expiry_days = 30
 # log_retention_days       = 365

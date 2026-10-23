@@ -16,6 +16,8 @@ import Tiles from "@cloudscape-design/components/tiles";
 
 import type { Json, Project } from "./model";
 import { GROUPS_CLAIM_FOR } from "./validate";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export type Provider = "cognito" | "okta" | "entra" | "auth0";
 type Field = "domain" | "clientId" | "tenantId";
@@ -109,12 +111,14 @@ export function poolGroups(project: Project): string[] {
 
 /** Built in: what Amazon Cognito is here, what the deploy creates, and who gets in. */
 function CognitoDetails({ project, userPoolId, region }: { project: Project; userPoolId?: string; region?: string }) {
+  const docs = useDocsBase();
   const groups = poolGroups(project);
   const consoleUrl = userPoolId && region
     ? `https://${region}.console.aws.amazon.com/cognito/v2/idp/user-pools/${encodeURIComponent(userPoolId)}/users?region=${region}`
     : undefined;
   return (
-    <Container header={<Header variant="h3" description="Nothing to set up: the deploy creates it, and there are no values to copy.">
+    <Container header={<Header variant="h3" description="Nothing to set up: the deploy creates it, and there are no values to copy."
+      info={infoSlot(docs, "identity.cognito")}>
       Built-in sign-in: Amazon Cognito</Header>}>
       <KeyValuePairs columns={2} items={[
         { label: "What it is",
@@ -150,6 +154,7 @@ export function SignInSettings({ project, setProject, appUrl, userPoolId, region
   userPoolId?: string;
   region?: string;
 }) {
+  const docs = useDocsBase();
   const provider = providerOf(project);
   const s = signInOf(project);
   const auth = (project.workflow.authorization ?? {}) as Record<string, unknown>;
@@ -168,7 +173,7 @@ export function SignInSettings({ project, setProject, appUrl, userPoolId, region
       {provider === "cognito" ? (
         <CognitoDetails project={project} userPoolId={userPoolId} region={region} />
       ) : (
-        <Container header={<Header variant="h3">Connect {PROVIDER_NAME[provider]}</Header>}>
+        <Container header={<Header variant="h3" info={infoSlot(docs, "identity.provider")}>Connect {PROVIDER_NAME[provider]}</Header>}>
           <ol className="axb-steps">
             <li>
               <SpaceBetween size="xxs">

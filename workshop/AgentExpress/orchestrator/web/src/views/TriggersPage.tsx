@@ -18,6 +18,8 @@ import Textarea from "@cloudscape-design/components/textarea";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export interface TriggerRow {
   name: string;
@@ -156,6 +158,7 @@ function TriggerCard({ t, onChanged, onOpenRun }: { t: TriggerRow; onChanged: ()
 }
 
 export function TriggersPage({ onOpenRun }: { onOpenRun: (id: string) => void }) {
+  const docs = useDocsBase();
   const [rows, setRows] = useState<TriggerRow[] | null>(null);
   const [error, setError] = useState("");
   const load = useCallback(async () => {
@@ -165,7 +168,8 @@ export function TriggersPage({ onOpenRun }: { onOpenRun: (id: string) => void })
   useEffect(() => { void load(); }, [load]);
   return (
     <SpaceBetween size="l">
-      <Header variant="h1" description="What starts runs here besides a person. Designed in the Builder; secrets and tests here.">
+      <Header variant="h1" description="What starts runs here besides a person. Designed in the Builder; secrets and tests here."
+        info={infoSlot(docs, "triggersPage")}>
         Triggers</Header>
       {error ? <Alert type="error">{error}</Alert> : null}
       {rows === null && !error ? <Spinner size="large" /> : null}

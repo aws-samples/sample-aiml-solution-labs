@@ -135,6 +135,15 @@ CONSOLE_MODE = os.environ.get("CONSOLE_MODE", "app")
 #: A link to a product demo video, shown on a control-plane console only (the About panel
 #: and the first-run view). Set by -c demoVideoUrl / var.demo_video_url; an https URL or empty.
 DEMO_VIDEO_URL = os.environ.get("DEMO_VIDEO_URL", "").strip()
+#: The deployment's documentation base URL: an info icon beside each feature links to its
+#: section there, and the top bar to its home (web/src/docs/docsLinks.ts). On a control plane
+#: and on a build's own app alike. Set by -c docsUrl / var.docs_url (default: the public user
+#: guide at the release tag, orchestrator/docs_default.json); an https URL or empty, and empty
+#: shows no documentation link anywhere.
+DOCS_URL = os.environ.get("DOCS_URL", "").strip()
+#: "false" turns documentation links off for the whole deployment (-c docsLinks=false /
+#: var.docs_links = false): GET /api/me then names no docsUrl, and says docsLinks false.
+DOCS_LINKS = os.environ.get("DOCS_LINKS", "true").strip().lower() != "false"
 #: AgentCore stopped accepting new batch Insights jobs on 16 October 2026 (it is being
 #: redesigned); earlier findings stay readable. Mirrors app/features/optimization/insights.py.
 #: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/insights.html
@@ -1721,7 +1730,9 @@ def _route(event: dict, context) -> dict:
                            "email": str(authz.claims(event).get("email") or ""),
                            "consoleMode": _console_mode(), "audit": audit.enabled(),
                            **({"demoVideoUrl": DEMO_VIDEO_URL}
-                              if _console_mode() == "builder" and DEMO_VIDEO_URL.startswith("https://") else {})})
+                              if _console_mode() == "builder" and DEMO_VIDEO_URL.startswith("https://") else {}),
+                           **({"docsUrl": DOCS_URL} if DOCS_LINKS and DOCS_URL.startswith("https://")
+                              else {"docsLinks": False})})
 
     # Live config (bff/liveconfig.py): agents' prompts and model settings changed on this
     # running deployment. Admins only, each change in the activity log; 404 while it is off.

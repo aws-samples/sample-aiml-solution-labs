@@ -1,0 +1,5 @@
+{
+  "$comment": "The documentation the UI links to when a deployment sets no docsUrl (-c docsUrl / var.docs_url): the public user guide, pinned to this release's tag. The release process bumps `ref` to the new tag; nothing else names it. Read by cdk/lib/docs-default.ts and local.docs_default in terraform/builder.tf, so CDK and Terraform deploy the same default.",
+  "ref": "agentexpress-v1.3.6",
+  "urlTemplate": "https://github.com/aws-samples/sample-aiml-solution-labs/blob/{ref}/workshop/AgentExpress/docs/user-guide/"
+}

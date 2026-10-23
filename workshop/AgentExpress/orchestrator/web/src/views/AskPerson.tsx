@@ -20,6 +20,8 @@ import { useState } from "react";
 
 import type { SessionSnapshot, Workflow } from "../types";
 import type { Decision } from "./HitlGate";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 /** The longest answer the BFF accepts (bff/asks.py ANSWER_MAX). */
 export const ANSWER_MAX = 4000;
@@ -33,6 +35,7 @@ export function AskPerson({
   denyReason: string | null;
   onDecide: (d: Decision, comment: string) => Promise<void>;
 }) {
+  const docs = useDocsBase();
   const hitl = snap.hitl!;
   const agent = workflow.agents[hitl.node]?.name ?? hitl.node;
   const isQuestion = hitl.kind === "question";
@@ -59,6 +62,7 @@ export function AskPerson({
           description={isQuestion
             ? "The agent paused to ask you this. Your answer is given to it as your own words, and it carries on."
             : "The agent wants to call this tool with these arguments. Approve runs the call; Deny tells the agent it was refused, and it carries on."}
+          info={infoSlot(docs, "run.ask")}
         >
           {isQuestion ? `${agent} asks` : `Approve a tool call — ${agent}`}
         </Header>

@@ -20,6 +20,8 @@ import { useState } from "react";
 import { AssetView } from "../assets/AssetView";
 import type { SessionSnapshot, Step, Workflow } from "../types";
 import { AskPerson } from "./AskPerson";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export type Decision = "approve" | "revise" | "deny";
 export interface GroupDecision { decision: Decision; comment: string }
@@ -51,6 +53,7 @@ export function HitlGate(props: GateProps) {
 function ReviewGate({
   snap, workflow, canDecide, denyReason, onDecide, onGroupDecide,
 }: GateProps) {
+  const docs = useDocsBase();
   const node = snap.hitl?.node ?? "";
   const step = gateStep(workflow, node);
   const isGroup = Boolean(step?.parallel);
@@ -90,6 +93,7 @@ function ReviewGate({
               ? "Decide each agent separately. Anything you mark Revise re-runs with your note; the rest are accepted."
               : "Approve to continue, Revise to re-run with your note, or Deny to stop the run."
           }
+          info={infoSlot(docs, "run.gate")}
         >
           {`Review required — ${label}`}
         </Header>

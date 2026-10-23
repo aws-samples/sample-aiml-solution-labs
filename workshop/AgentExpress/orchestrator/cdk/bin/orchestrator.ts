@@ -132,6 +132,14 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   // A link to a product demo video, shown on a control-plane console (consoleMode=builder):
   // -c demoVideoUrl=https://... An https URL or empty (the default: no link).
   demoVideoUrl: ctx("demoVideoUrl", ""),
+  // The documentation an info icon beside each feature links to, and the top bar's
+  // Documentation link: -c docsUrl=https://... An https URL, or empty for none. Unset, the
+  // public user guide at the release tag (lib/docs-default.ts). Mirrors var.docs_url in
+  // terraform/builder.tf.
+  docsUrl: app.node.tryGetContext("docsUrl") as string | undefined,
+  // -c docsLinks=false: no info icons and no Documentation link anywhere. Mirrors
+  // var.docs_links in terraform/builder.tf.
+  docsLinks: String(ctx("docsLinks", "true")) !== "false",
   // A destroy of this stack clears the builds table's deletion protection just before
   // deleting it. -c keepBuildsTableProtected=true makes a destroy stop at the table
   // instead. Mirrors var.keep_builds_table_protected in terraform/builder.tf.

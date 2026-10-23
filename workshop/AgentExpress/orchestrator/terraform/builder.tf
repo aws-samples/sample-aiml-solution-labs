@@ -48,6 +48,30 @@ variable "demo_video_url" {
   }
 }
 
+# The documentation base URL the UI links each feature's info icon to, and the top bar's
+# Documentation link (web/src/docs/docsLinks.ts). On a control plane and on a workflow's own
+# app, and passed on to every build this console deploys. Unset (null, the default): the
+# public user guide at the release tag (local.docs_url, from ../docs_default.json). Empty:
+# no documentation links anywhere. Mirrors -c docsUrl in cdk/bin/orchestrator.ts.
+variable "docs_url" {
+  description = "An https:// documentation base URL the UI links each feature to. Unset: the public user guide at the release tag (docs_default.json). Empty: no documentation links."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition     = var.docs_url == null || var.docs_url == "" || can(regex("^https://[^\\s/?#]+[^\\s]*$", var.docs_url))
+    error_message = "docs_url must be an https:// URL or empty."
+  }
+}
+
+# false: no info icons and no Documentation link anywhere, on this console and on every
+# build it deploys. Mirrors -c docsLinks in cdk/bin/orchestrator.ts.
+variable "docs_links" {
+  description = "Show the in-product documentation links (info icons and the Documentation link). false: none anywhere."
+  type        = bool
+  default     = true
+}
+
 # Buckets, or bucket/prefix, the AgentExpress Assistant may read when a message names an
 # s3:// path (bff/designer.py). Mirrors -c designerS3Buckets in cdk/bin/orchestrator.ts.
 # Buckets an S3 code source (codeSource.s3) may name when a build deploys into this
@@ -175,6 +199,15 @@ locals {
   var.designer_effort == "" ? {} : { DESIGNER_EFFORT = var.designer_effort }) : {}
   console_mode_env = local.builder_enabled && var.console_mode == "builder" ? merge({ CONSOLE_MODE = "builder" },
   var.demo_video_url == "" ? {} : { DEMO_VIDEO_URL = var.demo_video_url }) : {}
+  # The default documentation: the public user guide at the release tag. The same file
+  # cdk/lib/docs-default.ts reads; the release process bumps its `ref`.
+  docs_default = jsondecode(file("${path.module}/../docs_default.json"))
+  docs_url     = var.docs_url == null ? replace(local.docs_default.urlTemplate, "{ref}", local.docs_default.ref) : var.docs_url
+  # The documentation links (GET /api/me docsUrl, or docsLinks false), on any console; and on
+  # the deploy project, for every build's app (deployer/runner.py docs_settings). Off
+  # (DOCS_LINKS=false) with docs_links = false or an empty docs_url. Mirrors docsEnv in
+  # cdk/lib/orchestrator-stack.ts and cdk/lib/builder-plane.ts.
+  docs_env = var.docs_links && local.docs_url != "" ? { DOCS_URL = local.docs_url } : { DOCS_LINKS = "false" }
 }
 
 variable "keep_builds_table_protected" {
@@ -584,6 +617,14 @@ resource "aws_codebuild_project" "deploy" {
     # This console's LiteLLM proxy and key, for every build's litellm/ agents (litellm.tf).
     dynamic "environment_variable" {
       for_each = local.litellm_build_env
+      content {
+        name  = environment_variable.key
+        value = environment_variable.value
+      }
+    }
+    # This console's documentation links, for every build's app (local.docs_env).
+    dynamic "environment_variable" {
+      for_each = local.docs_env
       content {
         name  = environment_variable.key
         value = environment_variable.value

@@ -31,6 +31,8 @@ import { useEffect, useRef, useState } from "react";
 import { getToken } from "../api";
 import type { Workflow } from "../types";
 import { ExportCard } from "./RunExport";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoStrip, infoSlot } from "../docs/InfoLink";
 
 declare global {
   interface Window {
@@ -70,6 +72,7 @@ function loadIsland(): Promise<void> {
 export function Observability({ workflow, session, build = "" }: {
   workflow: Workflow; session?: string | null; build?: string;
 }) {
+  const docs = useDocsBase();
   const host = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -94,7 +97,7 @@ export function Observability({ workflow, session, build = "" }: {
 
   if (error) {
     return (
-      <Container header={<Header variant="h1">Observability</Header>}>
+      <Container header={<Header variant="h1" info={infoSlot(docs, "observability")}>Observability</Header>}>
         <Box color="text-status-error">{error}</Box>
       </Container>
     );
@@ -105,6 +108,9 @@ export function Observability({ workflow, session, build = "" }: {
       {/* Admins: where this app's runs are sent (RunExport.tsx). Not for a build's runs seen
           from a console: those are sent by the build's own app. */}
       {build ? null : <ExportCard />}
+      {/* The island's tabs are not React: their info icons sit above it, in one line. */}
+      <InfoStrip features={["observability", "observability.overview", "observability.runDetail",
+        "observability.insights", "evaluations", "cost"]} />
       {ready ? null : <Box padding="l"><Spinner /> Loading observability…</Box>}
       <div ref={host} />
     </>

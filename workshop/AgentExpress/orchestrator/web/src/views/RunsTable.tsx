@@ -25,6 +25,8 @@ import { requestTitle } from "../lib/request";
 import { statusIndicator } from "../lib/status";
 import type { SessionSummary } from "../types";
 import { workflowVersionLabel } from "../lib/workflowVersion";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 const PAGE_SIZE = 12;
 
@@ -38,6 +40,7 @@ export function RunsTable({
   onDelete: (id: string) => void;
   onStartNew: () => void;
 }) {
+  const docs = useDocsBase();
   const empty = (
     <Box textAlign="center" color="inherit" padding={{ vertical: "l" }}>
       <SpaceBetween size="s">
@@ -88,6 +91,7 @@ export function RunsTable({
       header={
         <Header
           counter={`(${filteredItemsCount ?? runs.length})`}
+          info={infoSlot(docs, "runs")}
           description="Each run is one execution of the workflow defined in workflow.json."
           actions={
             <SpaceBetween direction="horizontal" size="xs">

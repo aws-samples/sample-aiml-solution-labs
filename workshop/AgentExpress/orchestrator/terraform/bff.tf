@@ -207,7 +207,7 @@ resource "aws_lambda_function" "bff" {
       # about eleven agents' worth of it.
       # Where image agents' images are (images.tf), for GET /api/images.
       ASSETS_BUCKET = local.assets_bucket
-    }, local.bff_run_env, local.workflow_plane ? local.bff_version_env : {}, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env, local.memory_bff_env, local.a2a_bff_env, local.litellm_env) # builder.tf, audit.tf, triggers.tf, memories.tf, a2a_server.tf, litellm.tf
+    }, local.bff_run_env, local.workflow_plane ? local.bff_version_env : {}, local.builder_bff_env, local.audit_bff_env, local.trigger_bff_env, local.gate_bff_env, local.memory_bff_env, local.a2a_bff_env, local.docs_env, local.litellm_env) # builder.tf, audit.tf, triggers.tf, memories.tf, a2a_server.tf, litellm.tf
   }
   # The log group must exist BEFORE the function, or Lambda creates
   # /aws/lambda/<name> itself and Terraform's CreateLogGroup then fails with

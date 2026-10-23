@@ -34,6 +34,8 @@ import { Groups } from "./Groups";
 import { validate } from "./validate";
 // Admin is its own lazy chunk: without this the canvas has no height when Build was never opened.
 import "./builder.css";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 export interface AdminBuild extends BuildSummary {
   owner: string;
@@ -73,7 +75,7 @@ function BuildViewer({ build, onClose, onOpenRun, runs: withRuns }: {
   const issues = useMemo(() => (project ? validate(project.workflow) : []), [project]);
   return (
     <Modal visible={Boolean(build)} onDismiss={onClose} size="max"
-      header={build ? `${build.name} — ${build.ownerEmail || build.owner}` : ""}
+      header={build ? <>{`${build.name} — ${build.ownerEmail || build.owner}`}<InfoLink feature="admin" /></> : ""}
       footer={<Box float="right"><Button onClick={onClose}>Close</Button></Box>}>
       {error ? <StatusIndicator type="error">{error}</StatusIndicator> : !project ? (
         <StatusIndicator type="loading">Loading the build</StatusIndicator>
@@ -138,6 +140,7 @@ export function Admin({ canDestroy, notify, onOpenRun, runs: withRuns = true }: 
   /** False on a control-plane console: it has no runs, and each build's are in its app. */
   runs?: boolean;
 }) {
+  const docs = useDocsBase();
   const [tab, setTab] = useState("builds");
   const [builds, setBuilds] = useState<AdminBuild[] | null>(null);
   const [runs, setRuns] = useState<SessionSummary[] | null>(null);
@@ -183,7 +186,7 @@ export function Admin({ canDestroy, notify, onOpenRun, runs: withRuns = true }: 
 
   return (
     <SpaceBetween size="l">
-      <Header variant="h1"
+      <Header variant="h1" info={infoSlot(docs, "admin")}
         description={`Every user's builds${withRuns ? " and runs" : ""}, read-only. Destroy removes a build's resources from AWS, to clean up; its owner sees that you did. Everything you open here is in your activity log.`}
         actions={<Button iconName="refresh" ariaLabel="Refresh" onClick={() => void load()} />}>
         Admin
@@ -218,7 +221,8 @@ export function Admin({ canDestroy, notify, onOpenRun, runs: withRuns = true }: 
           id: "runs", label: `Runs${runs ? ` (${runs.length})` : ""}`,
           content: (
             <Table items={shownRuns} loading={runs === null} loadingText="Loading runs" trackBy="session_id"
-              header={<Header variant="h3" description="Runs of this console's own workflow. A build's runs are under the build.">Runs</Header>}
+              header={<Header variant="h3" description="Runs of this console's own workflow. A build's runs are under the build."
+                info={infoSlot(docs, "admin.runs")}>Runs</Header>}
               columnDefinitions={[
                 { id: "topic", header: "Request", isRowHeader: true, cell: (r) => (
                   <Link href="#" onFollow={(e) => { e.preventDefault(); onOpenRun(r.session_id); }}>
@@ -232,7 +236,7 @@ export function Admin({ canDestroy, notify, onOpenRun, runs: withRuns = true }: 
         }]),
       ]} />
       <BuildViewer build={viewing} onClose={() => setViewing(null)} onOpenRun={onOpenRun} runs={withRuns} />
-      <Modal visible={Boolean(destroying)} onDismiss={() => setDestroying(null)} header="Destroy another user's build?"
+      <Modal visible={Boolean(destroying)} onDismiss={() => setDestroying(null)} header={<>Destroy another user&apos;s build?<InfoLink feature="admin" /></>}
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">

@@ -24,6 +24,8 @@ import { ItemForm, LibraryContext } from "./Library";
 import { vocabExtra } from "./meta";
 import type { Entry, Json, Project } from "./model";
 import type { LibraryKind } from "./storage";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 const TYPE = Object.fromEntries(COMPONENT_TYPES.map((t) => [t.id, t])) as Record<ComponentKind, (typeof COMPONENT_TYPES)[number]>;
 
@@ -59,9 +61,10 @@ export function AttachedList({ project, id, onSelect, onRemoveComponent, onAddCh
     (g.options as SelectProps.Option[]).push({ value: String(i), label: c.label, ...(c.description ? { description: c.description } : {}) });
   });
   if (onCreate) groups.push({ label: "Create new", options: CREATE_KINDS.map((k) => ({ value: `new:${k.kind}`, label: k.label })) });
+  const docs = useDocsBase();
   return (
     <SpaceBetween size="s">
-      <Header variant="h3" counter={`(${rows.length})`}
+      <Header variant="h3" counter={`(${rows.length})`} info={infoSlot(docs, "agent.attached")}
         description="Everything this agent uses. Click one to see and change its settings.">
         Attached to this agent
       </Header>
@@ -264,6 +267,7 @@ export function ComponentPanel({ project, agent, componentKey: key, onChange, on
   /** The tool's own panel, for a Tool row. */
   toolPanel: (tool: string) => ReactNode;
 } & RowActions) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const c = componentsOf(wf, agent).find((x) => componentKey(x) === key);
   const agentName = String(wf.agents[agent]?.name ?? agent);
@@ -275,6 +279,7 @@ export function ComponentPanel({ project, agent, componentKey: key, onChange, on
         {`Back to ${agentName}`}
       </Button>
       <Header variant="h2" description={`${TYPE[c.kind].hint}. Attached to ${agentName}${c.detail ? ` · ${c.detail}` : ""}.`}
+        info={infoSlot(docs, "component")}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {actions.onRemoveComponent ? (

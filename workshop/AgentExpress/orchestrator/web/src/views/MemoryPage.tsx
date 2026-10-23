@@ -17,6 +17,8 @@ import Table from "@cloudscape-design/components/table";
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../api";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 export interface MemoryAgent { id: string; name: string; memory: string; kinds: string[] }
 export interface MemoryNamespace { namespace: string; actor: string; kind: string; records: number }
@@ -34,6 +36,7 @@ export function excerpt(text: string, max = 160): string {
 }
 
 export function MemoryPage({ notify }: { notify: (type: "success" | "error" | "info", text: string) => void }) {
+  const docs = useDocsBase();
   const [agents, setAgents] = useState<MemoryAgent[] | null>(null);
   const [deployed, setDeployed] = useState(true);
   const [agent, setAgent] = useState("");
@@ -105,7 +108,7 @@ export function MemoryPage({ notify }: { notify: (type: "success" | "error" | "i
   return (
     <SpaceBetween size="l">
       <Header variant="h1" description={"What agents remembered across runs (long-term memory). Shown to admins only; "
-        + "every look and every delete is in the activity log."}>Memory records</Header>
+        + "every look and every delete is in the activity log."} info={infoSlot(docs, "memoryRecords")}>Memory records</Header>
       {error ? <Alert type="error">{error}</Alert> : null}
       {agents === null ? <Spinner size="large" /> : null}
       {agents !== null && !deployed ? <Box color="text-body-secondary">This deployment has no long-term memory.</Box> : null}
@@ -136,7 +139,7 @@ export function MemoryPage({ notify }: { notify: (type: "success" | "error" | "i
           loadingText="Loading records"
           items={rows ?? []}
           header={
-            <Header variant="h2" counter={rows ? `(${rows.length}${next ? "+" : ""})` : undefined}
+            <Header variant="h2" counter={rows ? `(${rows.length}${next ? "+" : ""})` : undefined} info={infoSlot(docs, "memoryRecords.namespace")}
               description={searched ? "Search results, most relevant first." : undefined}
               actions={
                 <SpaceBetween direction="horizontal" size="xs">
@@ -163,7 +166,7 @@ export function MemoryPage({ notify }: { notify: (type: "success" | "error" | "i
         />
       ) : null}
       {tooLong ? <Box color="text-status-error">A search is at most {QUERY_MAX} characters.</Box> : null}
-      <Modal visible={doomed !== null} onDismiss={() => setDoomed(null)} header="Delete memory record"
+      <Modal visible={doomed !== null} onDismiss={() => setDoomed(null)} header={<>Delete memory record<InfoLink feature="memoryRecords.delete" /></>}
         footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
           <Button variant="link" onClick={() => setDoomed(null)}>Cancel</Button>
           <Button variant="primary" loading={busy === "delete"} onClick={() => doomed && void remove(doomed)}>Delete</Button>

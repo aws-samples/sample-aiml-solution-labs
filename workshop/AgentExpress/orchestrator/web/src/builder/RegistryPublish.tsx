@@ -14,6 +14,7 @@ import Table from "@cloudscape-design/components/table";
 import { useEffect, useState } from "react";
 
 import { registryApi, type Registry, type RegistryPublished } from "./storage";
+import { InfoLink } from "../docs/InfoLink";
 
 type Rec = { recordId: string; name: string; version?: string; status?: string; statusReason?: string };
 const SHOWN: Record<string, [StatusIndicatorProps.Type, string]> = {
@@ -84,7 +85,7 @@ export function RegistryPublish({ visible, buildId, what, skills, preselect, ver
   const ready = Boolean(picked) && (what === "build" || chosen.length > 0);
   return (
     <Modal visible={visible} onDismiss={onDismiss} size="large"
-      header={what === "build" ? "Publish this build to the registry" : "Publish skills to the registry"}
+      header={<>{what === "build" ? "Publish this build to the registry" : "Publish skills to the registry"}<InfoLink feature="registry.publish" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Close</Button>
         <Button variant="primary" loading={busy} disabled={!ready} onClick={() => void go()}>Submit for approval</Button>

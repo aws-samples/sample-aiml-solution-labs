@@ -203,6 +203,8 @@ Set in `cdk.json` or via `-c key=value`:
 | `builder` | `true` | Deploy the Builder control plane; the deploy runner sets `false` for every build stack |
 | `consoleMode` | `app` | `app` (this workflow's own app) or `builder` (control plane only: no image, runtime, memory, guardrail, Gateway, KB, run tables or Transaction Search; needs `builder`) |
 | `demoVideoUrl` | `""` | An `https://` link to a demo video, shown in the About panel and first-run view of a `consoleMode=builder` console; empty shows none. Any other value fails the synth |
+| `docsUrl` | the public user guide on GitHub at the release tag (`../docs_default.json`) | The `https://` documentation a **Documentation** link in the top bar and an info icon beside each feature link to (`web/src/docs/docsLinks.ts`): the GitHub guide (`<page>.md#<slug>`) or an XWiki copy (a `/bin/view/` path: `<page>#H<heading>`). On any console mode and passed on to every build this console deploys; empty shows none. Any other value fails the synth |
+| `docsLinks` | `true` | `false`: no info icon and no Documentation link anywhere, on this console and every build it deploys |
 | `tags` | `""` | JSON object of extra tags for every resource, beside `agentexpress:app` |
 | `allowUnauthenticated` | `false` | Required (`true`) with `idp=none`: the acknowledgement that the console has no sign-in |
 | `extraCallbackUrls` | `""` | Further Hosted UI callback/logout URLs (comma-separated), e.g. for local development |

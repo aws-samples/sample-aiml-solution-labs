@@ -21,6 +21,8 @@ import {
   compact, diff, FIELD_LABEL, fromText, LIVE_FIELDS, shown, toText,
   type LiveField, type LiveState, type Overlay, type Version, type VersionSummary,
 } from "../lib/liveConfig";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 const MULTILINE: LiveField[] = ["systemPrompt", "stopSequences"];
 const HINT: Partial<Record<LiveField, string>> = {
@@ -30,6 +32,7 @@ const HINT: Partial<Record<LiveField, string>> = {
 };
 
 export function LiveConfigPage() {
+  const docs = useDocsBase();
   const [state, setState] = useState<LiveState | null>(null);
   const [versions, setVersions] = useState<VersionSummary[]>([]);
   const [active, setActive] = useState<Overlay>({});
@@ -92,21 +95,21 @@ export function LiveConfigPage() {
     <SpaceBetween size="l">
       <Header variant="h1" description={"Change an agent's prompt and model settings without a redeploy. A run keeps the "
         + "version that was active when it started, through every gate and re-run; tools, gates, guardrails and "
-        + "everything else the deploy provisions are not changed here."}>Live config</Header>
+        + "everything else the deploy provisions are not changed here."} info={infoSlot(docs, "liveConfig")}>Live config</Header>
       {error ? (
         <Alert type="error" header="That did not work">
           {error}
           {issues.length ? <ul>{issues.map((i) => <li key={i.path + i.message}><code>{i.path}</code>: {i.message}</li>)}</ul> : null}
         </Alert>
       ) : null}
-      <Container header={<Header variant="h2"
+      <Container header={<Header variant="h2" info={infoSlot(docs, "liveConfig.active")}
         actions={current ? <Button onClick={() => setConfirm(0)}>Use the deployed config</Button> : undefined}>Active</Header>}>
         {current
           ? <StatusIndicator type="success">Version {current} is active{state.pointer.at ? ` since ${state.pointer.at}` : ""}{state.pointer.by ? `, by ${state.pointer.by}` : ""}. New runs start on it.</StatusIndicator>
           : <StatusIndicator type="info">New runs use the config as deployed (version 0).</StatusIndicator>}
       </Container>
       <Table
-        header={<Header variant="h2" counter={`(${versions.length})`}>Versions</Header>}
+        header={<Header variant="h2" counter={`(${versions.length})`} info={infoSlot(docs, "liveConfig.versions")}>Versions</Header>}
         items={rows}
         trackBy="version"
         columnDefinitions={[
@@ -124,8 +127,8 @@ export function LiveConfigPage() {
           ) },
         ]}
       />
-      <Container header={<Header variant="h2" description={`Starts from the active version (v${current}). Saving makes a new version; it is not active until you activate it.`}>
-        New version</Header>}>
+      <Container header={<Header variant="h2" description={`Starts from the active version (v${current}). Saving makes a new version; it is not active until you activate it.`}
+        info={infoSlot(docs, "liveConfig.new")}>New version</Header>}>
         <SpaceBetween size="m">
           <FormField label="Agent">
             <Select selectedOption={options.find((o) => o.value === agent) ?? null} options={options}
@@ -173,7 +176,8 @@ export function LiveConfigPage() {
         </SpaceBetween>
       </Container>
       <Modal visible={confirm !== null} onDismiss={() => setConfirm(null)}
-        header={confirm ? `Activate version ${confirm}?` : "Use the deployed config?"}
+        header={confirm ? <>{`Activate version ${confirm}?`}<InfoLink feature="liveConfig.new" /></>
+          : <>Use the deployed config?<InfoLink feature="liveConfig.versions" /></>}
         footer={
           <Box float="right">
             <SpaceBetween direction="horizontal" size="xs">
@@ -186,7 +190,7 @@ export function LiveConfigPage() {
         the version they started with. You can go back to version {current} the same way.
       </Modal>
       <Modal visible={viewing !== null} onDismiss={() => setViewing(null)} size="large"
-        header={viewing ? `Version ${viewing.version}${viewing.note ? `: ${viewing.note}` : ""}` : ""}>
+        header={viewing ? <>{`Version ${viewing.version}${viewing.note ? `: ${viewing.note}` : ""}`}<InfoLink feature="liveConfig.versions" /></> : ""}>
         {viewing ? (
           <Table variant="embedded" items={diff({}, viewing.overlay)} trackBy={(r) => `${r.agent}.${r.field}`}
             columnDefinitions={[

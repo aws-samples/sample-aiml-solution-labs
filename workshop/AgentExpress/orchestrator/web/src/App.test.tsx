@@ -189,3 +189,85 @@ describe("the demo video link", () => {
     } finally { window.location.hash = ""; }
   });
 });
+describe("the documentation links", () => {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", memoryStorage());
+    vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
+    vi.stubGlobal("DOMMatrixReadOnly", class { m22 = 1; });
+  });
+  const DOCS_URL = "https://docs.example.com/product/";
+  const docLinks = () => screen.queryAllByRole("link", { name: /Documentation/ });
+  it("are a top-bar Documentation link to the home page, in a new tab, and info icons, when one is set", async () => {
+    me.value = { ...BASE, builder: true, consoleMode: "builder", docsUrl: DOCS_URL };
+    render(<App />);
+    await waitFor(() => expect(docLinks().length).toBeGreaterThan(0));
+    const top = docLinks().find((a) => a.getAttribute("href") === DOCS_URL)!;
+    expect(top).toBeTruthy();
+    expect(top.getAttribute("target")).toBe("_blank");
+    expect(top.getAttribute("rel")).toMatch(/noopener/);
+    // The Build page's own info icon (the Build view loads lazily: slow on a cold first test).
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "About Build page" }).length).toBeGreaterThan(0),
+      { timeout: 5000 });
+  });
+  it("are on a build's own app too", async () => {
+    me.value = { ...BASE, builder: false, consoleMode: "app", docsUrl: DOCS_URL };
+    render(<App />);
+    await waitFor(() => expect(docLinks().some((a) => a.getAttribute("href") === DOCS_URL)).toBe(true));
+  });
+  /** Nothing documentation-related on the page: no link, no info icon, no help toggle. */
+  const expectNoDocs = () => {
+    expect(docLinks()).toHaveLength(0);
+    expect(screen.queryAllByRole("button", { name: /^About (?!this application)/ })).toHaveLength(0);
+    expect(document.querySelectorAll("[data-docs-feature]")).toHaveLength(0);
+  };
+  it("are absent when none is set, it is not https, or the deployment turned them off (docsLinks=false)", async () => {
+    for (const docs of [{}, { docsUrl: "http://docs.example.com/product/" }, { docsUrl: DOCS_URL, docsLinks: false }]) {
+      me.value = { ...BASE, builder: true, consoleMode: "builder", ...docs };
+      const { unmount } = render(<App />);
+      await waitFor(() => expect(screen.getByText("What would you like to build?")).toBeTruthy());
+      expectNoDocs();
+      // Nothing to turn off, so no Show help icons either.
+      expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+      unmount();
+    }
+  });
+  it("go to the user guide's Markdown on GitHub by default, and to the wiki's sections on a wiki", async () => {
+    const GITHUB = "https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.6/workshop/AgentExpress/docs/user-guide/";
+    const WIKI = "https://wiki.example.com/bin/view/AgentExpress/";
+    for (const [docsUrl, href] of [[GITHUB, `${GITHUB}Builder_Console.md#read-the-build-page`],
+      [WIKI, `${WIKI}Builder_Console#HReadthebuildpage`]]) {
+      me.value = { ...BASE, builder: true, consoleMode: "builder", docsUrl };
+      const { unmount } = render(<App />);
+      const [icon] = await screen.findAllByRole("button", { name: "About Build page" });
+      fireEvent.click(icon);
+      const link = await screen.findByRole("link", { name: "Documentation: Build page (opens in a new tab)" });
+      expect(link.getAttribute("href")).toBe(href);
+      expect(docLinks().some((a) => a.getAttribute("href") === docsUrl)).toBe(true);
+      unmount();
+    }
+  });
+  it("go when a person turns Show help icons off, and stay off after a reload", async () => {
+    me.value = { ...BASE, builder: true, consoleMode: "builder", docsUrl: DOCS_URL };
+    const first = render(<App />);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "About Build page" }).length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const toggle = await screen.findByRole("menuitemcheckbox", { name: "Show help icons" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+    await waitFor(() => expectNoDocs());
+    expect(localStorage.getItem("agentexpress.docs.helpIcons")).toBe("off");
+    first.unmount();
+    // A reload: still off, and the toggle says so.
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("What would you like to build?")).toBeTruthy());
+    expectNoDocs();
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    const again = await screen.findByRole("menuitemcheckbox", { name: "Show help icons" });
+    expect(again.getAttribute("aria-checked")).toBe("false");
+    // On again.
+    fireEvent.click(again);
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "About Build page" }).length).toBeGreaterThan(0));
+    expect(docLinks().some((a) => a.getAttribute("href") === DOCS_URL)).toBe(true);
+    expect(localStorage.getItem("agentexpress.docs.helpIcons")).toBe("on");
+  });
+});

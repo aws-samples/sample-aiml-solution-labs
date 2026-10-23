@@ -36,6 +36,8 @@ import {
 import type { Issue } from "./validate";
 import { SkillForm } from "./SkillForm";
 import "./builder.css";
+import { useDocsBase, type DocsFeature } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 type Notify = (type: "success" | "error" | "info", msg: string) => void;
 
@@ -49,6 +51,11 @@ export const KINDS: { kind: LibraryKind; map: NamedMapName; label: string; one: 
   { kind: "skill", map: "skills", label: "Skills", one: "skill", block: "skill", about: "Know-how an agent opens when a task needs it: a SKILL.md with optional reference files." },
 ];
 export const kindInfo = (k: LibraryKind) => KINDS.find((x) => x.kind === k)!;
+/** Each kind's editor documentation (docs/docsLinks.ts): how to define one. */
+const ITEM_DOCS: Record<LibraryKind, DocsFeature> = {
+  tool: "tool", identity: "identity.savedLogins", memory: "memory.define", evaluator: "evaluator.define",
+  policy: "policies.write", guardrail: "guardrail.define", skill: "skill.define", interceptor: "interceptors.share",
+};
 
 const STARTERS: Record<LibraryKind, Entry> = {
   tool: { type: "mcp", description: "", endpoint: "https://" },
@@ -99,7 +106,7 @@ export function ShareDialog({ visible, title, shares, onDismiss, onSave, note }:
     }
   };
   return (
-    <Modal visible={visible} onDismiss={onDismiss} header={`Share ${title}`}
+    <Modal visible={visible} onDismiss={onDismiss} header={<>{`Share ${title}`}<InfoLink feature="sharing" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" loading={busy} disabled={bad.length > 0} onClick={() => void save()}>Save</Button>
@@ -188,7 +195,7 @@ function ItemModal({ kind, visible, initial, taken, onDismiss, onSave, note }: {
   };
   return (
     <Modal visible={visible} onDismiss={onDismiss} size="large"
-      header={`${initial ? "Edit" : "New"} ${kindInfo(kind).one}`}
+      header={<>{`${initial ? "Edit" : "New"} ${kindInfo(kind).one}`}<InfoLink feature={ITEM_DOCS[kind]} /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" loading={busy} disabled={!name || Boolean(nameError)} onClick={() => void save()}>Save</Button>
@@ -221,7 +228,7 @@ function InterceptorView({ item, onDismiss }: { item: LibraryItem | null; onDism
   const d = (item?.definition ?? {}) as Record<string, unknown>;
   const templates = Object.keys((d.templates ?? {}) as object);
   return (
-    <Modal visible={item !== null} onDismiss={onDismiss} size="large" header={item?.name ?? ""}
+    <Modal visible={item !== null} onDismiss={onDismiss} size="large" header={<>{item?.name ?? ""}<InfoLink feature="interceptors.share" /></>}
       footer={<Box float="right"><Button onClick={onDismiss}>Close</Button></Box>}>
       {item ? (
         <SpaceBetween size="s">
@@ -241,6 +248,7 @@ function InterceptorView({ item, onDismiss }: { item: LibraryItem | null; onDism
 }
 
 export function LibraryPage({ kind, notify }: { kind: LibraryKind; notify: Notify }) {
+  const docs = useDocsBase();
   const copied = kind === "interceptor";
   const info = copied ? INTERCEPTOR_INFO : kindInfo(kind);
   const [viewing, setViewing] = useState<LibraryItem | null>(null);
@@ -266,6 +274,7 @@ export function LibraryPage({ kind, notify }: { kind: LibraryKind; notify: Notif
     <SpaceBetween size="l">
       <Table
         header={<Header variant="h1" counter={items ? `(${items.length})` : undefined}
+          info={infoSlot(docs, "library")}
           description={copied ? `${info.about} Yours and those shared with you.`
             : `${info.about} Yours and those shared with you, for any build: a build uses one live, so a change here shows in every build that uses it.`}
           actions={<SpaceBetween direction="horizontal" size="xs">
@@ -456,6 +465,7 @@ export function NamedTab({ kind, project, view, setProject, refs, addRefs, issue
   /** Take a live entry's item out of the library; this build (and any other) keeps a copy. */
   onUnpublish?: (id: string, name: string) => Promise<void>;
 }) {
+  const docs = useDocsBase();
   const info = kindInfo(kind);
   const raw = (project.workflow[info.map] ?? {}) as Record<string, Entry>;
   const shown = (view.workflow[info.map] ?? {}) as Record<string, Entry>;
@@ -502,7 +512,7 @@ export function NamedTab({ kind, project, view, setProject, refs, addRefs, issue
               Share{selected.length ? ` (${selected.length})` : ""}</Button> : null}
             {server ? <Button onClick={() => setPicking(true)}>Add from library</Button> : null}
             <Button variant="primary" iconName="add-plus" onClick={() => setEditing("new")}>Add {info.one}</Button>
-          </SpaceBetween>}>{`This build's ${info.label.toLowerCase()}`}</Header>}
+          </SpaceBetween>} info={infoSlot(docs, "named.table")}>{`This build's ${info.label.toLowerCase()}`}</Header>}
         items={Object.keys(raw).map((key) => ({ key }))} trackBy="key"
         {...(server ? {
           selectionType: "multi" as const, selectedItems: selected,
@@ -554,7 +564,8 @@ export function NamedTab({ kind, project, view, setProject, refs, addRefs, issue
         // An identity holds no secret in its definition (it travels in the library and in
         // exports), so each build enters its own here: the API key, or the OAuth client's
         // secret. Without this field it could only be set through the API.
-        <Container header={<Header variant="h3" description="Stored encrypted with this build, vaulted in AgentCore Identity at deploy, and never shown again.">Secrets</Header>}>
+        <Container header={<Header variant="h3" description="Stored encrypted with this build, vaulted in AgentCore Identity at deploy, and never shown again."
+          info={infoSlot(docs, "identity.secrets")}>Secrets</Header>}>
           <SpaceBetween size="m">
             {Object.entries(shown).map(([name, def]) => {
               const oauth = String((def as Entry)?.type ?? "") === "oauth2";
@@ -618,7 +629,7 @@ export function LibraryPicker({ kind, visible, using, onDismiss, onPick, notify 
   }, [visible, kind, notify]);
   const shown = useMemo(() => (items ?? []).filter((i) => !using.includes(i.id)), [items, using]);
   return (
-    <Modal visible={visible} onDismiss={onDismiss} size="large" header={`Add ${kindInfo(kind).label.toLowerCase()} from the library`}
+    <Modal visible={visible} onDismiss={onDismiss} size="large" header={<>{`Add ${kindInfo(kind).label.toLowerCase()} from the library`}<InfoLink feature="library.add" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" disabled={!selected.length} onClick={() => onPick(selected)}>Add {selected.length || ""}</Button>

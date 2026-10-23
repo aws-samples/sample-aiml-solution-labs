@@ -54,6 +54,7 @@ import { StartRunModal, type RunTarget } from "./views/StartRunModal";
 import { StepPanel } from "./views/StepPanel";
 import { FEATURE_EMOJI } from "./lib/emoji";
 import { demoVideoUrl } from "./lib/demoVideo";
+import { DocsContext, docsBase, readHelpIcons, writeHelpIcons } from "./docs/docsLinks";
 
 
 /** The product name, and the mark it is shown with, on every build's own app. */
@@ -106,6 +107,17 @@ export default function App() {
   const home = controlPlane ? "#build" : "#runs";
   /** The console's demo video link; undefined on a build's own app. */
   const demoUrl = demoVideoUrl(me);
+  /** The deployment's documentation base URL, or "" when it shows no documentation links. */
+  const deployedDocs = docsBase(me) ?? "";
+  /** The person's own "Show help icons" (on unless they turned it off in this browser). */
+  const [helpIcons, setHelpIcons] = useState(readHelpIcons);
+  /** What the page links to: "" shows no info icon and no Documentation link anywhere. */
+  const docs = helpIcons ? deployedDocs : "";
+  const toggleHelpIcons = () => { writeHelpIcons(!helpIcons); setHelpIcons(!helpIcons); };
+  /** The "Show help icons" menu item, where the deployment has documentation links. */
+  const helpItems = deployedDocs
+    ? [{ id: "helpIcons", itemType: "checkbox" as const, text: "Show help icons", checked: helpIcons }]
+    : [];
   const [runs, setRuns] = useState<SessionSummary[]>([]);
   const [runsLoading, setRunsLoading] = useState(true);
   const [openRun, setOpenRun] = useState<string | null>(null);
@@ -754,7 +766,7 @@ export default function App() {
       );
 
   return (
-    <>
+    <DocsContext.Provider value={docs}>
       <div id="top-nav">
         <TopNavigation
           identity={{ href: "#", title: heading, onFollow: (e) => {
@@ -769,6 +781,11 @@ export default function App() {
               disableUtilityCollapse: true,
               onClick: () => setToolsOpen(true),
             },
+            // The deployment's documentation (docs/docsLinks.ts), only when it sets one.
+            ...(docs ? [{
+              type: "button" as const, text: "Documentation", href: docs, external: true,
+              externalIconAriaLabel: " (opens in a new tab)",
+            }] : []),
             { type: "button", text: `${REGION}`, iconName: "map", disableUtilityCollapse: true },
             ...(authEnabled()
               ? [{
@@ -777,13 +794,24 @@ export default function App() {
                 iconName: "user-profile" as const,
                 items: [
                   { id: "groups", text: `Groups: ${me.groups.join(", ") || "none"}`, disabled: true },
+                  ...helpItems,
                   { id: "signout", text: "Sign out" },
                 ],
                 onItemClick: ({ detail }: { detail: { id: string } }) => {
                   if (detail.id === "signout") void signOut();
+                  if (detail.id === "helpIcons") toggleHelpIcons();
                 },
               }]
-              : []),
+              // No sign-in, so no account menu: the person's settings get a menu of their own.
+              : helpItems.length ? [{
+                type: "menu-dropdown" as const,
+                text: "Settings",
+                iconName: "settings" as const,
+                items: helpItems,
+                onItemClick: ({ detail }: { detail: { id: string } }) => {
+                  if (detail.id === "helpIcons") toggleHelpIcons();
+                },
+              }] : []),
           ]}
         />
       </div>
@@ -921,6 +949,6 @@ export default function App() {
           </ContentLayout>
         }
       />
-    </>
+    </DocsContext.Provider>
   );
 }

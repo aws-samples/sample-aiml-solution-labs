@@ -31,6 +31,8 @@ import {
   type TrendEntry,
 } from "./suiteSpec";
 import { suitesApi } from "./suitesApi";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 /** How often an open suite run is read again. */
 export const POLL_MS = 4000;
@@ -258,6 +260,7 @@ export function BuildSuites({ project, setProject, server, buildId, deployed, ru
   flush: () => Promise<void>;
   notify: (type: "success" | "error" | "info", msg: string) => void;
 }) {
+  const docs = useDocsBase();
   const suites = project.suites ?? [];
   const agents = Object.keys(project.workflow.agents);
   const setSuites = (next: Suite[]) => setProject({ ...project, suites: next });
@@ -324,7 +327,7 @@ export function BuildSuites({ project, setProject, server, buildId, deployed, ru
   return (
     <SpaceBetween size="l">
       {why ? <Alert type="info" data-testid="tests-cannot-run">{why}</Alert> : null}
-      <Container header={<Header variant="h2" counter={`(${suites.length})`}
+      <Container header={<Header variant="h2" counter={`(${suites.length})`} info={infoSlot(docs, "tests.suites")}
         description="A suite is a list of requests with checks on what each run should produce. Run it after a change to a prompt or a model, and compare it with the last time. Every check is a fixed comparison: nothing here asks a model to judge (that is the Evals tab)."
         actions={<Button iconName="add-plus" disabled={suites.length >= MAX_SUITES}
           onClick={() => setSuites([...suites, newSuite(names)])}>New suite</Button>}>Test suites</Header>}>

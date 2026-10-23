@@ -83,6 +83,24 @@ def test_me_names_the_demo_video_on_a_control_plane_only(console, monkeypatch):
     assert "demoVideoUrl" not in call(console, "GET /api/me")[1]
 
 
+def test_me_names_the_docs_url_when_one_is_set(console, monkeypatch):
+    assert "docsUrl" not in call(console, "GET /api/me")[1]
+    monkeypatch.setattr(console.handler, "DOCS_URL", "https://docs.example.com/product/")
+    assert call(console, "GET /api/me")[1]["docsUrl"] == "https://docs.example.com/product/"
+    # On a build's own app too: its pages have documentation as well.
+    monkeypatch.setattr(console.handler, "CONSOLE_MODE", "app")
+    assert call(console, "GET /api/me")[1]["docsUrl"] == "https://docs.example.com/product/"
+    monkeypatch.setattr(console.handler, "DOCS_URL", "http://docs.example.com/product/")
+    assert "docsUrl" not in call(console, "GET /api/me")[1]
+
+
+def test_me_names_no_docs_url_with_docs_links_off(console, monkeypatch):
+    """-c docsLinks=false / var.docs_links = false: no docsUrl, and docsLinks false."""
+    monkeypatch.setattr(console.handler, "DOCS_URL", "https://docs.example.com/product/")
+    assert call(console, "GET /api/me")[1].get("docsLinks") is None
+    monkeypatch.setattr(console.handler, "DOCS_LINKS", False)
+    body = call(console, "GET /api/me")[1]
+    assert "docsUrl" not in body and body["docsLinks"] is False
 def test_builder_mode_needs_the_builder(console, monkeypatch):
     monkeypatch.setattr(console.builds, "ENABLED", False)
     assert call(console, "GET /api/me")[1]["consoleMode"] == "app"

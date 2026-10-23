@@ -18,6 +18,7 @@ import { useEffect, useState } from "react";
 
 import type { Entry, Project } from "./model";
 import { registryApi, type Registry, type RegistryHit, type RegistryKind, type RegistryUpdate } from "./storage";
+import { InfoLink } from "../docs/InfoLink";
 
 const MAP: Record<RegistryKind, "tools" | "agents" | "skills"> = { tool: "tools", agent: "agents", skill: "skills" };
 const LABEL: Record<RegistryKind, string> = { tool: "MCP servers", agent: "agents", skill: "skills" };
@@ -109,7 +110,7 @@ export function RegistryPicker({ kind, visible, onDismiss, onAdd }: {
   const options = (registries ?? []).map((r) => ({ value: r.id, label: r.name, description: r.status === "READY" ? r.description : r.status }));
   const current = (registries ?? []).find((r) => r.id === picked);
   return (
-    <Modal visible={visible} onDismiss={onDismiss} size="max" header={`Add ${LABEL[kind]} from the registry`}
+    <Modal visible={visible} onDismiss={onDismiss} size="max" header={<>{`Add ${LABEL[kind]} from the registry`}<InfoLink feature="registry" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" disabled={!usable.length} onClick={() => onAdd(usable, sync)}>

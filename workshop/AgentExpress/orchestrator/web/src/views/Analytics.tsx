@@ -23,6 +23,8 @@ import Table, { type TableProps } from "@cloudscape-design/components/table";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { dayBefore, daysIn } from "./Activity";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export interface ToolStats {
   tool: string;
@@ -166,6 +168,7 @@ function SortedTable<T>({ items, columns, header, empty, trackBy, sortBy }: {
 }
 
 export function Analytics({ build = "" }: { build?: string }) {
+  const docs = useDocsBase();
   const [range, setRange] = useState("6");
   const [from, setFrom] = useState(dayBefore(6));
   const [to, setTo] = useState(dayBefore(0));
@@ -203,6 +206,7 @@ export function Analytics({ build = "" }: { build?: string }) {
     <SpaceBetween size="l">
       <Header
         variant="h1"
+        info={infoSlot(docs, "analytics")}
         description={rangeError || (data
           ? `Every user's calls from ${data.from} to ${data.to}: ${data.rowsRead} telemetry rows read. `
             + `Latency percentiles are ${data.percentiles}.`
@@ -248,7 +252,7 @@ export function Analytics({ build = "" }: { build?: string }) {
       ) : null}
 
       <Container header={<Header variant="h2" counter={data ? `(${warnings.length})` : undefined}
-        description="From the deployed workflow.json, not from telemetry.">Configuration warnings</Header>}>
+        description="From the deployed workflow.json, not from telemetry." info={infoSlot(docs, "analytics.warnings")}>Configuration warnings</Header>}>
         {loading ? <StatusIndicator type="loading">Loading</StatusIndicator>
           : !data ? <Box color="text-status-inactive">—</Box>
           : warnings.length
@@ -261,7 +265,7 @@ export function Analytics({ build = "" }: { build?: string }) {
         trackBy="agentId"
         empty={loading ? "Loading" : "No agent made a call in this range."}
         sortBy="health"
-        header={<Header variant="h2" counter={data ? `(${data.agents.length})` : undefined}
+        header={<Header variant="h2" counter={data ? `(${data.agents.length})` : undefined} info={infoSlot(docs, "analytics.agents")}
           description="Health = 100 − 60 × error rate − 20 × Cedar denial rate − 10 × guardrail block rate − 10 if p95 model latency is over 3× its median (5+ calls).">
           Agents</Header>}
         columns={[
@@ -289,7 +293,7 @@ export function Analytics({ build = "" }: { build?: string }) {
         trackBy="tool"
         empty={loading ? "Loading" : "No tool was called in this range."}
         sortBy="tool"
-        header={<Header variant="h2" counter={data ? `(${data.tools.length})` : undefined}
+        header={<Header variant="h2" counter={data ? `(${data.tools.length})` : undefined} info={infoSlot(docs, "analytics.tools")}
           description="Cedar denial rate is denied ÷ (allowed + denied). In LOG_ONLY mode the decision is in CloudWatch, so those calls show as log-only with no rate.">
           Tools</Header>}
         columns={[

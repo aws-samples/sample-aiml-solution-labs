@@ -13,6 +13,8 @@ import SegmentedControl from "@cloudscape-design/components/segmented-control";
 import SpaceBetween from "@cloudscape-design/components/space-between";
 import { MAX_NETWORK_IDS, NETWORK_MODES } from "./networkCheck";
 import type { Issue } from "./validate";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -87,9 +89,10 @@ export function AgentNetworkSettings({ agent, runtime, onAgent, issues, path }: 
   issues?: Issue[];
   path: string;
 }) {
+  const docs = useDocsBase();
   const note = agentNetworkNote(runtime);
   return (
-    <ExpandableSection headerText="Network" variant="container"
+    <ExpandableSection headerText="Network" variant="container" headerInfo={infoSlot(docs, "agent.network")}
       headerDescription="Where this agent's own AgentCore Runtime runs: Public (default) or your VPC.">
       {runtime === "dedicated" ? (
         <NetworkFields value={agent.network} path={path} issues={issues}

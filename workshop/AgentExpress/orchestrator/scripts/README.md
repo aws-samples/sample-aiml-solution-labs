@@ -70,3 +70,38 @@ flags agree with the numbers, the run's own cost and run count are in the counte
 * An agent a branch skipped is a warning, not a failure.
 * Telemetry and limit counters are written by the runtime and can lag a little; if a check on them
   fails, run it again.
+
+## `check_docs_links.py`: check the in-product documentation links
+
+Checks every info popover's **Documentation** link (`web/src/docs/docsLinks.ts`): it renders each
+popover and reads its link (vitest, so run `npm ci` in `web/` first), then checks the link's `#anchor`
+names a section of its page. Not part of CI. Two targets, matching the two link shapes:
+
+* `--target github`: the public user guide's Markdown (`<page>.md#<slug>`). Checks each slug against
+  the headings of the local `docs/user-guide/*.md`, computed the way GitHub does. With `--live` it also
+  fetches each page from github.com (public, no sign-in) and looks for GitHub's rendered id,
+  `user-content-<slug>`, in the raw HTML, quoted or escaped in the page's JSON payload.
+* `--target wiki` (the default): an XWiki copy of the guide (a base URL with `/bin/view/` in its path).
+  Opens each page in Chromium and checks the element the `#H...` id names is there. Needs
+  `pip install playwright==1.64.0 && playwright install chromium`.
+
+```bash
+python3 scripts/check_docs_links.py --target github
+python3 scripts/check_docs_links.py --target github --live
+python3 scripts/check_docs_links.py --target wiki --base-url https://wiki.example.com/bin/view/AgentExpress/ \
+    --cookies ~/cookies.txt --signin-hint "sign in again to refresh ~/cookies.txt"
+```
+
+| Option | Meaning |
+|---|---|
+| `--target` | `wiki` (default) or `github`. |
+| `--base-url` | The documentation base URL the deployment sets as `docsUrl` (or `$DOCS_URL`). `https` only. Required for `wiki`; for `github`, defaults to the deployment default in `orchestrator/docs_default.json`. |
+| `--cookies` | `wiki`: a Netscape-format cookie file with a signed-in session, for a site that needs one. |
+| `--signin-hint` | `wiki`: printed when a page lands on another host (a sign-in page): what refreshes the cookie file. |
+| `--guide-dir` | `github`: the generated Markdown to check against (default `<repo>/docs/user-guide`). |
+| `--live` | `github`: also check each page on github.com. |
+| `--timeout` | Seconds per page (default 120). |
+
+Exit `0`: every anchor found. `1`: an anchor or a page is missing (each is listed). `2`: it could not run
+(bad arguments, a base URL of the other target's shape, no guide directory, no Playwright, the popovers
+could not be read, or a page landed on a sign-in page).

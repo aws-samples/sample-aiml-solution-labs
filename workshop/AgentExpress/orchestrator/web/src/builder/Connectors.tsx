@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { addConnector, CONNECTORS, fieldError, matches, methodsOf, type Connector, type ConnectorMethod } from "./connectorCatalog";
 import type { Project } from "./model";
 import "./Connectors.css";
+import { InfoLink } from "../docs/InfoLink";
 
 const WHO: Record<ConnectorMethod, string> = { user: "Each person signs in", app: "App login" };
 
@@ -108,7 +109,7 @@ export function Connectors({ visible, project, onDismiss, onAdded }: {
 
   return (
     <Modal visible={visible} onDismiss={onDismiss} size={picked ? "medium" : "max"}
-      header={picked ? `Connect ${picked.name}` : "Connectors"}
+      header={<>{picked ? `Connect ${picked.name}` : "Connectors"}<InfoLink feature="connectors" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         {picked ? <Button onClick={() => setPicked(null)}>Back</Button> : null}
         <Button variant="link" onClick={onDismiss}>Cancel</Button>

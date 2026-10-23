@@ -17,6 +17,8 @@ import Toggle from "@cloudscape-design/components/toggle";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { humanizeKey } from "../assets/shape";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink } from "../docs/InfoLink";
 import { FORM_LAYOUT, splitLayout, type FormLayout } from "./formLayout";
 import {
   allowedValues, applies, block, defaultFor, formGroups, requiredFor, variantOf,
@@ -85,6 +87,8 @@ export interface FieldOverride {
   /** Replace the generated control. */
   render?: (value: Json | undefined, set: (v: Json | undefined) => void) => ReactNode;
   hidden?: boolean;
+  /** The field's info slot (docs/InfoLink.tsx infoSlot): undefined leaves it empty. */
+  info?: ReactNode;
 }
 
 function Field({ name, keyName, variant, value, onChange, issues, override }: {
@@ -180,7 +184,7 @@ function Field({ name, keyName, variant, value, onChange, issues, override }: {
 
   return (
     <FormField label={label} description={spec.doc} constraintText={constraint} errorText={errorText}
-      stretch>
+      info={override?.info} stretch>
       {control}
     </FormField>
   );
@@ -210,6 +214,7 @@ export function EntryForm({ name, entry, onChange, issues, pathPrefix, overrides
    *  grouped form. Defaults to the block's layout, when it has one. */
   layout?: FormLayout | false;
 }) {
+  const docs = useDocsBase();
   const spec = block(name);
   const variant = variantOf(name, entry);
   const groups = formGroups(name, variant);
@@ -254,7 +259,10 @@ export function EntryForm({ name, entry, onChange, issues, pathPrefix, overrides
               defaultExpanded={flagged(split.advanced.flatMap((a) => a.keys))}>
               <SpaceBetween size="s">
                 {split.advanced.map((a) => (
-                  <ExpandableSection key={a.title} headerText={a.title} defaultExpanded={flagged(a.keys)}>
+                  // The info icon goes in headerActions: this variant draws no headerInfo,
+                  // and the header's own button must not hold another button.
+                  <ExpandableSection key={a.title} headerText={a.title} defaultExpanded={flagged(a.keys)}
+                    headerActions={docs && a.docs ? <InfoLink feature={a.docs} /> : undefined}>
                     <SpaceBetween size="m">{a.keys.map(field)}</SpaceBetween>
                   </ExpandableSection>
                 ))}

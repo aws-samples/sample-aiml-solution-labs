@@ -31,6 +31,8 @@ import { api } from "../api";
 import { Markdown } from "../builder/markdown";
 import type { ChatbotConfig, UiConfig } from "../types";
 import "./assistant.css";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 interface Turn { role: "user" | "assistant"; content: string }
 interface ChatReply { reply?: string; actions?: string[] | null }
@@ -65,6 +67,7 @@ export function Assistant({
   /** A deployed build to work on ("" = this deployment's own workflow). */
   build?: string;
 }) {
+  const docs = useDocsBase();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -140,6 +143,7 @@ export function Assistant({
               <Header
                 variant="h3"
                 description={subtitle}
+                info={infoSlot(docs, "runAssistant")}
                 actions={
                   <Button
                     variant="icon" iconName="close" ariaLabel="Close the assistant"

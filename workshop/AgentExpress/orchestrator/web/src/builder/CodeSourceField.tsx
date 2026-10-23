@@ -17,6 +17,8 @@ import {
   codeFilesOf, codeSourceKind, codeSourceProblems, entriesOf, scriptOf,
   type CodeSource, type CodeSourceKind,
 } from "./codeSource";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 type Mode = "written" | "upload" | CodeSourceKind;
 
@@ -34,6 +36,7 @@ export function CodeSourceField({ source, onSource, allow = ["git", "s3"], mode 
   /** Where it sits, for the messages (e.g. tools.hr.code.codeSource). */
   path?: string;
 }) {
+  const docs = useDocsBase();
   const kind = codeSourceKind(source);
   const [picked, setPicked] = useState<Mode | null>(null);
   const shown: Mode = kind || (picked === "upload" ? "upload" : picked && picked !== "written" ? picked : "written");
@@ -88,6 +91,7 @@ export function CodeSourceField({ source, onSource, allow = ["git", "s3"], mode 
   return (
     <SpaceBetween size="s">
       <FormField label={mode === "script" ? "Where the script comes from" : "Where the code comes from"}
+        info={infoSlot(docs, "tool.codeSource")}
         description="Written or uploaded code is kept in the build and exported with it. Git and S3 are fetched when the build deploys.">
         <SegmentedControl selectedId={shown} label="Code source" options={options}
           onChange={({ detail }) => choose(detail.selectedId as Mode)} />

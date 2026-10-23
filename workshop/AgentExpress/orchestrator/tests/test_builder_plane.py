@@ -103,6 +103,31 @@ def test_the_runner_deploys_with_flags_both_tools_understand():
                 assert re.search(rf"\b{field}\s*=", block), f"variable {provider} declares no {field!r}"
 
 
+def test_a_build_gets_the_consoles_docs_url_on_both_paths():
+    """The console's documentation links reach each build's own app: the deploy project
+    carries DOCS_URL on both paths, and the runner passes it on under names both tools read."""
+    assert "DOCS_URL" in TS and "local.docs_env" in TF
+    assert runner.docs_settings({}) == {}
+    guard = runner.docs_settings({"DOCS_URL": "https://docs.example.com/product/"})
+    assert guard == {"docsUrl": "https://docs.example.com/product/"}
+    flags = runner.cdk_context("ax_1", True, None, None, guard)
+    assert "docsUrl=https://docs.example.com/product/" in flags and '"docsUrl"' in BIN
+    tf = runner.tf_vars("ax_1", True, "us-east-1", None, None, guard)
+    assert tf["docs_url"] == "https://docs.example.com/product/" and 'variable "docs_url"' in VARIABLES
+    # The console's links off: the build's are off too, on both paths.
+    off = runner.docs_settings({"DOCS_LINKS": "false", "DOCS_URL": "https://docs.example.com/product/"})
+    assert off == {"docsLinks": "false"}
+    assert "docsLinks=false" in runner.cdk_context("ax_1", True, None, None, off) and '"docsLinks"' in BIN
+    tf_off = runner.tf_vars("ax_1", True, "us-east-1", None, None, off)
+    assert tf_off["docs_links"] is False and "docs_url" not in tf_off and 'variable "docs_links"' in VARIABLES
+    for bad in ("http://docs.example.com/", "javascript:alert(1)", "https:// x"):
+        try:
+            runner.docs_settings({"DOCS_URL": bad})
+        except runner.StepFailed:
+            continue
+        raise AssertionError(f"accepted {bad!r}")
+
+
 SIGN_INS = [
     {"provider": "cognito"},
     {"provider": "okta", "domain": "acme.okta.com", "clientId": "0oaSpa", "authorizationServer": "default"},

@@ -36,6 +36,8 @@ import { smithyOperations } from "./smithy";
 import { policyLibrary, type GeneratedPolicy, type LibraryPolicy, type PolicySource } from "./storage";
 import type { Issue } from "./validate";
 import "./builder.css";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 type Notify = (type: "success" | "error" | "info", text: string) => void;
 
@@ -345,7 +347,7 @@ export function PolicyEditor({ visible, initial, tools, server, taken, forLibrar
 
   return (
     <Modal visible={visible} onDismiss={onDismiss} size="large"
-      header={initial ? `Edit policy ${initial.name}` : "New policy"}
+      header={<>{initial ? `Edit policy ${initial.name}` : "New policy"}<InfoLink feature="policies.write" /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -422,6 +424,7 @@ export function BuildPolicies({ project, setProject, issues, server, notify, dep
   server: boolean;
   notify: Notify;
 }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const block = policyBlock(wf);
   const custom = block.custom ?? [];
@@ -479,7 +482,8 @@ export function BuildPolicies({ project, setProject, issues, server, notify, dep
   return (
     <SpaceBetween size="l">
       <Container header={<Header variant="h2"
-        description="Every tool call goes through the Gateway's Cedar engine. Anything no policy permits is denied; a forbid always wins.">
+        description="Every tool call goes through the Gateway's Cedar engine. Anything no policy permits is denied; a forbid always wins."
+        info={infoSlot(docs, "policies.engine")}>
         Policy engine</Header>}>
         <ColumnLayout columns={2}>
           <FormField label="Enabled" description="Off: every declared tool is callable, and none of the policies below deploys.">
@@ -496,12 +500,14 @@ export function BuildPolicies({ project, setProject, issues, server, notify, dep
 
       <Container header={<Header variant="h2"
         description="Say what to allow or block in plain words, pick it on a form, or write Cedar. It is attached to the tool it names; attach it to more tools from each tool's panel."
+        info={infoSlot(docs, "policies.write")}
         actions={<Button variant="primary" iconName="add-plus" onClick={() => setEditing({ index: -1 })}>Write a policy</Button>}>
         Write a policy</Header>} />
       {list}
       {custom.length ? <Table
         header={<Header variant="h2" counter={`(${custom.length})`}
           description="Written before policies were attached to tools. Each deploys as written."
+          info={infoSlot(docs, "policies.buildWide")}
           actions={server ? <Button onClick={() => setPicking(true)}>Add from library</Button> : undefined}>Build-wide policies</Header>}
         items={custom.map((p, index) => ({ p, index }))}
         trackBy={(r) => String(r.index)}
@@ -524,7 +530,8 @@ export function BuildPolicies({ project, setProject, issues, server, notify, dep
 
       <Table
         header={<Header variant="h2" counter={`(${Object.keys(tools).length})`}
-          description="Declaring a tool permits it. Turn one off to allow only what your own policies permit for it.">
+          description="Declaring a tool permits it. Turn one off to allow only what your own policies permit for it."
+          info={infoSlot(docs, "policies.generated")}>
           Generated permits</Header>}
         items={Object.keys(tools).map((key) => ({ key }))}
         columnDefinitions={[
@@ -573,7 +580,7 @@ function LibraryPicker({ visible, toolKeys, taken, onDismiss, onAttach, notify }
   }, [visible, notify]);
   const fits = (p: LibraryPolicy) => !taken.includes(p.name) && !problems(p.statement, toolKeys).length;
   return (
-    <Modal visible={visible} onDismiss={onDismiss} size="large" header="Add from your library"
+    <Modal visible={visible} onDismiss={onDismiss} size="large" header={<>Add from your library<InfoLink feature="library.add" /></>}
       footer={
         <Box float="right">
           <SpaceBetween direction="horizontal" size="xs">
@@ -604,6 +611,7 @@ function LibraryPicker({ visible, toolKeys, taken, onDismiss, onAttach, notify }
 // --- the library page ----------------------------------------------------------------
 
 export function PolicyLibrary({ notify }: { notify: Notify }) {
+  const docs = useDocsBase();
   const [items, setItems] = useState<LibraryPolicy[] | null>(null);
   const [editing, setEditing] = useState<LibraryPolicy | "new" | null>(null);
   const load = useCallback(() => {
@@ -625,6 +633,7 @@ export function PolicyLibrary({ notify }: { notify: Notify }) {
     <SpaceBetween size="l">
       <Table
         header={<Header variant="h1" counter={items ? `(${items.length})` : undefined}
+          info={infoSlot(docs, "library")}
           description="Cedar policies you keep to reuse. Add one to a build from its Policies tab; the build gets a copy, so editing it here changes no build."
           actions={<Button variant="primary" iconName="add-plus" onClick={() => setEditing("new")}>New policy</Button>}>
           Policies</Header>}

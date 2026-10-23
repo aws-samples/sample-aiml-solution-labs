@@ -19,6 +19,7 @@ import type { Workflow } from "../types";
 import { toolsOf } from "../lib/tools";
 import { FRAMEWORK_VERSION } from "../builder/meta";
 import { workflowVersionLabel } from "../lib/workflowVersion";
+import { InfoLink } from "../docs/InfoLink";
 
 type Item = { title: string; body: string };
 
@@ -105,7 +106,7 @@ export function AboutPanel({ workflow, heading, console: isConsole = false, demo
 
   if (isConsole) {
     return (
-      <HelpPanel header={<h2>{`About ${heading}`}</h2>}>
+      <HelpPanel header={<h2>{`About ${heading}`}<InfoLink feature="about.console" /></h2>}>
         <SpaceBetween size="l">
           {demoUrl ? <Link href={demoUrl} external variant="primary">Watch the 10-minute demo</Link> : null}
           <Box variant="p">
@@ -137,7 +138,7 @@ export function AboutPanel({ workflow, heading, console: isConsole = false, demo
     .join(", ") || "—";
 
   return (
-    <HelpPanel header={<h2>{`About ${heading}`}</h2>}>
+    <HelpPanel header={<h2>{`About ${heading}`}<InfoLink feature="about" /></h2>}>
       <SpaceBetween size="l">
         <Box variant="p">
           Give it one request and a team of AI agents works through it, pausing where a

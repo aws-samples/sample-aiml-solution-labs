@@ -123,6 +123,25 @@ def litellm_settings(env: dict) -> dict:
     return {"litellmBaseUrl": base, "litellmKeySecretArn": arn} if base and arn else {}
 
 
+#: Mirrors var.docs_url's validation (terraform/builder.tf) and docsUrl's (cdk/lib/orchestrator-stack.ts).
+DOCS_URL = re.compile(r"^https://[^\s/?#]+[^\s]*$")
+
+
+def docs_settings(env: dict) -> dict:
+    """The console's documentation base URL (-c docsUrl / var.docs_url), for a build's own
+    app: its pages link to the same documentation. With the console's links off
+    (DOCS_LINKS=false: -c docsLinks=false / var.docs_links = false, or an empty docsUrl), the
+    build's are off too. {} when the console passes neither: the build's own default."""
+    if str(env.get("DOCS_LINKS") or "").strip().lower() == "false":
+        return {"docsLinks": "false"}
+    url = str(env.get("DOCS_URL") or "").strip()
+    if not url:
+        return {}
+    if not DOCS_URL.match(url):
+        raise StepFailed(f"DOCS_URL is not an https:// URL: {url!r}")
+    return {"docsUrl": url}
+
+
 def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dict | None = None,
                 guard: dict | None = None) -> list[str]:
     """The same flags a developer deploys with, pinned for a build stack.
@@ -173,6 +192,10 @@ def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None,
     if guard.get("litellmBaseUrl"):
         out["litellm_base_url"] = guard["litellmBaseUrl"]
         out["litellm_key_secret_arn"] = guard["litellmKeySecretArn"]
+    if guard.get("docsUrl"):
+        out["docs_url"] = guard["docsUrl"]
+    if guard.get("docsLinks") == "false":
+        out["docs_links"] = False
     return out
 
 
@@ -1195,6 +1218,8 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
         guard = guardrails(env, target)
         # And its LiteLLM proxy, for the build's litellm/<model> agents (cdk_context passes it on).
         guard.update(litellm_settings(env))
+        # And its documentation links, for the build's own app.
+        guard.update(docs_settings(env))
         outputs = (deploy_cdk(action, agent, gateway, sub_env, tags, target, signin, guard) if tool == "cdk"
                    else deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin, guard))
 

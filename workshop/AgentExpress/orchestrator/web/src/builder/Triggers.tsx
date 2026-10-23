@@ -20,6 +20,8 @@ import { useState } from "react";
 import { IssueList } from "./IssueList";
 import type { Json, Project, Workflow } from "./model";
 import { TRIGGER_NAME_RE, type Issue } from "./validate";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export type Trigger = Record<string, Json>;
 
@@ -170,6 +172,7 @@ function TriggerForm({ name, t, onChange, onRemove }: {
 export function BuildTriggers({ project, setProject, issues }: {
   project: Project; setProject: (p: Project) => void; issues: Issue[];
 }) {
+  const docs = useDocsBase();
   const triggers = triggersOf(project.workflow);
   const [name, setName] = useState("");
   const [type, setType] = useState(TYPES[0].value);
@@ -182,7 +185,7 @@ export function BuildTriggers({ project, setProject, issues }: {
         or an SQS message. Once deployed, the app&apos;s Triggers page has each webhook&apos;s URL and secret, and sends test events.
       </Box>
       {mine.length ? <IssueList issues={mine} /> : null}
-      <Container header={<Header variant="h2">Add a trigger</Header>}>
+      <Container header={<Header variant="h2" info={infoSlot(docs, "triggers.add")}>Add a trigger</Header>}>
         <SpaceBetween direction="horizontal" size="xs">
           <Input value={name} placeholder="jiraTickets" ariaLabel="Trigger name" onChange={({ detail }) => setName(detail.value.trim())} />
           <Select selectedOption={{ value: type, label: TYPES.find((t) => t.value === type)!.label }} ariaLabel="Trigger type"

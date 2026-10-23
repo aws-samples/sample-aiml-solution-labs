@@ -28,7 +28,7 @@ import {
   useNodesState, useReactFlow, type Edge, type Node, type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { useCallback, useEffect, useMemo, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
 
 import { toolsLabel, toolsOf } from "../lib/tools";
 import { branchSummary, monogram } from "../views/Graph";
@@ -252,8 +252,11 @@ export function keepMeasured(prev: Node[], next: Node[]): Node[] {
 
 function CanvasInner({
   workflow, issues, selection, onSelect, onDropPayload, onMoveAgent, highlight, readOnly, dragging,
-  onAddChoice, onRemoveComponent, onMoveComponent, onCreate,
+  onAddChoice, onRemoveComponent, onMoveComponent, onCreate, caption,
 }: {
+  /** A one-line note beside Show, at the canvas's top left (the Design tab's docs caption):
+   *  in the canvas, so it adds no row above it. */
+  caption?: ReactNode;
   /** The primitive being dragged from the palette: its valid targets are highlighted. */
   dragging?: Primitive | null;
   /** "+ Add" on agent `agent`: choice `index` of addChoices(project, agent). */
@@ -468,8 +471,13 @@ function CanvasInner({
         <Background gap={16} />
         <Controls showInteractive={false} />
         <MiniMap pannable zoomable />
-        <Panel position="top-left"><ComponentMenu counts={counts} shown={shown} onChange={setShown}
-          rail={readOnly ? undefined : { on: rail, onChange: setRail }} /></Panel>
+        <Panel position="top-left" className="axb-canvas-panel">
+          <div className="axb-canvas-top">
+            <ComponentMenu counts={counts} shown={shown} onChange={setShown}
+              rail={readOnly ? undefined : { on: rail, onChange: setRail }} />
+            {caption ? <div className="axb-canvas-caption" data-testid="canvas-caption">{caption}</div> : null}
+          </div>
+        </Panel>
         {rowDrag && dragged ? (
           <Panel position="bottom-center">
             <div className="axb-drag-hint" role="status" data-testid="row-drag-hint">

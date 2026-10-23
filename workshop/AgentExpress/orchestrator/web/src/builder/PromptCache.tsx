@@ -11,6 +11,8 @@ import SpaceBetween from "@cloudscape-design/components/space-between";
 import Toggle from "@cloudscape-design/components/toggle";
 import { vocabExtra } from "./meta";
 import { agentModel, baseId, cacheModel, copiedOn, notOnConverse } from "./promptCacheCheck";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 type Json = unknown;
 type Flag = "system" | "tools" | "messages";
@@ -34,6 +36,7 @@ export function PromptCacheSettings({ agent, orchestrator, onAgent, disabledReas
   /** Set when caching does not apply to this kind of agent at all (e.g. a harness). */
   disabledReason?: string;
 }) {
+  const docs = useDocsBase();
   const pc = (agent.promptCache && typeof agent.promptCache === "object" ? agent.promptCache : {}) as Record<string, Json>;
   const model = agentModel(agent, orchestrator);
   const row = disabledReason ? null : cacheModel(model);
@@ -65,7 +68,7 @@ export function PromptCacheSettings({ agent, orchestrator, onAgent, disabledReas
   const no1h = row && !row.ttls.includes("1h") ? `${row.name} caches for 5 minutes only.` : "";
   const loopOnly = toolCalls ? "" : "Applies to agents that call tools themselves (toolMode \"model\").";
   return (
-    <ExpandableSection headerText="Prompt caching" variant="container"
+    <ExpandableSection headerText="Prompt caching" variant="container" headerInfo={infoSlot(docs, "agent.promptCache")}
       headerDescription="Bedrock cache points for this agent's model calls, so a repeated prefix is billed at the cache-read rate. Off unless set.">
       <SpaceBetween size="m">
         {off ? (

@@ -20,6 +20,8 @@ import StatusIndicator, { type StatusIndicatorProps } from "@cloudscape-design/c
 import Table from "@cloudscape-design/components/table";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export interface AuditEvent {
   id: string;
@@ -194,6 +196,7 @@ export function daysIn(from: string, to: string): number {
 }
 
 export function Activity({ canSeeEveryone }: { canSeeEveryone: boolean }) {
+  const docs = useDocsBase();
   // An auditor lands on everyone's last 7 days; anyone else on their own activity.
   const [scope, setScope] = useState<"mine" | "all">(canSeeEveryone ? "all" : "mine");
   const [range, setRange] = useState("6");
@@ -259,6 +262,7 @@ export function Activity({ canSeeEveryone }: { canSeeEveryone: boolean }) {
       header={
         <Header
           variant="awsui-h1-sticky"
+          info={infoSlot(docs, "activity")}
           counter={loading ? undefined : shown.length === events.length ? `(${events.length})` : `(${shown.length}/${events.length})`}
           description={everyone
             ? (rangeError || `Other people's sign-ins, builds, library items, policies, accounts, deploys and runs from ${from} to ${to} (UTC), newest first.`)

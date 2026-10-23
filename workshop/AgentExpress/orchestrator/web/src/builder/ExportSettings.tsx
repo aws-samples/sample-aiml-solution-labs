@@ -28,6 +28,8 @@ import {
   forLibrary, HELP_LINKS, KEY_FIELDS, nameOf, SECRET_ARN_PATTERN, SEND_DEFAULTS, savedSetups, secretName,
   SetupError, tracesUrl, type Destination, type ExportSetup, type KeyFields, type SavedSetup, type TestResult,
 } from "./exportSetup";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 type Notify = (type: "success" | "error" | "info", msg: string) => void;
 
@@ -73,6 +75,7 @@ export function ExportSettings({ project, setProject, buildId, notify }: {
   /** The console build's id; absent in this-browser-only mode, where keys cannot be saved. */
   buildId?: string; notify: Notify;
 }) {
+  const docs = useDocsBase();
   const saved = exportOf(project);
   const [on, setOn] = useState(Boolean(saved));
   const [draft, setDraft] = useState<Partial<ExportSetup>>(saved ?? {});
@@ -219,7 +222,8 @@ export function ExportSettings({ project, setProject, buildId, notify }: {
   return (
     <Container header={<Header variant="h2"
       description="Send every run of this build to the observability tool your team uses, as it happens."
-      info={saved ? <StatusIndicator type="success">{`Runs go to ${exportLabel(saved)}`}</StatusIndicator> : undefined}
+      info={saved || docs ? <>{saved ? <StatusIndicator type="success">{`Runs go to ${exportLabel(saved)}`}</StatusIndicator> : null}
+        <InfoLink feature="settings.export" /></> : undefined}
       actions={saved ? <Button onClick={stop}>Stop sending runs</Button> : undefined}>
       Export</Header>}>
       <SpaceBetween size="l">
@@ -230,7 +234,7 @@ export function ExportSettings({ project, setProject, buildId, notify }: {
           </SpaceBetween>
         ) : (
           <SpaceBetween size="l">
-            <FormField label="1. Where to send runs">
+            <FormField label="1. Where to send runs" info={infoSlot(docs, "settings.exportDestination")}>
               <Tiles ariaLabel="Where to send runs" columns={3} value={dest ?? null}
                 onChange={({ detail }) => pick(detail.value as Destination)}
                 items={DESTINATIONS.map((d) => ({ value: d.id, label: d.name, description: d.about }))} />
@@ -239,7 +243,7 @@ export function ExportSettings({ project, setProject, buildId, notify }: {
 
             {dest ? (
               <SpaceBetween size="m">
-                <Box variant="h3">2. Connect {nameOf(dest)}</Box>
+                <Box variant="h3">2. Connect {nameOf(dest)}<InfoLink feature="settings.exportConnect" /></Box>
                 {regions ? (
                   <FormField label={regions.label}
                     description={dest === "datadog" ? "The site is in your Datadog address: app.datadoghq.com is US1, us5.datadoghq.com is US5." : undefined}>
@@ -299,7 +303,7 @@ export function ExportSettings({ project, setProject, buildId, notify }: {
                 ) : null}
                 {where.url ? <Box variant="small" color="text-body-secondary">Sends to {where.url}</Box> : null}
 
-                <Box variant="h3">3. Test the connection</Box>
+                <Box variant="h3">3. Test the connection<InfoLink feature="settings.exportTest" /></Box>
                 <SpaceBetween direction="horizontal" size="xs" alignItems="center">
                   <Button onClick={() => void test()} loading={testing}
                     disabled={!buildId || !where.url || useArn || (!typed && !keysSaved)}
@@ -314,7 +318,7 @@ export function ExportSettings({ project, setProject, buildId, notify }: {
                   </Alert>
                 ) : null}
 
-                <Box variant="h3">4. What to send</Box>
+                <Box variant="h3">4. What to send<InfoLink feature="settings.exportWhat" /></Box>
                 <SpaceBetween size="xs">
                   <Checkbox checked disabled description="Each run, its agents, model calls (model, tokens, cost) and tool calls, with timings and status.">
                     Traces of every run</Checkbox>

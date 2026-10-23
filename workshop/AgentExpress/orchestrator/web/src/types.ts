@@ -201,6 +201,10 @@ export interface Me {
   email?: string;
   /** A control-plane console's link to a product demo video (lib/demoVideo.ts). */
   demoVideoUrl?: string;
+  /** The deployment's documentation base URL, when it sets one (docs/docsLinks.ts). */
+  docsUrl?: string;
+  /** false when the deployment turned documentation links off (-c docsLinks=false). */
+  docsLinks?: boolean;
 }
 
 /** The mutating actions `authorization` in workflow.json can gate. */

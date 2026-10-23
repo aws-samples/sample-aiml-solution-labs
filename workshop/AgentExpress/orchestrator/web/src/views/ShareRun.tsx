@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, api } from "../api";
 import { fmtTime } from "../lib/clock";
+import { InfoLink } from "../docs/InfoLink";
 
 /** One link, as the server returns it. `expires` and `created` are UTC ISO stamps. */
 export interface RunShare {
@@ -99,7 +100,7 @@ export function ShareRun({ sessionId }: { sessionId: string }) {
       <Modal
         visible={open}
         onDismiss={() => setOpen(false)}
-        header="Share this run"
+        header={<>Share this run<InfoLink feature="run.share" /></>}
         footer={<Box float="right"><Button variant="link" onClick={() => setOpen(false)}>Close</Button></Box>}
       >
         <SpaceBetween size="m">
@@ -132,7 +133,7 @@ export function ShareRun({ sessionId }: { sessionId: string }) {
           ) : null}
           <Table
             variant="embedded"
-            header={<Box variant="h3">Active links ({shares?.length ?? 0} of {max})</Box>}
+            header={<Box variant="h3">Active links ({shares?.length ?? 0} of {max})<InfoLink feature="run.shareLinks" /></Box>}
             loading={shares === null && !error}
             loadingText="Loading links"
             items={shares ?? []}

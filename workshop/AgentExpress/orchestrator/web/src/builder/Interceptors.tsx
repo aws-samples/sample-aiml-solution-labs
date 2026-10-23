@@ -38,6 +38,8 @@ import type { Json, Project, ToolFiles, Workflow } from "./model";
 import { ShareItems } from "./Library";
 import { codeTool, library, type CodeCheck, type LibraryItem, type ToolTest } from "./storage";
 import type { Issue } from "./validate";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 type Settings = Record<string, Json>;
 export interface Interceptor {
@@ -233,7 +235,7 @@ function PublishBar({ project, point, notify }: { project: Project; point: Point
         <Button disabled={!ready} onClick={() => setOpen(true)}>Publish to library</Button>
         {published ? <Button onClick={() => setSharing([published])}>Share {published.name}</Button> : null}
       </SpaceBetween>
-      <Modal visible={open} onDismiss={() => setOpen(false)} header={`Publish the ${point} interceptor`}
+      <Modal visible={open} onDismiss={() => setOpen(false)} header={<>{`Publish the ${point} interceptor`}<InfoLink feature="interceptors.share" /></>}
         footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
           <Button variant="link" onClick={() => setOpen(false)}>Cancel</Button>
           <Button variant="primary" loading={busy} disabled={!/^[A-Za-z][A-Za-z0-9]{0,31}$/.test(name)} onClick={() => void publish()}>Publish</Button>
@@ -289,7 +291,7 @@ export function InterceptorPicker({ project, visible, onDismiss, onChange, notif
     onDismiss();
   };
   return (
-    <Modal visible={visible} onDismiss={onDismiss} size="large" header="Add an interceptor from the library"
+    <Modal visible={visible} onDismiss={onDismiss} size="large" header={<>Add an interceptor from the library<InfoLink feature="interceptors.share" /></>}
       footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
         <Button variant="link" onClick={onDismiss}>Cancel</Button>
         <Button variant="primary" disabled={!pick} onClick={add}>Add</Button>
@@ -321,6 +323,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
   project: Project; point: (typeof POINTS)[number]; onChange: (p: Project) => void; server: boolean; deployed: boolean;
   notify?: Notify;
 }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const ic = interceptorsOf(wf)[point.id];
   const key = `interceptor-${point.id}`;
@@ -343,7 +346,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
     || (point.id === "request" && list(templates.blockTools?.agents).length > 0);
 
   return (
-    <Container header={<Header variant="h2" description={point.description}
+    <Container header={<Header variant="h2" description={point.description} info={infoSlot(docs, "interceptors.point")}
       actions={<Toggle checked={Boolean(ic)} onChange={({ detail }) => {
         if (!detail.checked) { onChange(setInterceptor(project, point.id, undefined)); return; }
         const start: Interceptor = { code: {}, templates: { audit: {} } };
@@ -352,7 +355,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
       {server && notify && ic ? <Box padding={{ bottom: "s" }}><PublishBar project={project} point={point.id} notify={notify} /></Box> : null}
       {!ic ? <Box color="text-body-secondary">No {point.id} interceptor: the Gateway calls the tools directly.</Box> : (
         <SpaceBetween size="m">
-          <FormField label="The function">
+          <FormField label="The function" info={infoSlot(docs, "interceptors.function")}>
             <SegmentedControl selectedId={ic.code !== undefined ? "code" : "arn"}
               options={[{ id: "code", text: "Write it here" }, { id: "arn", text: "Yours, by ARN" }]}
               onChange={({ detail }) => {
@@ -384,7 +387,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
           ) : null}
           {ic.code !== undefined ? (
             <>
-              <FormField label="What it does" description="Each checked template becomes a section of handler.py, with its settings.">
+              <FormField label="What it does" info={infoSlot(docs, "interceptors.templates")} description="Each checked template becomes a section of handler.py, with its settings.">
                 <SpaceBetween size="s">
                   {TEMPLATES[point.id].map((t) => (
                     <div key={t.id}>
@@ -412,7 +415,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
                   handler.py was edited by hand, so the boxes no longer change it. Generate it again to apply them.
                 </Alert>
               ) : null}
-              <ExpandableSection headerText="The code" variant="container">
+              <ExpandableSection headerText="The code" variant="container" headerInfo={infoSlot(docs, "interceptors.code")}>
                 <SpaceBetween size="s">
                   <CodeSourceField source={ic.code.codeSource} path={`orchestrator.interceptors.${point.id}.code.codeSource`}
                     buildId={server ? project.id : undefined}
@@ -424,11 +427,11 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
                   {ic.code.codeSource ? null : <Files files={files} onChange={(f) => onChange(setInterceptor(project, point.id, ic, f))} />}
                 </SpaceBetween>
               </ExpandableSection>
-              <ExpandableSection headerText="What it may reach" variant="container">
+              <ExpandableSection headerText="What it may reach" variant="container" headerInfo={infoSlot(docs, "interceptors.reach")}>
                 <GrantsForm code={ic.code} onChange={(c) => onChange(setInterceptor(project, point.id, { ...ic, code: c }, files))} />
               </ExpandableSection>
               {server ? (
-                <ExpandableSection headerText="Check and run" variant="container"
+                <ExpandableSection headerText="Check and run" variant="container" headerInfo={infoSlot(docs, "interceptors.check")}
                   headerDescription="Syntax, lint and a security scan, then each test event in an AgentCore Code Interpreter sandbox.">
                   <SpaceBetween size="s">
                     <Button loading={checking} onClick={async () => {
@@ -443,7 +446,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
                 </ExpandableSection>
               ) : null}
               {server && deployed ? (
-                <ExpandableSection headerText="Test the deployed interceptor" variant="container">
+                <ExpandableSection headerText="Test the deployed interceptor" variant="container" headerInfo={infoSlot(docs, "interceptors.test")}>
                   <TestDeployed buildId={project.id} point={point.id} files={files} />
                 </ExpandableSection>
               ) : null}

@@ -28,6 +28,8 @@ import { fmtTime } from "../lib/clock";
 import { statusIndicator } from "../lib/status";
 import type { SessionSnapshot, Workflow } from "../types";
 import { toolsLabel, toolsOf } from "../lib/tools";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoStrip } from "../docs/InfoLink";
 
 export function StepPanel({
   agentId, snap, workflow, canRerun, settled, onRerun,
@@ -40,6 +42,7 @@ export function StepPanel({
   settled: boolean;
   onRerun: (agents: string[], comment: string) => Promise<void>;
 }) {
+  const docs = useDocsBase();
   const meta = workflow.agents[agentId] ?? { name: agentId };
   const state = snap.nodes?.[agentId] ?? { status: "pending" as const };
   const history = snap.history?.[agentId] ?? [];
@@ -85,7 +88,7 @@ export function StepPanel({
     }
   }
 
-  return (
+  const tabs = (
     <Tabs
       variant="container"
       tabs={[
@@ -230,4 +233,6 @@ export function StepPanel({
       ]}
     />
   );
+  // The step's documentation above its tabs; without a documentation URL, the tabs alone.
+  return docs ? <SpaceBetween size="xs"><InfoStrip features={["run.step"]} />{tabs}</SpaceBetween> : tabs;
 }

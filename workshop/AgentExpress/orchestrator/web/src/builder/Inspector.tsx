@@ -51,6 +51,8 @@ import { TaskPanel } from "./TaskPanel";
 import { HarnessSettings } from "./HarnessSettings";
 import { PromptCacheSettings } from "./PromptCache";
 import { AgentNetworkSettings } from "./NetworkSettings";
+import { useDocsBase, type DocsFeature } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 const FRAMEWORK_OPTIONS = [
   { value: "plain", label: "No framework — one ctx.llm call", description: "The simplest agent; add logic to run() as you need it." },
@@ -92,14 +94,21 @@ const HARNESS_CACHE_REASON =
   "A harness agent's model calls are made by AgentCore Harness, which documents no prompt caching setting. Observability records any cache tokens it reports.";
 
 /** One AgentCore feature's on/off switch in the agent panel. */
-function FeatureToggle({ label, checked, onChange, description }: {
+function FeatureToggle({ label, checked, onChange, description, docs }: {
   label: string; checked: boolean; onChange: (on: boolean) => void; description?: string;
+  /** Its documentation (docs/docsLinks.ts): an info icon after the toggle. */
+  docs?: DocsFeature;
 }) {
-  return (
+  const base = useDocsBase();
+  const toggle = (
     <Toggle checked={checked} onChange={({ detail }) => onChange(detail.checked)} description={description}>
       {label}
     </Toggle>
   );
+  // Beside the toggle, not in its label: a button inside a <label> would toggle it too.
+  return docs && base ? (
+    <SpaceBetween direction="horizontal" size="xxs" alignItems="center">{toggle}<InfoLink feature={docs} /></SpaceBetween>
+  ) : toggle;
 }
 
 /** Set one agentcore key (e.g. "guardrails.use") on an agent, dropping empty groups. */
@@ -137,6 +146,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
   onChange: (p: Project) => void; onSelect: (s: Selection) => void; server?: boolean;
   rows: RowActions;
 }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const agent = wf.agents[id];
   const mine = issuesFor(issues, { kind: "agent", id });
@@ -190,6 +200,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
         variant="h2"
         description={remote ? "Remote agent (A2A) — its code is somebody else's"
           : harness ? "Runs on a managed AgentCore Harness — no code of yours" : "Runs in this deployment"}
+        info={infoSlot(docs, "agent")}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {stage >= 0 ? <Button onClick={() => setWf(unplace(wf, id))}>Remove from canvas</Button> : null}
@@ -228,7 +239,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
       {harness && agent.harness && typeof agent.harness === "object" && "arn" in agent.harness ? (
         <Alert type="info">This agent uses a harness made elsewhere: its prompt, model and tools are set on that harness.</Alert>
       ) : harness ? (
-        <ExpandableSection headerText="Instructions" defaultExpanded variant="container"
+        <ExpandableSection headerText="Instructions" defaultExpanded variant="container" headerInfo={infoSlot(docs, "agent.instructions")}
           headerDescription="The system prompt its AgentCore Harness is created with. A change takes effect when you deploy.">
           <FormField label="System prompt" stretch>
             <Textarea rows={10} value={String(agent.instructions ?? "")} ariaLabel="Instructions"
@@ -237,7 +248,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
           </FormField>
         </ExpandableSection>
       ) : !remote ? (
-        <ExpandableSection headerText="Prompt" defaultExpanded variant="container"
+        <ExpandableSection headerText="Prompt" defaultExpanded variant="container" headerInfo={infoSlot(docs, "agent.prompt")}
           headerDescription="Written into app/subagents/<id>/prompts.py by `scaffold.py apply`.">
           <SpaceBetween size="m">
             <FormField label="System prompt" stretch>
@@ -274,10 +285,11 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
           // Edited in the Instructions section above.
           instructions: { hidden: true },
           // A harness agent's model provider, tools, skills, memory, environment and endpoint.
-          harness: { render: () => <HarnessSettings agent={agent} workflow={wf}
+          harness: { info: infoSlot(docs, "agent.harness"), render: () => <HarnessSettings agent={agent} workflow={wf}
             onAgent={(e) => onChange(updateEntry(project, "agents", id, e))} /> },
           // A task step is added from the palette ("+ New generic step"), not made from an agent.
           runtime: {
+            info: infoSlot(docs, "agent.runtime"),
             render: (value, set) => {
               const opts = vocab("runtimes").filter((r) => r !== "task").map((r) => ({ value: r, label: r }));
               return (
@@ -303,6 +315,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
           },
           skills: {
             // The build's skills (and the library's): know-how it opens when a task needs it.
+            info: infoSlot(docs, "agent.skills"),
             render: (value, set) => {
               const cur = Array.isArray(value) ? value.map(String) : [];
               const skillDefs = (wf.skills ?? {}) as Record<string, Record<string, Json>>;
@@ -338,6 +351,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
           tool: {
             // Several tools per agent. Each is queried before the agent reasons, in the
             // order shown here, and handed to the model as labelled evidence.
+            info: infoSlot(docs, "agent.tools"),
             render: () => (
               <Multiselect
                 selectedOptions={bound.map((k) => ({ label: k, value: k, description: String(wf.tools[k]?.type ?? "missing") }))}
@@ -357,6 +371,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
             ),
           },
           model: {
+            info: infoSlot(docs, "agent.model"),
             // The models this account can invoke, listed from Bedrock itself, and
             // still typeable: a model the list does not show (a custom import, a
             // profile in another region) is one the deploy may well accept. Only
@@ -398,7 +413,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
             },
           },
           // Route rules and fallback models (app/common/model_routing.py).
-          models: { render: (value, set) => <ModelRouting value={value} set={set} models={models.models} /> },
+          models: { info: infoSlot(docs, "agent.routing"), render: (value, set) => <ModelRouting value={value} set={set} models={models.models} /> },
           corpus: {
             render: (value, set) => {
               const opts = [{ label: "(every corpus)", value: "" }, ...corpora.map((c) => ({ label: c, value: c }))];
@@ -424,10 +439,10 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
         issues={issues} path={`agents.${id}.network`}
         onAgent={(e) => onChange(updateEntry(project, "agents", id, e as Entry))} />
       {!remote ? (
-        <ExpandableSection headerText="AgentCore features" variant="container" defaultExpanded
+        <ExpandableSection headerText="AgentCore features" variant="container" defaultExpanded headerInfo={infoSlot(docs, "agent.features")}
           headerDescription="Turn a feature on, then pick what it uses. Define guardrails, memories, evaluators and identities in their tabs (or the library).">
           <SpaceBetween size="l">
-            <FeatureToggle label="Guardrail: check input" checked={Boolean(core.guardrails?.input)}
+            <FeatureToggle label="Guardrail: check input" docs="agent.guardrails" checked={Boolean(core.guardrails?.input)}
               onChange={(on) => onChange(guard(project, "input", on))} />
             <FeatureToggle label="Guardrail: check output" checked={Boolean(core.guardrails?.output)}
               onChange={(on) => onChange(guard(project, "output", on))} />
@@ -440,7 +455,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
               </FormField>
             ) : null}
 
-            <FeatureToggle label="Long-term memory" checked={memoryOn}
+            <FeatureToggle label="Long-term memory" docs="agent.memory" checked={memoryOn}
               onChange={(on) => { setMemoryOn(on); if (!on) onChange(clearCore(project, id, "memory")); }} />
             {memoryOn && !core.memory?.use && Array.isArray(core.memory?.longTerm) && (core.memory.longTerm as Json[]).length ? (
               // Memory written on the agent itself (an imported workflow.json, an older
@@ -461,7 +476,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
               </FormField>
             ) : null}
 
-            <FeatureToggle label="Evaluations" checked={Boolean(core.evaluations?.enabled)}
+            <FeatureToggle label="Evaluations" docs="agent.evaluations" checked={Boolean(core.evaluations?.enabled)}
               onChange={(on) => onChange(on ? setCore(project, id, "evaluations.enabled", true) : clearCore(project, id, "evaluations"))} />
             {core.evaluations?.enabled ? (() => {
               const cur = Array.isArray(core.evaluations?.evaluators) ? (core.evaluations.evaluators as Json[]).map(String) : [];
@@ -486,7 +501,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
               );
             })() : null}
 
-            <FeatureToggle label="Outbound identity (calls an API directly)" checked={identityOn}
+            <FeatureToggle label="Outbound identity (calls an API directly)" docs="agent.identity" checked={identityOn}
               onChange={(on) => { setIdentityOn(on); if (!on) onChange(clearCore(project, id, "identity")); }} />
             {identityOn ? (() => {
               const cur = Array.isArray(core.identity?.outbound) ? (core.identity.outbound as Json[]).map(String) : [];
@@ -518,6 +533,7 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
 function StagePanel({ project, index, issues, onChange }: {
   project: Project; index: number; issues: Issue[]; onChange: (p: Project) => void;
 }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const step = wf.steps[index];
   const kind = stageKind(step);
@@ -535,6 +551,7 @@ function StagePanel({ project, index, issues, onChange }: {
   return (
     <SpaceBetween size="l">
       <Header variant="h2" description={`Step ${index + 1} of ${wf.steps.length} · ${members.length} agent(s)`}
+        info={infoSlot(docs, "stage")}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             <Button iconName="angle-up" ariaLabel="Move stage up" disabled={index === 0}
@@ -558,7 +575,8 @@ function StagePanel({ project, index, issues, onChange }: {
           onChange={({ detail }) => onChange({ ...project, workflow: setStageKind(wf, index, detail.selectedId as never) })}
         />
       </FormField>
-      <FormField label="HITL gate" description="Pause after this stage for HITL (a human in the loop) to approve, revise or deny.">
+      <FormField label="HITL gate" description="Pause after this stage for HITL (a human in the loop) to approve, revise or deny."
+        info={infoSlot(docs, "stage.gate")}>
         <Toggle checked={Boolean(step.hitl)} onChange={({ detail }) => set({ hitl: detail.checked || undefined })}>
           {step.hitl ? "A reviewer signs off here" : "No review"}
         </Toggle>
@@ -578,7 +596,7 @@ function StagePanel({ project, index, issues, onChange }: {
         label="Branch"
         description={`Route on this stage's output. Targets: END${later.length ? `, ${later.join(", ")}` : ""}. `
           + 'Example: {"when": [{"field": "risk", "equals": "low", "goto": "END"}]}'}
-        errorText={branchErr} stretch
+        errorText={branchErr} stretch info={infoSlot(docs, "stage.branch")}
       >
         <Textarea rows={5} value={branchText} placeholder="(no branch — always continue to the next stage)"
           onChange={({ detail }) => setBranchText(detail.value)}
@@ -611,10 +629,11 @@ export function parseOpenApi(text: string): Record<string, unknown> {
 export const OPENAPI_MAX_BYTES = 1024 * 1024;
 
 function OpenApiUpload({ onSchema }: { onSchema: (schema: Record<string, unknown>) => void }) {
+  const docs = useDocsBase();
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   return (
-    <FormField label="Upload an OpenAPI document"
+    <FormField label="Upload an OpenAPI document" info={infoSlot(docs, "tool.openapiUpload")}
       description="A local openapi.json (OpenAPI 3). It becomes this tool's inline `schema`, replacing schemaS3Uri or source."
       errorText={error ?? undefined} constraintText={done ?? undefined}>
       <input type="file" accept=".json,application/json" aria-label="OpenAPI document"
@@ -642,11 +661,23 @@ function customEvaluatorsOf(agent: Entry): CustomEvaluator[] {
   return Array.isArray(ev?.custom) ? (ev!.custom as unknown as CustomEvaluator[]) : [];
 }
 
+/** A tool's documentation, by its type (docs/docsLinks.ts). */
+const TOOL_DOCS: Record<string, DocsFeature> = {
+  kb: "tool.kb", websearch: "tool.websearch", mcp: "tool.mcp", openapi: "tool.openapi", lambda: "tool.lambda",
+  apigateway: "tool.apigateway", smithy: "tool.smithy",
+};
+function toolDocs(tool: Entry): DocsFeature {
+  if (tool.type === "lambda" && tool.source === "codeInterpreter") return "tool.codeInterpreter";
+  if (tool.type === "lambda" && tool.source === "browser") return "tool.browser";
+  return TOOL_DOCS[String(tool.type)] ?? "tool";
+}
+
 function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUrls, agentName }: {
   project: Project; id: string; issues: Issue[];
   onChange: (p: Project) => void; onSelect: (s: Selection) => void; server?: boolean;
   callbackUrls?: Record<string, string>; agentName?: string;
 }) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   const tool = wf.tools[id];
   const users = Object.entries(wf.agents).filter(([, a]) => toolsOf(a.tool).includes(id)).map(([k]) => k);
@@ -668,6 +699,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
   return (
     <SpaceBetween size="l">
       <Header variant="h2" description={`${builtinLabel(tool) ?? String(tool.type)} tool · used by ${users.join(", ") || "no agent yet"}`}
+        info={infoSlot(docs, toolDocs(tool))}
         actions={<Button onClick={() => { onChange(removeTool(project, id)); onSelect(null); }}>Delete</Button>}>
         {String(tool.description ?? id)}
       </Header>
@@ -678,7 +710,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
           to change it for every build that uses it, edit it under Tools in the navigation.
         </Alert>
       ) : null}
-      <Container header={<Header variant="h3">How it connects</Header>}>
+      <Container header={<Header variant="h3" info={infoSlot(docs, "tool.connects")}>How it connects</Header>}>
         <ToolConnect project={project} id={id} onChange={onChange} server={Boolean(server)} callbackUrl={callbackUrls?.[id]} agentName={agentName} />
       </Container>
       <IdField
@@ -724,7 +756,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
         onChange={(e) => onChange(updateEntry(project, "tools", id, e))} />
       {String(tool.type) === "lambda" && !builtinLabel(tool) ? <CodeTool project={project} id={id} onChange={onChange} server={server} /> : null}
       {String(tool.type) === "mcp" ? (
-        <Container header={<Header variant="h3">MCP server</Header>}>
+        <Container header={<Header variant="h3" info={infoSlot(docs, "tool.hostedMcp")}>MCP server</Header>}>
           <HostedMcp project={project} id={id} onChange={onChange} issues={mine} server={server} />
         </Container>
       ) : null}
@@ -735,7 +767,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
         }} />
       ) : null}
       {server && String(tool.type) === "kb" ? (
-        <ExpandableSection headerText="Documents" variant="container" defaultExpanded
+        <ExpandableSection headerText="Documents" variant="container" defaultExpanded headerInfo={infoSlot(docs, "tool.kbDocuments")}
           headerDescription={tool.knowledgeBaseId ? "From your Knowledge Base." : tool.s3Uri ? "From your S3 bucket."
             : tool.dataSource ? "From a connector." : "What each corpus retrieves from."}>
           {tool.knowledgeBaseId ? (
@@ -776,6 +808,7 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
   /** The build's fixed AWS name (the Gateway role is named from it). */
   agentName?: string;
 } & RowActions) {
+  const docs = useDocsBase();
   const wf = project.workflow;
   let body;
   const toolPanel = (id: string) => (
@@ -806,7 +839,8 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
     const errors = issues.filter((i) => i.severity === "error").length;
     body = (
       <SpaceBetween size="m">
-        <Header variant="h2" description="Click an agent to see everything attached to it; click any row on an agent (a tool, memory, guardrail…) to configure it.">Problems</Header>
+        <Header variant="h2" description="Click an agent to see everything attached to it; click any row on an agent (a tool, memory, guardrail…) to configure it."
+          info={infoSlot(docs, "builder.problems")}>Problems</Header>
         {issues.length
           ? <IssueList issues={issues} onPick={(w) => {
             if (w.kind === "agent") onSelect({ kind: "agent", id: w.id });

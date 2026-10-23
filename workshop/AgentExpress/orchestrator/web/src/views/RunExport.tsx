@@ -18,6 +18,8 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
 import { nameOf, type Destination } from "../builder/exportSetup";
 import type { SessionSnapshot } from "../types";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 export interface ExportStatus {
   on: boolean;
@@ -94,6 +96,7 @@ export function RunExport({ snap, canResend }: { snap: SessionSnapshot; canResen
 
 /** The admins' Export card on Observability. Nothing for anyone else, or while it is off. */
 export function ExportCard() {
+  const docs = useDocsBase();
   const [status, reload] = useExportStatus();
   const [busy, setBusy] = useState("");
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
@@ -126,7 +129,7 @@ export function ExportCard() {
     }
   };
   return (
-    <Container header={<Header variant="h2" description="Where this app's runs are sent as they end."
+    <Container header={<Header variant="h2" description="Where this app's runs are sent as they end." info={infoSlot(docs, "run.export")}
       actions={<SpaceBetween direction="horizontal" size="xs">
         <Button loading={busy === "test"} onClick={() => void testTrace()}>Send test trace</Button>
         <Button loading={busy === "pause"} onClick={() => void pause(!status.paused)}>{status.paused ? "Resume" : "Pause"}</Button>

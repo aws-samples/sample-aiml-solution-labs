@@ -46,6 +46,8 @@ import { toolsLabel } from "../lib/tools";
 import { workflowVersionLabel } from "../lib/workflowVersion";
 import { configLabel } from "../lib/liveConfig";
 import { overrideLabel } from "../lib/modelOverride";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 /** One row of the Steps table. FLATTENED on purpose: a sortable column needs a scalar
  *  `sortingField`, so anything the table sorts by is computed once here rather than
@@ -136,6 +138,7 @@ export function RunDetail({
   onTabChange: (id: string) => void;
   onRerun: (agents: string[], comment: string) => Promise<void>;
 }) {
+  const docs = useDocsBase();
   const nodes = snap.nodes ?? {};
   // What each agent's components did in this run, for the graph's rows: the run's Flow
   // events (the same route the Flow tab reads), read on open and again as the run moves on.
@@ -235,6 +238,7 @@ export function RunDetail({
       <Header
         variant="h1"
         description={`Run ${snap.session_id}`}
+        info={infoSlot(docs, "run")}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {readOnly ? null : actions}
@@ -261,7 +265,7 @@ export function RunDetail({
           {ended.text}
         </Alert>
       ) : null}
-      <Container header={<Header variant="h2">Details</Header>}>
+      <Container header={<Header variant="h2" info={infoSlot(docs, "run.details")}>Details</Header>}>
         <KeyValuePairs
           columns={4}
           items={[
@@ -313,6 +317,7 @@ export function RunDetail({
                     description={settled
                       ? "Each step lists its tools and AgentCore features: click one to see what it did in this run. Select a step for its configuration, output and re-run controls. Restart the whole workflow from the toolbar."
                       : "Each step lists its tools and AgentCore features: click one to see what it did in this run. Select a step for its configuration and output."}
+                    info={infoSlot(docs, "run.graph")}
                   >
                     Workflow
                   </Header>
@@ -344,7 +349,7 @@ export function RunDetail({
                 onRowClick={({ detail }) => onSelect(detail.item.id)}
                 selectedItems={stepRows.filter((r) => r.id === selected)}
                 header={
-                  <Header variant="h2" counter={`(${steps.filteredItemsCount ?? ids.length})`}>
+                  <Header variant="h2" counter={`(${steps.filteredItemsCount ?? ids.length})`} info={infoSlot(docs, "run.table")}>
                     Steps
                   </Header>
                 }
@@ -406,7 +411,7 @@ export function RunDetail({
             content: timelineView === "chart" ? (
               <Container
                 header={
-                  <Header variant="h2" actions={timelineToggle}
+                  <Header variant="h2" actions={timelineToggle} info={infoSlot(docs, "run.timeline")}
                     description="Each step's run, left to right in time, with its tool, model, guardrail, memory, policy and evaluation calls inside it. Hover or focus a bar for its details.">
                     Timeline
                   </Header>
@@ -425,6 +430,7 @@ export function RunDetail({
                     variant="h2"
                     actions={timelineToggle}
                     counter={`(${events.filteredItemsCount ?? eventRows.length})`}
+                    info={infoSlot(docs, "run.timeline")}
                     description="Newest first. Branch decisions, guardrail blocks and ungrounded-figure warnings appear here."
                   >
                     Events
@@ -467,7 +473,7 @@ export function RunDetail({
             content: (
               <Container
                 header={
-                  <Header variant="h2" description="What each agent did with the Gateway, memory, policy and guardrails, in order. Story tells it stage by stage, one line per call; Summary counts each agent's events. Replay them from the start.">
+                  <Header variant="h2" info={infoSlot(docs, "run.flow")} description="What each agent did with the Gateway, memory, policy and guardrails, in order. Story tells it stage by stage, one line per call; Summary counts each agent's events. Replay them from the start.">
                     Flow
                   </Header>
                 }
@@ -483,7 +489,7 @@ export function RunDetail({
             content: (
               <Container
                 header={
-                  <Header variant="h2" counter={`(${ids.filter((i) => nodes[i]?.output).length})`}>
+                  <Header variant="h2" counter={`(${ids.filter((i) => nodes[i]?.output).length})`} info={infoSlot(docs, "run.outputs")}>
                     Step outputs
                   </Header>
                 }

@@ -25,6 +25,8 @@ import {
   type RunFile, type RunFiles as RunFilesBody,
 } from "../lib/files";
 import type { Workflow } from "../types";
+import { useDocsBase } from "../docs/docsLinks";
+import { infoSlot } from "../docs/InfoLink";
 
 const GROUPS: { id: FileGroup; title: string; description: string; empty: string }[] = [
   { id: "input", title: "Inputs", description: "The files the run was started with.", empty: "This run was started without files." },
@@ -164,6 +166,7 @@ export function agentName(workflow: Workflow | undefined, id: string): string {
 export function RunFiles({ sessionId, workflow, refreshKey }: {
   sessionId: string; workflow: Workflow; refreshKey?: string;
 }) {
+  const docs = useDocsBase();
   const [body, setBody] = useState<RunFilesBody | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewing, setPreviewing] = useState<RunFile | null>(null);
@@ -179,7 +182,7 @@ export function RunFiles({ sessionId, workflow, refreshKey }: {
   if (!body) return <Spinner size="large" />;
   if (!body.stored) {
     return (
-      <Container header={<Header variant="h2">Files</Header>}>
+      <Container header={<Header variant="h2" info={infoSlot(docs, "run.files")}>Files</Header>}>
         <Box color="text-status-inactive">
           {body.note ?? "This deployment keeps no run files. Set orchestrator.files in workflow.json to keep what agents make."}
         </Box>
@@ -189,7 +192,7 @@ export function RunFiles({ sessionId, workflow, refreshKey }: {
   return (
     <SpaceBetween size="l">
       {body.truncated ? <Alert type="info">This run has more files than the page lists.</Alert> : null}
-      {GROUPS.map((g) => {
+      {GROUPS.map((g, gi) => {
         const items = body.files.filter((f) => f.group === g.id);
         return (
           <Table
@@ -197,7 +200,8 @@ export function RunFiles({ sessionId, workflow, refreshKey }: {
             variant="container"
             items={items}
             trackBy="key"
-            header={<Header variant="h2" counter={`(${items.length})`} description={g.description}>{g.title}</Header>}
+            header={<Header variant="h2" counter={`(${items.length})`} description={g.description}
+              info={gi === 0 ? infoSlot(docs, "run.files") : undefined}>{g.title}</Header>}
             empty={<Box color="text-status-inactive">{g.empty}</Box>}
             columnDefinitions={[
               { id: "name", header: "Name", isRowHeader: true, minWidth: 200, cell: (f) => f.name },

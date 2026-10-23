@@ -31,6 +31,8 @@ import type { Project } from "./model";
 import { designChanges, designer, type DesignChange, type DesignDoc, type DesignTurn, type ReviewMode } from "./storage";
 import type { Issue } from "./validate";
 import { gitTokenNames } from "./codeSource";
+import { useDocsBase } from "../docs/docsLinks";
+import { InfoLink, infoSlot } from "../docs/InfoLink";
 
 /** Literal \\uXXXX sequences as the characters they name. The model sometimes
  *  double-escapes one in a change summary (an arrow arrives as "\\u2192"); summaries
@@ -244,6 +246,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
   /** A demo video to offer before the first message (Builder: a first visit to a console). */
   demoUrl?: string;
 }) {
+  const docs = useDocsBase();
   const [doc, setDoc] = useState<DesignDoc | null>(null);
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -377,6 +380,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
         header={
           <Header variant="h2"
             description="Say what you want to build. It drafts the workflow, asks what it needs, and updates the build as you talk. Undo any change from the toolbar."
+            info={infoSlot(docs, "assistant")}
             actions={doc.turns.length ? <Button iconName="refresh" onClick={() => void startOver()} disabled={thinking}>Start over</Button> : undefined}>
             AgentExpress Assistant
           </Header>
@@ -413,7 +417,7 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
               {doc.attach?.s3?.length ? <> S3 paths can be in: {doc.attach.s3.join(", ")}.</> : null} It never
               deploys; you do that from Deploy.
             </Box>
-            <FormField label={REVIEW_LABEL} description={REVIEW_HELP}>
+            <FormField label={REVIEW_LABEL} description={REVIEW_HELP} info={infoSlot(docs, "assistant.review")}>
               <SegmentedControl label={REVIEW_LABEL} selectedId={review} options={REVIEW_OPTIONS}
                 onChange={({ detail }) => { const v = detail.selectedId as ReviewMode; setReview(v); writeReview(v); }} />
             </FormField>
@@ -470,7 +474,8 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
       <SpaceBetween size="m">
         <Container header={<Header variant="h2"
           description={latest ? `Last change: ${unescape(latest.summary)}` : "The build, as the conversation shapes it."}
-          info={<StatusIndicator type={errors ? "warning" : "success"}>{errors ? `${errors} to fix` : "Valid"}</StatusIndicator>}>
+          info={<><StatusIndicator type={errors ? "warning" : "success"}>{errors ? `${errors} to fix` : "Valid"}</StatusIndicator>
+            <InfoLink feature="assistant.workflow" /></>}>
           Workflow</Header>}>
           <div className="axd-preview">
             <Canvas workflow={project.workflow} issues={issues} selection={null} onSelect={() => undefined}
@@ -479,7 +484,8 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
           </div>
         </Container>
         {secrets.length ? (
-          <Container header={<Header variant="h3" description="Enter these here, never in the chat. Each is stored encrypted with this build, used only by the Gateway or the agent that needs it, and never shown again.">Secrets</Header>}>
+          <Container header={<Header variant="h3" description="Enter these here, never in the chat. Each is stored encrypted with this build, used only by the Gateway or the agent that needs it, and never shown again."
+            info={infoSlot(docs, "assistant.secrets")}>Secrets</Header>}>
             <SpaceBetween size="m">
               {secrets.map((s) => (
                 <SecretField key={`${s.kind}:${s.name}`} buildId={project.id} kind={s.kind} name={s.name}
@@ -489,14 +495,16 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
           </Container>
         ) : null}
         {inputs.length ? (
-          <Container header={<Header variant="h3" description="Only you can give these. Reply in the chat, or fill them in under Build manually. Deploy waits for them.">Needs your input</Header>}>
+          <Container header={<Header variant="h3" description="Only you can give these. Reply in the chat, or fill them in under Build manually. Deploy waits for them."
+            info={infoSlot(docs, "assistant.inputs")}>Needs your input</Header>}>
             <ul className="axd-list">
               {inputs.map((n) => <li key={n.path}><code>{n.path}</code> — {n.question}</li>)}
             </ul>
           </Container>
         ) : null}
         {defaults.length ? (
-          <Container header={<Header variant="h3" description="Chosen for you where you didn't say. Ask for something else, or change it by hand.">Defaults used</Header>}>
+          <Container header={<Header variant="h3" description="Chosen for you where you didn't say. Ask for something else, or change it by hand."
+            info={infoSlot(docs, "assistant.defaults")}>Defaults used</Header>}>
             <ul className="axd-list">{defaults.map((d) => <li key={d}>{d}</li>)}</ul>
           </Container>
         ) : null}
