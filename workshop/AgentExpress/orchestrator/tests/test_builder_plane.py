@@ -20,8 +20,8 @@ VARIABLES = "\n".join(p.read_text() for p in (ORCH / "terraform").glob("*.tf"))
 
 sys.path.insert(0, str(ORCH / "bff"))
 sys.path.insert(0, str(ORCH / "deployer"))
-import buildstore  # noqa: E402
-import runner  # noqa: E402
+import buildstore  # noqa: E402 - after the sys.path insert that makes it importable
+import runner  # noqa: E402 - after the sys.path insert that makes it importable
 
 
 def test_the_build_name_prefix_is_the_same_everywhere():
@@ -245,7 +245,7 @@ def test_the_limit_counter_iam_is_the_same_on_both_paths_and_stays_on_the_reserv
     assert stack.count('"dynamodb:LeadingKeys": [LIMIT_COUNTER_KEYS]') == 3
     assert 'const LIMIT_COUNTER_KEYS = "_limit#*";' in stack
     # And the key prefix the code files its rows under is the one the IAM allows.
-    import limits  # noqa: PLC0415
+    import limits
     assert limits.PREFIX + "*" == "_limit#*"
     # Nothing but the BFF may read these rows; nothing may delete them.
     assert "dynamodb:DeleteItem" not in obs.split('Sid      = "LimitCounters"')[1].split("}]")[0]

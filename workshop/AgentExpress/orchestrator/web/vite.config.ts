@@ -47,6 +47,14 @@ export default defineConfig(({ command, mode }) => {
       environment: "jsdom",
       globals: true,
       include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+      // Half the cores, not vitest's default of all but one. Each worker runs a jsdom and
+      // renders Cloudscape, which is CPU-bound, so one per core oversubscribed the machine
+      // (more so beside whatever else it runs), and a test's wall-clock limits (1 s for a
+      // findBy/waitFor, 5 s for a test) measured the scheduler instead of the app: tests
+      // that render the whole App took 1-8 s and failed at random. At half, the slowest
+      // takes about 3-5 s, and a whole run takes about as long as before.
+      maxWorkers: "50%",
+      minWorkers: 1,
     },
   };
 }) as never;

@@ -166,12 +166,14 @@ resource "aws_iam_role_policy" "runtime" {
         # CloudWatch Logs resource policy so X-Ray can deliver spans to the agent's
         # own log group. Without it, unified spans never reach CloudWatch. (Docs:
         # observability-configure — "Span destination for agents hosted in
-        # AgentCore runtime".) PutResourcePolicy is account-scoped -> Resource "*".
-        Sid    = "AgentCoreUnifiedSpanDelivery"
-        Effect = "Allow"
-        # PutResourcePolicy is account-scoped in IAM (no resource type); needed for AgentCore span delivery.
-        Action   = ["logs:PutResourcePolicy"] # nosemgrep
-        Resource = ["*"]
+        # AgentCore runtime".) Scoped to the runtimes' log groups, as the execution role in
+        # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html shows (one role serves several runtimes here, hence runtimes/*).
+        # The Service Authorization Reference lists no resource type for this action;
+        # a live tracing test decides whether this scope holds. Same ARN in all 5 places.
+        Sid      = "AgentCoreUnifiedSpanDelivery"
+        Effect   = "Allow"
+        Action   = ["logs:PutResourcePolicy"]
+        Resource = ["arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"]
       },
       {
         Effect   = "Allow"

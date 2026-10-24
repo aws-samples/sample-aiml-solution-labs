@@ -14,7 +14,7 @@ import { OrchestratorStack } from "../lib/orchestrator-stack";
 import { otlpExport } from "../lib/otlp-export";
 
 const ORCH_ROOT = path.join(__dirname, "..", "..");
-const ARN = "arn:aws:secretsmanager:eu-west-1:210987654321:secret:otlp-headers-AbC123";
+const ARN = "arn:aws:secretsmanager:eu-west-1:444455556666:secret:otlp-headers-AbC123";
 const ENDPOINT = "https://cloud.langfuse.com/api/public/otel/v1/traces";
 const ENV_KEYS = ["OTLP_EXPORT_ENDPOINT", "OTLP_EXPORT_HEADERS_SECRET_ARN", "OTLP_EXPORT_INCLUDE_CONTENT"];
 
@@ -112,7 +112,7 @@ describe("the OTLP export, on", () => {
       expect(decrypt).toEqual({
         Sid: "DecryptOtlpHeadersSecret", Effect: "Allow", Action: "kms:Decrypt",
         // The secret's own region and account (it may be in neither of the stack's).
-        Resource: "arn:aws:kms:eu-west-1:210987654321:key/*",
+        Resource: "arn:aws:kms:eu-west-1:444455556666:key/*",
         Condition: { StringEquals: {
           "kms:ViaService": "secretsmanager.eu-west-1.amazonaws.com",
           "kms:EncryptionContext:SecretARN": ARN,
@@ -135,7 +135,7 @@ describe("the settings are checked at synth, as Terraform checks them at plan", 
     [{ otlpEndpoint: "http://cloud.langfuse.com/api/public/otel/v1/traces", otlpHeadersSecretArn: ARN }, "https://"],
     [{ otlpEndpoint: "https://u:p@collector.example.com/v1/traces", otlpHeadersSecretArn: ARN }, "https://"],
     [{ otlpEndpoint: "https://collector.example.com/v1/traces?k=v", otlpHeadersSecretArn: ARN }, "https://"],
-    [{ otlpEndpoint: ENDPOINT, otlpHeadersSecretArn: "arn:aws:secretsmanager:eu-west-1:210987654321:secret:otlp" }, "full ARN"],
+    [{ otlpEndpoint: ENDPOINT, otlpHeadersSecretArn: "arn:aws:secretsmanager:eu-west-1:444455556666:secret:otlp" }, "full ARN"],
     [{ otlpEndpoint: ENDPOINT, otlpHeadersSecretArn: "*" }, "full ARN"],
   ])("refuses %j", (settings, message) => {
     expect(() => otlpExport(settings)).toThrow(message);

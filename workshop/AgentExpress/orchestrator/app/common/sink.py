@@ -191,7 +191,7 @@ def nodes_in_status(sid: str, status: str) -> list[str]:
     else:
         try:
             item = _table(STATUS_TABLE).get_item(Key=_key(sid)).get("Item") or {}
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - an unreadable status row reads as no nodes
             return []
     nodes = item.get("nodes") or {}
     return [nid for nid, v in nodes.items() if (v or {}).get("status") == status]

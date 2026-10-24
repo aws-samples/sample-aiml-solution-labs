@@ -16,7 +16,7 @@ from conftest import ORCH_ROOT
 
 moto = pytest.importorskip("moto")
 from test_builds import call  # noqa: E402  - the moto-backed BFF, and its fixture:
-from test_builds import env as env  # noqa: E402
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 GW = 'resource == AgentCore::Gateway::"{{gateway}}"'
 FORBID = (f'forbid(principal, action == AgentCore::Action::"refunds___issueRefund", {GW}) '

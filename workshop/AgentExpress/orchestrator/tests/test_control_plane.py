@@ -17,7 +17,7 @@ import boto3
 import pytest
 
 moto = pytest.importorskip("moto")
-from test_builds import (  # noqa: E402
+from test_builds import (  # noqa: E402 - after the moto importorskip
     MODULES,
     RULES,
     _events_table,
@@ -25,7 +25,7 @@ from test_builds import (  # noqa: E402
     call,
     create_builds_table,
 )
-from test_builds import env as env  # noqa: E402
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 # --- a control-plane console ------------------------------------------------------------
 

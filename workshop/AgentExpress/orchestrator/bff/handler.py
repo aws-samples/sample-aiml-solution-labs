@@ -104,8 +104,8 @@ import gates
 import library
 import limits
 import litellm_models
-import memories
 import liveconfig
+import memories
 import model_override
 import policies
 import registry
@@ -358,6 +358,18 @@ def _everyone(event: dict) -> bool:
             and _is_admin(event))
 
 
+def _invoke_answer(resp: dict) -> dict:
+    """The runtime's JSON answer to an invoke ({} when it is not a JSON object)."""
+    try:
+        stream = resp.get("response")
+        data = json.loads(stream.read() if hasattr(stream, "read") else stream)
+        if isinstance(data, str):
+            data = json.loads(data)
+    except Exception:  # noqa: BLE001 - an unreadable answer is no answer
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _self_invoke(fn_name: str, payload: dict) -> None:
     lambda_client.invoke(FunctionName=fn_name, InvocationType="Event",
                          Payload=json.dumps(payload).encode())
@@ -420,11 +432,17 @@ def _run(event: dict) -> dict:
         runtime_session = session_id.ljust(33, "0")[:33]
     target = _build_target(event["build"]) if event.get("build") else _default_target()
     try:
-        agentcore.invoke_agent_runtime(
+        resp = agentcore.invoke_agent_runtime(
             agentRuntimeArn=target["runtimeArn"],
             runtimeSessionId=runtime_session,
             payload=json.dumps(payload).encode())
-    except Exception as e:  # noqa: BLE001
+        if action == "rerun_from":
+            # The runtime validates the rewind before it spawns it and answers at once; a
+            # refusal (e.g. a step after an ungated parallel stage) changes nothing, so log why.
+            answer = _invoke_answer(resp)
+            if answer.get("error"):
+                print(f"[runner] re-run refused for {session_id}: {answer['error']}")
+    except Exception as e:  # noqa: BLE001 - a failed invoke marks the run failed, logged
         target["status"].update_item(
             Key={"session_id": session_id},
             UpdateExpression="SET overall = :o, updated_at = :u",
@@ -631,7 +649,7 @@ def _insights_latest(runtime_arn: str | None = None) -> dict:
         # Tolerate a runtime body that is a JSON-encoded string wrapping the JSON.
         if isinstance(data, str):
             data = json.loads(data)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - answered as a 502, with the cause logged
         print(f"[insights] {type(e).__name__}: {e}")
         return _resp(502, {"error": "insights read failed"})
     return _resp(200, data if isinstance(data, dict) else {"status": "none"})
@@ -1222,7 +1240,7 @@ def _audit_run(event: dict, action: str, sid: str, **detail) -> None:
         ip = ((event.get("requestContext") or {}).get("http") or {}).get("sourceIp", "")
         audit.record(builds.owner_of(claims), str(claims.get("email") or ""), action,
                      session=sid, ip=ip, **{k: v for k, v in detail.items() if v not in (None, "")})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a missed audit row is logged, never fails the request
         print(f"[audit] {action} {sid}: {type(e).__name__}: {e}")
 
 
@@ -1274,7 +1292,7 @@ def _begin_run(context, target: dict, topic: str, owner: str, user: str, *, file
     item.update(item_extra or {})
     try:
         target["status"].put_item(Item=item, ConditionExpression="attribute_not_exists(session_id)")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - only the id collision is expected; others are logged
         # Only the id-collision race is expected here. Anything else (denied,
         # throttled, malformed) used to be swallowed identically and the run was
         # started anyway — so the UI polled a session that would never appear and
@@ -1324,7 +1342,7 @@ def _claim_decision(tbl, sid: str, hitl: dict | None) -> bool:
         tbl.update_item(Key={"session_id": sid}, UpdateExpression="SET hitl.decidedAt = :t",
                         ConditionExpression=expr, ExpressionAttributeValues=vals)
         return True
-    except Exception as e:  # noqa: BLE001 - only a failed condition means "taken"
+    except Exception as e:  # only a failed condition means "taken"
         code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
         if code == "ConditionalCheckFailedException":
             return False
@@ -1653,8 +1671,9 @@ def _route(event: dict, context) -> dict:
                                      lambda action, **d: _audit_run(event, action, "", **d)))
 
     # The activity log (bff/audit.py): your own, or — with the `audit` permission —
-    # everyone else's over a range of days (yours are under "mine", not repeated there). Sign-ins are logged by the Cognito trigger; sign-outs here,
-    # called by the page just before it signs out. On a console AND in a build's app.
+    # everyone else's over a range of days (yours are under "mine", not repeated there).
+    # Sign-ins are logged by the Cognito trigger; sign-outs here, called by the page just
+    # before it signs out. On a console AND in a build's app.
     if route_key == "GET /api/audit":
         qs = event.get("queryStringParameters") or {}
         everyone = qs.get("scope") == "all"
@@ -2178,7 +2197,7 @@ def handler(event, context):
         return _run(event)
     try:
         return _api(event, context)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - names the failure instead of API Gateway's bare 500
         # NAME THE FAILURE. Without this, anything unhandled in _api escapes to API
         # Gateway, which answers `{"message": "Internal Server Error"}` — and that is
         # what the browser then shows. The route is absent, the exception type is

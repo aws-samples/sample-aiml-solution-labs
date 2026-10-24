@@ -17,7 +17,7 @@ import copy
 import json
 
 import pytest
-from test_builds import CTX, call, env, project, save  # noqa: F401
+from test_builds import CTX, call, env, project, save  # noqa: F401 - env is the builds fixture, taken by name
 
 moto = pytest.importorskip("moto")
 
@@ -516,8 +516,8 @@ def test_the_spec_says_how_to_put_a_runtime_in_a_vpc(env):
     """"Run the dedicated agent in my VPC" in chat: the assistant reads both network keys,
     their whole shape, who each applies to, and the allowed modes."""
     text = env.handler.designer.system_prompt()[0]["text"]
-    agent_line = next(l for l in text.splitlines() if l.startswith("  - `network` (object; for dedicated)"))
-    orch_line = next(l for l in text.splitlines() if l.startswith("  - `network` (object)"))
+    agent_line = next(ln for ln in text.splitlines() if ln.startswith("  - `network` (object; for dedicated)"))
+    orch_line = next(ln for ln in text.splitlines() if ln.startswith("  - `network` (object)"))
     for line in (agent_line, orch_line):
         assert not line.endswith("..."), line
         for part in ('"mode": "VPC"', '"subnetIds"', '"securityGroupIds"', '{"mode": "PUBLIC"}', "Omitted: PUBLIC"):
@@ -679,6 +679,24 @@ def test_the_conversation_is_cached_up_to_the_newest_message(env):
     points = [i for i, m in enumerate(out) for b in m["content"] if "cachePoint" in b]
     assert points == [2], "exactly one cache point, after the newest message"
     assert msgs[2]["content"] == [{"text": "c"}], "the caller's messages are not changed"
+
+
+def test_the_cache_point_never_follows_an_attached_document(env):
+    """Bedrock rejects a cache point right after a document block, and a message with an
+    attached file ends with it: every message with a file failed with ValidationException."""
+    designer = env.handler.designer
+    doc = {"document": {"format": "txt", "name": "notes", "source": {"bytes": b"x"}}}
+    out = designer._cached([{"role": "user", "content": [{"text": "c"}, {"text": "files:"}, doc]}])
+    assert out[0]["content"] == [{"text": "c"}, {"text": "files:"}, {"cachePoint": {"type": "default"}}, doc]
+    only_docs = designer._cached([{"role": "user", "content": [doc]}])
+    assert only_docs[0]["content"] == [doc], "no block it may follow: no cache point"
+
+
+def test_the_guide_sends_test_suites_to_the_tests_tab(env):
+    """Asked for a test suite, the Assistant said to run cases "from Start run": its guide
+    never said suites are written and run on the Tests tab."""
+    guide = env.handler.designer.system_prompt()[0]["text"]
+    assert "test suites" in guide and "Tests tab" in guide
 
 
 def test_a_turn_out_of_time_carries_on_in_a_fresh_invocation(env, model, monkeypatch):

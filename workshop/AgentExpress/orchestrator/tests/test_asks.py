@@ -568,9 +568,9 @@ class CondTable:
 
     def update_item(self, **kw):
         self.calls.append(kw)
-        if kw.get("ConditionExpression") == "hitl.askId = :a":
-            if (self.item.get("hitl") or {}).get("askId") != kw["ExpressionAttributeValues"][":a"]:
-                raise RuntimeError("ConditionalCheckFailedException")
+        if (kw.get("ConditionExpression") == "hitl.askId = :a"
+                and (self.item.get("hitl") or {}).get("askId") != kw["ExpressionAttributeValues"][":a"]):
+            raise RuntimeError("ConditionalCheckFailedException")
         if "hitl = :z" in kw["UpdateExpression"]:
             self.item["hitl"] = None
             self.item["overall"] = kw["ExpressionAttributeValues"][":ov"]
@@ -793,7 +793,8 @@ def test_the_claim_against_dynamodb_itself(bff):
         assert claim(tbl, "s1", {"node": "review"}) is False
         put("waiting_human", dict(QUESTION))                             # the runtime waits again
         assert claim(tbl, "s1", QUESTION) is True
-        with pytest.raises(Exception):                                   # anything else is not "taken"
+        # B017: any error but a failed condition propagates; which one is moto's choice.
+        with pytest.raises(Exception):  # noqa: B017 - anything else is not "taken"
             claim(ddb.Table("missing"), "s1", QUESTION)
 
 

@@ -35,7 +35,8 @@ def check(tool: dict, path: str, where: dict, add, denied: list[str]) -> None:
             kinds = [s for s in shapes.values() if isinstance(s, dict)]
             services = [s for s in kinds if s.get("type") == "service"]
             if not services:
-                add("error", where, f"{path}.schema.shapes", "has no service shape: the model must describe one AWS service")
+                add("error", where, f"{path}.schema.shapes",
+                    "has no service shape: the model must describe one AWS service")
             if not any(s.get("type") == "operation" for s in kinds):
                 add("error", where, f"{path}.schema.shapes", "has no operation, so the target would expose no tool")
             if services and not any(isinstance(s.get("traits"), dict) and "aws.protocols#restJson1" in s["traits"]
@@ -44,7 +45,8 @@ def check(tool: dict, path: str, where: dict, add, denied: list[str]) -> None:
                     "names no service using aws.protocols#restJson1: the Gateway supports only the RestJson protocol")
     uri = tool.get("schemaS3Uri")
     if isinstance(uri, str) and not S3_URI_RE.search(uri):
-        add("error", where, f"{path}.schemaS3Uri", "must be s3://<bucket>/<key> — the Gateway loads a Smithy model from S3 or inline")
+        add("error", where, f"{path}.schemaS3Uri",
+            "must be s3://<bucket>/<key> — the Gateway loads a Smithy model from S3 or inline")
     if "allow" not in tool:
         return
     allow = tool.get("allow")
@@ -58,10 +60,12 @@ def check(tool: dict, path: str, where: dict, add, denied: list[str]) -> None:
     else:
         for i, a in enumerate(actions):
             if not isinstance(a, str) or not ACTION_RE.match(a):
-                add("error", where, f"{path}.allow.actions[{i}]", "must be one named IAM action, like dynamodb:GetItem (no *)")
+                add("error", where, f"{path}.allow.actions[{i}]",
+                    "must be one named IAM action, like dynamodb:GetItem (no *)")
             elif a.split(":", 1)[0] in denied:
                 add("error", where, f"{path}.allow.actions[{i}]",
-                    f"{a.split(':', 1)[0]} is not allowed: a Smithy tool's calls run as the Gateway role every tool shares")
+                    f"{a.split(':', 1)[0]} is not allowed: "
+                    "a Smithy tool's calls run as the Gateway role every tool shares")
     resources = allow.get("resources")
     if not isinstance(resources, list) or not 0 < len(resources) <= MAX_ENTRIES:
         add("error", where, f"{path}.allow.resources", "must list 1 to 20 resource ARNs")
@@ -69,4 +73,5 @@ def check(tool: dict, path: str, where: dict, add, denied: list[str]) -> None:
         for i, r in enumerate(resources):
             if not isinstance(r, str) or not ARN_RE.match(r):
                 add("error", where, f"{path}.allow.resources[{i}]",
-                    "must be a full ARN with its region and account written out (or empty where the service has none), not a bare *")
+                    "must be a full ARN with its region and account written out "
+                    "(or empty where the service has none), not a bare *")

@@ -129,6 +129,10 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   // "builder": a control-plane console (design, build, deploy; runs live in each build's
   // app). "app" (the default): this workflow's own app.
   consoleMode: String(ctx("consoleMode", "app")),
+  // Termination protection: on by default for a control plane (consoleMode=builder), off for
+  // a workflow app and every build stack. -c terminationProtection=true|false overrides it.
+  terminationProtection: app.node.tryGetContext("terminationProtection") === undefined
+    ? undefined : String(app.node.tryGetContext("terminationProtection")) === "true",
   // A link to a product demo video, shown on a control-plane console (consoleMode=builder):
   // -c demoVideoUrl=https://... An https URL or empty (the default: no link).
   demoVideoUrl: ctx("demoVideoUrl", ""),

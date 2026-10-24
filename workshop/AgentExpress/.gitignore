@@ -41,3 +41,9 @@ terraform.tfvars
 
 # Demo recordings are hosted outside the repository
 *.mp4
+
+# Local working folders: agent task notes, git worktrees, and a stale local copy
+# of the repo at the root
+.agents/
+.worktrees/
+/agentexpress/

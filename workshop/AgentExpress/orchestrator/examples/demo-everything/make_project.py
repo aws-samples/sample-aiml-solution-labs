@@ -29,8 +29,10 @@ BUCKET = os.environ.get("AX_DEMO_BUCKET", "amzn-s3-demo-bucket")
 HAIKU = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_PRO = "us.amazon.nova-pro-v1:0"
 NOVA_LITE = "us.amazon.nova-lite-v1:0"
-#: The model GetFoundationModel looks up, and the one exact ARN the Smithy grant names.
-LOOKED_UP = "anthropic.claude-3-haiku-20240307-v1:0"
+#: The model GetFoundationModel looks up, and the one exact ARN the Smithy grant names: the
+#: foundation model behind HAIKU, the model the demo runs on, so the lookup names a model
+#: that is live whenever the demo can run (a retired one answers "reached end of life").
+LOOKED_UP = HAIKU.split(".", 1)[1]
 #: The placeholder the owner replaces in project.byo-harness.json. It has the shape of a
 #: harness ARN so the file validates; the account 000000000000 does not exist.
 BYO_PLACEHOLDER = "arn:aws:bedrock-agentcore:us-east-1:000000000000:harness/REPLACE_ME-XXXXXXXXXX"
@@ -100,7 +102,9 @@ CLAIMS_EVENTS = json.dumps([{"name": "a get_claim call", "tool": "get_claim",
 # --- the interceptors (generated from the Build view's templates) -------------------
 
 INTERCEPTORS = {
-    "request": {"code": {}, "templates": {
+    # passRequestHeaders: the audit line says which run, agent and user called (the x-ax-*
+    # headers); without them those fields are blank.
+    "request": {"code": {}, "passRequestHeaders": True, "templates": {
         "audit": {},
         "argumentGuard": {"denyPatterns": ["(?i)drop\\s+table", "(?i)rm\\s+-rf"], "maxArgumentChars": 20000},
     }},
@@ -231,7 +235,11 @@ AGENTS = {
     "policyCheck": {"name": "Policy check", "runtime": "main", "produces": "coverage", "maxTokens": 1200,
                     "tool": "warranty", "corpus": "policy",
                     "agentcore": {"memory": {"longTerm": ["summary"]}}},
+    # Prompt caching: Nova Pro caches from 1K tokens (Claude Haiku 4.5 needs 4,096, more
+    # than any call here), and each tool call's answer makes the conversation the next
+    # call re-sends, so the 2nd and 3rd calls read it from the cache.
     "research": {"name": "Research", "runtime": "main", "produces": "research", "maxTokens": 1500,
+                 "model": NOVA_PRO, "promptCache": {"system": True, "messages": True},
                  "tool": ["webSearch", "awsDocs"], "toolMode": "model", "maxToolCalls": 3},
     "coder": {"name": "Cover calculator", "runtime": "main", "maxTokens": 800,
               "tool": "codeTool", "toolMode": "model", "maxToolCalls": 2},
@@ -426,7 +434,7 @@ def bundle(body: dict) -> dict:
 
 
 def outputs() -> dict[str, str]:
-    dump = lambda d: json.dumps(d, indent=1, ensure_ascii=False) + "\n"  # noqa: E731
+    dump = lambda d: json.dumps(d, indent=1, ensure_ascii=False) + "\n"  # noqa: E731 - a one-line local helper
     main, byo = project(), project(byo=True)
     return {"project.json": dump(main), "project.byo-harness.json": dump(byo),
             "bundle.json": dump(bundle(main)), "bundle.byo-harness.json": dump(bundle(byo))}

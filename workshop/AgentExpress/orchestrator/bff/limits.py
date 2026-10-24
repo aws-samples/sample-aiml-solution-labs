@@ -177,7 +177,7 @@ def _take_run_slot(table, user: str, limit: int, now) -> None:
             ConditionExpression="attribute_not_exists(runs) OR runs < :max",
             ExpressionAttributeNames={"#ttl": "ttl"},
             ExpressionAttributeValues={":one": 1, ":max": limit, ":ttl": int(time.time()) + RUNS_TTL_SECONDS})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
         if code != "ConditionalCheckFailedException":
             raise
@@ -207,7 +207,7 @@ def usage(table, raw: dict | None, user: str, now=None) -> dict:
             return
         try:
             used = read()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - unreadable usage is logged and does not block
             print(f"[limits] usage not read ({name}): {type(e).__name__}: {e}")
             return
         share = decimal.Decimal(str(used)) / decimal.Decimal(str(limit))

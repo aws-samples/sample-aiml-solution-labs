@@ -24,7 +24,6 @@ import json
 import re
 import sys
 import types
-from pathlib import Path
 
 import boto3
 import pytest
@@ -32,7 +31,7 @@ from conftest import ORCH_ROOT, workflow
 
 moto = pytest.importorskip("moto")
 
-from test_builds import CTX, FakeCodeBuild, _events_table, _status_table, create_builds_table  # noqa: E402
+from test_builds import CTX, FakeCodeBuild, _events_table, _status_table, create_builds_table  # noqa: E402 - after the moto importorskip
 
 TF = ORCH_ROOT / "terraform"
 STACK = (ORCH_ROOT / "cdk" / "lib" / "orchestrator-stack.ts").read_text()
@@ -301,7 +300,7 @@ def test_a_model_the_runtimes_iam_does_not_cover_is_refused(make):
     e = make(_wf())
     for model in (f"arn:aws:bedrock:us-east-1:{ACCOUNT}:custom-model/abc",
                   f"arn:aws:bedrock:us-east-1:{ACCOUNT}:provisioned-model/abc",
-                  f"arn:aws:bedrock:us-east-1:999999999999:inference-profile/us.x.y",
+                  "arn:aws:bedrock:us-east-1:999999999999:inference-profile/us.x.y",
                   f"arn:aws:bedrock:eu-west-1:{ACCOUNT}:application-inference-profile/abc",
                   "not a model"):
         status, body = _save(e, {"a": {"model": model}})
@@ -359,7 +358,7 @@ def test_a_version_is_written_once_and_kept(make, monkeypatch):
     assert _save(e, {"a": {"temperature": 0.1}})[1]["version"] == 1
     # Two admins saving at once: both computed "next is 1"; the second must not overwrite.
     monkeypatch.setattr(e.lc, "versions_top", lambda table: 0)
-    status, body = _save(e, {"a": {"temperature": 0.9}})
+    status, _body = _save(e, {"a": {"temperature": 0.9}})
     assert status == 409
     got = call(e, "GET /api/liveconfig/versions/{version}", params={"version": "1"})[1]
     assert got["overlay"] == {"a": {"temperature": 0.1}}
@@ -406,7 +405,7 @@ def test_a_stale_activation_is_refused_not_overwritten(make):
     _save(e, {"a": {"temperature": 0.1}})
     _save(e, {"a": {"temperature": 0.2}})
     _activate(e, 1, 0)
-    status, body = _activate(e, 2, 0)                        # this admin last saw v0 active
+    status, _body = _activate(e, 2, 0)                       # this admin last saw v0 active
     assert status == 409
     assert call(e, "GET /api/liveconfig")[1]["pointer"]["active"] == 1
 
@@ -685,6 +684,6 @@ def test_the_dedicated_container_runs_the_version_it_is_sent(monkeypatch):
 def test_runtime_and_state_carry_the_key_where_the_design_says():
     """Pins the wiring the tests above exercise, so a refactor cannot quietly drop a hop."""
     state = (ORCH_ROOT / "app" / "common" / "state.py").read_text()
-    assert re.search(r"^\s+liveconfig: dict\s*$", state, re.M)          # a plain channel, set once
+    assert re.search(r"^\s+liveconfig: dict\s*$", state, re.MULTILINE)          # a plain channel, set once
     rt = (ORCH_ROOT / "app" / "orchestrator" / "runtime.py").read_text()
     assert rt.count("liveconfig.from_payload(payload)") == 1             # at start, nowhere else

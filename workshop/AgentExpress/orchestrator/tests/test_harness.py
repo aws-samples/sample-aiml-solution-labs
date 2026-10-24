@@ -323,9 +323,8 @@ def test_a_json_answer_gets_the_asset_envelope_of_its_produces(monkeypatch):
 ])
 def test_the_registry_refuses_a_harness_agent_it_cannot_run(writer, intake, why):
     from conftest import workflow
-    with workflow(_wf(writer, **intake)) as imp:
-        with pytest.raises(ValueError, match=re.escape(why)):
-            imp("app.orchestrator.registry").load_agents()
+    with workflow(_wf(writer, **intake)) as imp, pytest.raises(ValueError, match=re.escape(why)):
+        imp("app.orchestrator.registry").load_agents()
 
 
 # --- the two IaC paths ------------------------------------------------------------------
@@ -368,7 +367,9 @@ def test_both_paths_grant_the_same_statements():
 def test_the_orchestrator_gets_harness_arns_only_when_there_is_a_harness():
     main_tf = (ORCH / "terraform" / "main.tf").read_text()
     stack = (ORCH / "cdk" / "lib" / "orchestrator-stack.ts").read_text()
-    assert "local.harness_env)" in main_tf
+    # One of the maps merged into the orchestrator Runtime's environment_variables (with
+    # export.tf's after it, so the call no longer ends at harness_env).
+    assert re.search(r"environment_variables = merge\(\{.*?\}, [^\n]*\blocal\.harness_env\b", main_tf, re.DOTALL)
     assert "harness_env = length(local.harness_agents) > 0 ?" in TF
     assert "...(Object.keys(harnessPlane.arns).length ? { HARNESS_ARNS:" in stack
 

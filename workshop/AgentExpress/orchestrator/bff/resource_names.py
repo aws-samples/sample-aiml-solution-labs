@@ -108,7 +108,8 @@ def resources(workflow: dict, agent_id: str, comp: dict, agent_name: str,
         if isinstance(g.get("guardrailId"), str) and g["guardrailId"]:
             return [_row("Bedrock Guardrail ID", g["guardrailId"]), _row("Version", "DRAFT")]
         if not _guardrail_has_policy(_obj(workflow.get("guardrail"))):
-            return [_row("Bedrock Guardrail", "none deployed: the guardrail block sets no policy, so this check does nothing")]
+            return [_row("Bedrock Guardrail",
+                         "none deployed: the guardrail block sets no policy, so this check does nothing")]
         return [_row("Bedrock Guardrail", f"{a}-guardrail" if a else ""), _row("Version", "DRAFT")]
 
     if kind == "memory":

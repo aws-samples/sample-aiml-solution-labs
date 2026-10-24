@@ -173,7 +173,7 @@ def _wire(br, client=None, cdp=None):
 # --- a normal call ---------------------------------------------------------------------
 
 def test_a_page_is_opened_in_a_new_tab_and_read(br):
-    client, cdp = _wire(br)
+    _client, cdp = _wire(br)
     out = br.open_page({"url": "https://docs.aws.amazon.com/x"})
     assert out["title"] == "Docs" and out["text"] == "Hello world"
     assert out["url"] == "https://docs.aws.amazon.com/x"
@@ -344,7 +344,7 @@ def test_the_host_is_checked_on_its_port(br, monkeypatch):
                                  "http://DOCS.aws.amazon.com/", "https://example.org/"])
 def test_an_allowed_domain_and_the_names_under_it_are_opened(br, monkeypatch, url):
     monkeypatch.setenv("ALLOW_DOMAINS", "docs.aws.amazon.com,example.org")
-    client, cdp = _wire(br, cdp=FakeCDP(page={**PAGE, "url": url}))
+    client, _cdp = _wire(br, cdp=FakeCDP(page={**PAGE, "url": url}))
     out = br.open_page({"url": url})
     assert "error" not in out, out
     assert client.started
@@ -623,7 +623,7 @@ def test_cdp_matches_replies_by_id_and_remembers_events_on_the_way(br):
     assert cdp.call("Page.navigate", {"url": "https://example.com/"}, time.monotonic() + 5, "S1") == {"frameId": "F"}
     # The load event arrived before the reply, and is not lost.
     assert cdp.wait_for("Page.loadEventFired", time.monotonic() + 0.1, "S1") is True
-    with pytest.raises(RuntimeError, match="Target.attachToTarget: No target"):
+    with pytest.raises(RuntimeError, match=r"Target\.attachToTarget: No target"):
         cdp.call("Target.attachToTarget", {"targetId": "x"}, time.monotonic() + 5)
     t.join(5)
     client.close()
@@ -685,7 +685,7 @@ def test_the_upgrade_is_signed_with_sigv4_for_bedrock_agentcore(br, monkeypatch)
 def test_the_domain_rule_is_the_same_in_the_function_and_both_validators(br):
     sys.path.insert(0, str(ORCH / "bff"))
     try:
-        import browser_tool  # noqa: PLC0415
+        import browser_tool
     finally:
         sys.path.remove(str(ORCH / "bff"))
     ts = (ORCH / "web" / "src" / "builder" / "browserTool.ts").read_text()

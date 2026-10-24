@@ -26,8 +26,8 @@ import pytest
 
 moto = pytest.importorskip("moto")
 
-from test_builds import CTX, call  # noqa: E402
-from test_builds import env as env  # noqa: E402
+from test_builds import CTX, call  # noqa: E402 - after the moto importorskip
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 SECRET = "CAPTURED-PROMPT-" + "THAT-MUST-NOT-LEAVE"   # a marker, joined so scanners do not take it for a password
 ROOT = Path(__file__).resolve().parents[1]

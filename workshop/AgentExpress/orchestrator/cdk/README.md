@@ -302,6 +302,37 @@ cdk destroy
 Transaction Search is deliberately **left enabled** — it is account-wide, and other stacks
 may depend on it.
 
+## CDK and Terraform files
+
+Both paths deploy the same resources. The feature modules pair one to one (kebab-case here,
+snake_case in Terraform: each tool's own convention). The core does not: `orchestrator-stack.ts`
+is the counterpart of most of Terraform's root files.
+
+| CDK (`cdk/`) | Terraform (`terraform/`) |
+|---|---|
+| `lib/a2a-server.ts` | `a2a_server.tf` |
+| `lib/browser-tool.ts` | `browser_tool.tf` |
+| `lib/export.ts` | `export.tf` |
+| `lib/hardening.ts` | `hardening.tf` |
+| `lib/harness.ts` | `harness.tf` |
+| `lib/hosted-mcp.ts` | `tools_hosted_mcp.tf` |
+| `lib/kb-data-source.ts` | `kb_data_source.tf` |
+| `lib/kb-ingestion.ts` | `kb_ingestion.tf` |
+| `lib/kb-vector-store.ts` | `kb_vector_store.tf` |
+| `lib/litellm.ts` | `litellm.tf` |
+| `lib/otlp-export.ts` | `otlp_export.tf` |
+| `lib/run-files.ts` | `run_files.tf` |
+| `lib/runtime-network.ts` | `runtime_network.tf` |
+| `lib/smithy-tool.ts` | `tools_smithy.tf` |
+| `lib/tasks.ts` | `tasks.tf` |
+| `lib/tool-plane.ts` | `tools.tf`, `gateway.tf`, `kb.tf`, `policy.tf`, `tools_code.tf`, `interceptors.tf` |
+| `lib/builder-plane.ts` | `builder.tf` |
+| `lib/docs-default.ts` | `local.docs_default` in `builder.tf` (both read `../docs_default.json`) |
+| `lib/orchestrator-stack.ts` | `main.tf`, `subagent_runtimes.tf`, `a2a.tf`, `bff.tf`, `ui.tf`, `cognito.tf`, `identity.tf`, `identities.tf`, `signup.tf`, `dynamo.tf`, `kms.tf`, `secrets.tf`, `images.tf`, `guardrail.tf`, `memories.tf`, `evaluations.tf`, `optimization.tf`, `observability.tf`, `transaction_search.tf`, `gates.tf`, `triggers.tf`, `audit.tf`, `liveconfig.tf`, `outputs.tf` |
+| `lib/defaults.ts`, `lib/vocabulary.ts` | no file of their own: `app/defaults.json` and `app/vocabulary.json` are read by locals where used (`tools.tf`, `bff.tf`, `models.tf`, …) |
+| `bin/orchestrator.ts` | `versions.tf` (provider, `agentexpress:app` default tags) and `variables.tf` (the `-c` context flags) |
+| `lib/nag.ts` (cdk-nag) | `.checkov.yaml` (checkov): the same accepted findings, each with its reason |
+
 ## Notes
 
 - **Layout.** `lib/orchestrator-stack.ts` holds the runtimes, stores, IdP, A2A stand-in,

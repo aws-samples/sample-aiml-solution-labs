@@ -22,8 +22,8 @@ import pytest
 
 moto = pytest.importorskip("moto")
 
-from test_builds import call  # noqa: E402
-from test_builds import env as env  # noqa: E402
+from test_builds import call  # noqa: E402 - after the moto importorskip
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 SECRET = "PROMPT-TEXT-" + "THAT-MUST-NOT-LEAVE"   # a marker, joined so scanners do not take it for a password
 

@@ -384,14 +384,14 @@
 .axb-layer-menu label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 .axb-layer-n { color: var(--awsui-color-text-body-secondary, #5f6b7a); }
 /* Show and the Design caption on one line at the canvas's top left; Show's menu opens below.
-   The panel is at most the canvas's width; a caption that does not fit ends in an ellipsis
-   (the whole line is its title) and its info icon stays on the line. */
+   The caption shows a short line that is never cut off (the whole sentence is its title and
+   what a screen reader reads, in .axb-vh); its info icon stays on the line. */
 .axb-canvas-panel { max-width: calc(100% - 30px); }
 .axb-canvas-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
 .axb-canvas-caption { display: flex; align-items: center; min-width: 0; min-height: 32px; padding: 0 6px; border-radius: 8px;
   background: var(--awsui-color-background-container-content, #fff); opacity: 0.92; }
-.axb-canvas-caption-text { min-width: 0; }
-.axb-canvas-caption-text, .axb-canvas-caption-text > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.axb-canvas-caption-text { flex: none; white-space: nowrap; }
+.axb-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .axb-canvas-caption .ax-docs-info { flex: none; }
 
 /* Attaching primitives (attach.ts): while one is dragged, only where it may land is marked. */

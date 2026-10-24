@@ -196,7 +196,8 @@ def agent_card(view: dict, base_url: str, version: int | None = None) -> dict:
     if ui.get("defaultTopic"):
         skill["examples"] = [str(ui["defaultTopic"])]
     if TOKEN_URL:
-        scheme = {"type": "oauth2", "description": "OAuth2 client credentials from this deployment's identity provider.",
+        scheme = {"type": "oauth2",
+                  "description": "OAuth2 client credentials from this deployment's identity provider.",
                   "flows": {"clientCredentials": {"tokenUrl": TOKEN_URL,
                                                   "scopes": {SCOPE: "Start, read and cancel runs of this workflow"}}}}
     else:
@@ -312,7 +313,8 @@ def _request_text(message: dict) -> str:
             out.append(json.dumps(part["data"], ensure_ascii=False))
         else:
             raise RpcError(CONTENT_TYPE_NOT_SUPPORTED,
-                           f"Incompatible content types - this agent takes text and data parts, not {kind or 'that part'}")
+                           "Incompatible content types - this agent takes text and data parts, "
+                           f"not {kind or 'that part'}")
     return "\n".join(out).strip()
 
 
@@ -403,7 +405,8 @@ def handle(event: dict, table, start, view: dict, version: int | None = None) ->
             raise RpcError(PARSE_ERROR, "Parse error - the body is not JSON") from None
         if not isinstance(body, dict):
             raise RpcError(INVALID_REQUEST, "Invalid Request - one JSON-RPC request object (batches are not supported)")
-        rpc_id = body.get("id") if isinstance(body.get("id"), (str, int)) and not isinstance(body.get("id"), bool) else None
+        raw_id = body.get("id")
+        rpc_id = raw_id if isinstance(raw_id, (str, int)) and not isinstance(raw_id, bool) else None
         if body.get("jsonrpc") != "2.0":
             raise RpcError(INVALID_REQUEST, 'Invalid Request - "jsonrpc" must be "2.0"')
         method = body.get("method")

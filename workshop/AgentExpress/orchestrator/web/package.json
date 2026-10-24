@@ -1,6 +1,7 @@
 {
   "name": "multiagent-orchestrator-ui",
   "private": true,
+  "license": "MIT-0",
   "version": "1.0.0",
   "type": "module",
   "description": "The orchestrator's console UI, built with the AWS Cloudscape Design System.",

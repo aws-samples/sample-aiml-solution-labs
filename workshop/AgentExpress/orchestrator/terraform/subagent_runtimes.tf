@@ -115,11 +115,12 @@ resource "aws_iam_role_policy" "subagent" {
       },
       {
         # Required for AgentCore "unified" telemetry span delivery to the agent's
-        # own log group (see main.tf for details).
+        # own log group (see main.tf for details). Scope per
+        # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html
         Sid      = "AgentCoreUnifiedSpanDelivery"
         Effect   = "Allow"
         Action   = ["logs:PutResourcePolicy"]
-        Resource = ["*"]
+        Resource = ["arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"]
       },
       {
         Effect   = "Allow"

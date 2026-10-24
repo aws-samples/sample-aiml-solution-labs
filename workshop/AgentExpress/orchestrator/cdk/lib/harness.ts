@@ -269,8 +269,13 @@ export function harnessAgents(scope: Construct, props: {
         sid: "HarnessLogStream", actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
         resources: [`arn:aws:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*`],
       }),
-      // Span delivery to its own log group; no resource type.
-      new iam.PolicyStatement({ sid: "HarnessSpanDelivery", actions: ["logs:PutResourcePolicy"], resources: ["*"] }),
+      // Span delivery to its own log group. Scope per
+      // https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html
+      // (mirrors terraform/harness.tf HarnessSpanDelivery).
+      new iam.PolicyStatement({
+        sid: "HarnessSpanDelivery", actions: ["logs:PutResourcePolicy"],
+        resources: [`arn:aws:logs:${region}:${account}:log-group:/aws/bedrock-agentcore/runtimes/*`],
+      }),
       // X-Ray has no resource types for these.
       new iam.PolicyStatement({
         sid: "HarnessTracing", resources: ["*"],

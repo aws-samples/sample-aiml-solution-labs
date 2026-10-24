@@ -116,7 +116,7 @@ class CannotRun(Exception):
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # noqa: D401, ANN002
+    def redirect_request(self, *args, **kwargs):
         return None
 
 
@@ -138,7 +138,8 @@ class Api:
     def call(self, method: str, path: str, body: dict | None = None):
         url = self.base + path
         data = None if body is None else json.dumps(body).encode()
-        req = urllib.request.Request(url, data=data, method=method, headers={
+        # S310: --url is checked to be https (http for localhost only) in main.
+        req = urllib.request.Request(url, data=data, method=method, headers={  # noqa: S310 - --url is checked to be https in main
             "Authorization": f"Bearer {self._token()}", "Accept": "application/json",
             **({"Content-Type": "application/json"} if data is not None else {})})
         try:
@@ -236,8 +237,7 @@ def normalise_base(url: str) -> str:
     if u.username or u.password or u.query or u.fragment:
         raise ValueError("--url takes no credentials, query or fragment")
     path = u.path.rstrip("/")
-    if path.endswith("/api"):
-        path = path[: -len("/api")]
+    path = path.removesuffix("/api")
     return f"{u.scheme}://{u.netloc}{path}"
 
 
@@ -375,7 +375,8 @@ def check_telemetry(res: Results, tel: dict | None, tel_error: str, snap: dict, 
                       and str((agents.get(k) or {}).get("runtime") or "main") in METERED_RUNTIMES)
     seen = {str(c.get("agent_id")) for c in calls if c.get("kind") == "llm"}
     missing = [k for k in expected if k not in seen]
-    skipped_rt = sorted(k for k in nodes if k in agents and (agents[k] or {}).get("runtime") not in (None, *METERED_RUNTIMES))
+    skipped_rt = sorted(k for k in nodes
+                        if k in agents and (agents[k] or {}).get("runtime") not in (None, *METERED_RUNTIMES))
     note = f" ({', '.join(skipped_rt)}: runtime not metered by the app, not required)" if skipped_rt else ""
     if not expected:
         res.add("each model-calling agent has rows", SKIP, "no finished agent that the app meters" + note)
@@ -390,7 +391,8 @@ def check_limits(res: Results, api: Api, run_cost: float) -> None:
     try:
         lim = api.call("GET", "/api/limits")
     except ApiError as e:
-        res.add(name, SKIP if e.status == 404 else FAIL, f"{e}" + (" (this app predates /api/limits)" if e.status == 404 else ""))
+        res.add(name, SKIP if e.status == 404 else FAIL,
+                f"{e}" + (" (this app predates /api/limits)" if e.status == 404 else ""))
         return
     except Unreachable as e:
         res.add(name, FAIL, str(e))
@@ -446,13 +448,13 @@ def dry_run(args, base: str, via_srp: bool, console: Console) -> None:
             f"GET    {base}/api/me                     [{h}]",
             f"GET    {base}/api/workflow",
             f"POST   {base}/api/sessions               {topic}",
-            f"GET    {base}/api/sessions/<id>          every {args.poll:g}s, backing off to {args.poll_max:g}s, "
-            f"until done / failed / cancelled / {args.timeout:g}s",
-            f"POST   {base}/api/sessions/<id>/decision {{\"decision\": \"approve\"}} whenever a gate waits "
-            f"(at most {args.max_approvals} times per gate)",
+            (f"GET    {base}/api/sessions/<id>          every {args.poll:g}s, backing off to {args.poll_max:g}s, "
+             f"until done / failed / cancelled / {args.timeout:g}s"),
+            (f"POST   {base}/api/sessions/<id>/decision {{\"decision\": \"approve\"}} whenever a gate waits "
+             f"(at most {args.max_approvals} times per gate)"),
             f"GET    {base}/api/sessions/<id>/telemetry",
             f"GET    {base}/api/limits",
-            (f"(kept) the run is not deleted" if args.keep else f"DELETE {base}/api/sessions/<id>")):
+            ("(kept) the run is not deleted" if args.keep else f"DELETE {base}/api/sessions/<id>")):
         console.out("  " + line)
 
 

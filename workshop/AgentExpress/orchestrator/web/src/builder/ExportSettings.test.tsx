@@ -1,7 +1,7 @@
 /** Settings > Export: pick the tool, paste the key, test, save. Each destination asks only for
  *  what it needs; the keys become the headers its docs name and are saved as the build's
  *  exportHeaders secret, never into the workflow; the test result is said in plain words. */
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import createWrapper from "@cloudscape-design/components/test-utils/dom";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -134,7 +134,8 @@ describe("Export section", () => {
     expect(document.body.textContent).toContain("enter the api key first");
     expect(exportOf()).toBeUndefined();
     await pick("Langfuse");
-    expect(document.body.textContent).toContain("Keys are saved for this address");
+    // Known from the secrets the page reads (an async digest of the address): wait for it.
+    await waitFor(() => expect(document.body.textContent).toContain("Keys are saved for this address"));
     await click("Save");
     expect(exportOf()?.secret).toBe(await secretName(LF_URL));
     expect(calls.put).not.toHaveBeenCalled();

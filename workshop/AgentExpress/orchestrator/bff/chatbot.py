@@ -57,7 +57,7 @@ def is_enabled() -> bool:
 def _num(x) -> float:
     try:
         return float(x)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - a non-number counts as 0
         return 0.0
 
 

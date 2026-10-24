@@ -705,7 +705,7 @@ MAX_SCORES = 50
 def _post(url: str, body: bytes, headers: dict, timeout: float) -> tuple[int, str]:
     """One POST through the SSRF guard. Returns (status, response text)."""
     # netguard.urlopen opens https only, so no file: or other scheme is reachable from here.
-    req = urllib.request.Request(url, data=body, method="POST", headers=headers)  # noqa: S310
+    req = urllib.request.Request(url, data=body, method="POST", headers=headers)  # noqa: S310 - https only, enforced by netguard.urlopen
     with netguard.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read(4096).decode("utf-8", "replace")
 
@@ -724,7 +724,7 @@ def send(url: str, payload: dict, headers: dict) -> tuple[bool, int, str]:
     except urllib.error.HTTPError as e:
         try:
             detail = e.read(4096).decode("utf-8", "replace")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - an unreadable error body leaves the detail empty
             detail = ""
         return False, e.code, _short(f"HTTP {e.code} {detail}")
     except urllib.error.URLError as e:
@@ -837,7 +837,7 @@ def after_eval(session_id: str, agent_id: str, since: str) -> int:
                                [_event("gen_ai.evaluation.result", end, _evaluation(r, s.content))]))
         ok = send(s.urls["traces"], traces_body(s, run_item(session_id), spans), headers)[0]
         return len(spans) if ok else 0
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a failed score export is logged, never fails the eval
         _log(f"{session_id}: scores not sent ({type(e).__name__})")
         return 0
 
@@ -866,7 +866,7 @@ def export_test() -> dict:
         return {"ok": ok, "status": status, "error": error, "traceId": tid}
     except SettingError as e:
         return _refusal(str(e))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - any export failure goes back as a refusal
         return _refusal(f"not sent ({type(e).__name__})")
 
 
@@ -888,7 +888,7 @@ def export_run(session_id) -> dict:
         return result
     except SettingError as e:
         return _refusal(str(e))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - any export failure goes back as a refusal
         return _refusal(f"not sent ({type(e).__name__})")
 
 
@@ -909,5 +909,5 @@ async def after_burst(session_id: str) -> None:
         return
     try:
         await asyncio.wait_for(asyncio.to_thread(on_run_end, session_id), RUN_END_WAIT_S)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - exporting at run end must never fail the run
         _log(f"{session_id}: not sent ({type(e).__name__})")

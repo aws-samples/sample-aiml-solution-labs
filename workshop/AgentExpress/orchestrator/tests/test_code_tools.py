@@ -23,8 +23,8 @@ from test_scaffold_apply import bundle, claims_workflow, run
 from test_scaffold_apply import tree as tree  # the temp framework fixture
 
 moto = pytest.importorskip("moto")
-from test_builds import call, mark_deployed, project  # noqa: E402
-from test_builds import env as env  # noqa: E402
+from test_builds import call, mark_deployed, project  # noqa: E402 - after the moto importorskip
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 SCHEMA = [{"name": "issueRefund", "description": "Refund an order.",
            "properties": {"amount": {"type": "integer", "required": True, "description": "USD."}}}]

@@ -42,6 +42,7 @@ tool arguments as `event`, and the tool name as
 """
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -53,11 +54,10 @@ import time
 from urllib.parse import urlsplit
 
 import boto3
+import netguard  # this folder's copy of app/common/netguard.py (the zip holds only this folder)
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.config import Config
-
-import netguard  # this folder's copy of app/common/netguard.py (the zip holds only this folder)
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 
@@ -109,7 +109,7 @@ _READ_PAGE = """(() => {
     links.push({text: String(a.innerText || "").trim().slice(0, %(link_text)d), href: href.slice(0, %(url)d)});
   }
   return {url: String(location.href), title: String(document.title || ""), text: text.slice(0, %(text)d), links};
-})()""" % {"links": MAX_LINKS, "link_text": MAX_LINK_TEXT, "url": MAX_URL_CHARS, "text": MAX_TEXT_CHARS + 1}
+})()""" % {"links": MAX_LINKS, "link_text": MAX_LINK_TEXT, "url": MAX_URL_CHARS, "text": MAX_TEXT_CHARS + 1}  # noqa: UP031 - JavaScript: %-format leaves its braces literal
 
 
 class Refused(Exception):
@@ -200,7 +200,7 @@ class _WebSocket:
             self._sock.settimeout(left)
             try:
                 chunk = self._sock.recv(65536)
-            except socket.timeout as e:
+            except TimeoutError as e:
                 raise _Timeout() from e
             if not chunk:
                 raise ConnectionError("the browser's automation stream closed")
@@ -261,14 +261,10 @@ class _WebSocket:
                 return text
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(OSError):
             self._send_frame(0x8, struct.pack("!H", 1000))
-        except OSError:
-            pass
-        try:
+        with contextlib.suppress(OSError):
             self._sock.close()
-        except OSError:
-            pass
 
 
 def _signed_headers(host: str, path: str) -> dict:
@@ -303,7 +299,7 @@ def handshake(sock, host: str, path: str, headers: dict, deadline: float) -> _We
         sock.settimeout(left)
         try:
             chunk = sock.recv(4096)
-        except socket.timeout as e:
+        except TimeoutError as e:
             raise _Timeout() from e
         if not chunk:
             raise ConnectionError("the browser's automation stream closed during the handshake")
@@ -443,7 +439,8 @@ def open_page(args: dict) -> dict:
         result["truncated"] = True
         notes.append(f"Text cut at {MAX_TEXT_CHARS} characters; open a more specific page for the rest.")
     if not page.get("loaded"):
-        notes.append(f"The page had not finished loading after {PAGE_LOAD_SECONDS} seconds; this is what it showed then.")
+        notes.append(f"The page had not finished loading after {PAGE_LOAD_SECONDS} seconds; "
+                     "this is what it showed then.")
     if notes:
         result["note"] = " ".join(notes)
     return result

@@ -13,7 +13,7 @@ import urllib.parse
 
 import boto3
 import pytest
-from test_builds import call, env, mark_deployed, save  # noqa: F401
+from test_builds import call, env, mark_deployed, save  # noqa: F401 - env is the builds fixture, taken by name
 
 moto = pytest.importorskip("moto")
 

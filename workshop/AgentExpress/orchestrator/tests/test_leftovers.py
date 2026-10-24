@@ -52,7 +52,7 @@ def run(tmp_path):
         e = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "STUB_LOG": str(log),
              "AWS_REGION": "", "AWS_DEFAULT_REGION": "", **env}
         # The stock bash runs this repo's own script with the test's arguments.
-        r = subprocess.run([STOCK_BASH, str(SCRIPT), *args],  # noqa: S603  # nosec B603
+        r = subprocess.run([STOCK_BASH, str(SCRIPT), *args],  # noqa: S603 - argv list, no shell  # nosec B603
                            capture_output=True, text=True, env=e)
         calls = log.read_text().splitlines() if log.exists() else []
         return r, calls
@@ -60,21 +60,21 @@ def run(tmp_path):
 
 
 def test_nothing_left_is_said_plainly_and_exits_zero(run):
-    r, calls = run("ax_demo", "us-east-1")
+    r, _calls = run("ax_demo", "us-east-1")
     assert r.returncode == 0
     assert "Nothing tagged agentexpress:app=ax_demo remains." in r.stdout
 
 
 def test_it_asks_for_exactly_this_stacks_tag_value_and_nothing_else(run):
     """The ownership rule: another deployment's resources have another value, so are never asked for."""
-    r, calls = run("ax_demo", "us-east-1")
-    assert calls == ["aws resourcegroupstaggingapi get-resources --region us-east-1 "
-                     "--tag-filters Key=agentexpress:app,Values=ax_demo "
-                     "--query ResourceTagMappingList[].ResourceARN --output text"]
+    _r, calls = run("ax_demo", "us-east-1")
+    assert calls == [("aws resourcegroupstaggingapi get-resources --region us-east-1 "
+                      "--tag-filters Key=agentexpress:app,Values=ax_demo "
+                      "--query ResourceTagMappingList[].ResourceARN --output text")]
 
 
 def test_it_only_reads(run):
-    r, calls = run("ax_demo", "eu-west-1", STUB_OUT_eu_west_1="arn:aws:logs:eu-west-1:1:log-group:/x")
+    _r, calls = run("ax_demo", "eu-west-1", STUB_OUT_eu_west_1="arn:aws:logs:eu-west-1:1:log-group:/x")
     verbs = {c.split()[2] for c in calls}
     assert verbs == {"get-resources"}
     import re
@@ -85,7 +85,7 @@ def test_it_only_reads(run):
 
 def test_leftovers_are_listed_with_a_count_and_exit_ten(run):
     out = "arn:aws:logs:us-east-1:1:log-group:/aws/lambda/AgentCoreSignup-ax_demo\tarn:aws:cognito-idp:us-east-1:1:userpool/p"
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=out)
+    r, _calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=out)
     assert r.returncode == 10
     assert "(2)" in r.stdout and "none of them was deleted" in r.stdout
     assert "  arn:aws:logs:us-east-1:1:log-group:/aws/lambda/AgentCoreSignup-ax_demo" in r.stdout
@@ -100,19 +100,19 @@ def test_a_global_resource_returned_from_two_regions_is_listed_once(run):
 
 
 def test_us_east_1_alone_is_asked_once(run):
-    r, calls = run("ax_demo", "us-east-1")
+    _r, calls = run("ax_demo", "us-east-1")
     assert len(calls) == 1
 
 
 def test_a_failure_to_look_is_not_reported_as_nothing_left(run):
-    r, calls = run("ax_demo", "us-east-1", STUB_FAIL_us_east_1="1")
+    r, _calls = run("ax_demo", "us-east-1", STUB_FAIL_us_east_1="1")
     assert r.returncode == 1
     assert "Nothing tagged" not in r.stdout
     assert "could not look in us-east-1" in r.stderr
 
 
 def test_one_region_failing_still_reports_what_the_other_found(run):
-    r, calls = run("ax_demo", "eu-west-1", STUB_FAIL_eu_west_1="1", STUB_OUT_us_east_1="arn:aws:iam::1:role/r")
+    r, _calls = run("ax_demo", "eu-west-1", STUB_FAIL_eu_west_1="1", STUB_OUT_us_east_1="arn:aws:iam::1:role/r")
     assert r.returncode == 10 and "arn:aws:iam::1:role/r" in r.stdout
     assert "could not look in eu-west-1" in r.stderr
 
@@ -123,7 +123,7 @@ def test_no_agent_name_is_a_usage_error_that_asks_nothing(run):
 
 
 def test_a_none_answer_from_the_cli_is_not_a_leftover(run):
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1="None")
+    r, _calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1="None")
     assert r.returncode == 0 and "Nothing tagged" in r.stdout
 
 
@@ -132,7 +132,7 @@ KEY = "arn:aws:kms:us-east-1:1:key/ef9ffbb4-4768-4418-b67f-df4099f8c48a"
 
 def test_a_kms_key_scheduled_for_deletion_is_not_a_leftover(run):
     """Seen in a live destroy: the data key stays tagged for its 7-day waiting period."""
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_STATE="PendingDeletion")
+    r, _calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_STATE="PendingDeletion")
     assert r.returncode == 0
     assert "Scheduled for deletion by KMS" in r.stdout and KEY in r.stdout
     assert "Nothing tagged agentexpress:app=ax_demo remains." in r.stdout
@@ -140,24 +140,24 @@ def test_a_kms_key_scheduled_for_deletion_is_not_a_leftover(run):
 
 
 def test_an_enabled_kms_key_is_still_a_leftover(run):
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_STATE="Enabled")
+    r, _calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_STATE="Enabled")
     assert r.returncode == 10 and "(1)" in r.stdout and "Scheduled" not in r.stdout
 
 
 def test_a_kms_key_whose_state_cannot_be_read_is_still_a_leftover(run):
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_FAIL="1")
+    r, _calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_FAIL="1")
     assert r.returncode == 10 and KEY in r.stdout and "Scheduled" not in r.stdout
 
 
 def test_a_scheduled_key_does_not_hide_a_real_leftover(run):
     pool = "arn:aws:cognito-idp:us-east-1:1:userpool/p"
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=f"{KEY}\t{pool}", STUB_KEY_STATE="PendingDeletion")
+    r, _calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=f"{KEY}\t{pool}", STUB_KEY_STATE="PendingDeletion")
     assert r.returncode == 10 and "(1)" in r.stdout
     assert "Scheduled for deletion by KMS" in r.stdout and pool in r.stdout
 
 
 def test_the_only_extra_call_is_the_read_only_key_describe(run):
-    r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_STATE="PendingDeletion")
+    _r, calls = run("ax_demo", "us-east-1", STUB_OUT_us_east_1=KEY, STUB_KEY_STATE="PendingDeletion")
     assert [c.split()[1] for c in calls] == ["resourcegroupstaggingapi", "kms"]
     assert calls[1].split()[2] == "describe-key"
 

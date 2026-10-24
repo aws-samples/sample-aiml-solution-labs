@@ -128,7 +128,7 @@ async def _run(sid: str, initial=None, resume=None, rerun=None):
             overall, result = "done", values.get("outputs", {}).get(LAST_AGENT_ID, "")
         await emit(sid, {"type": "session_status", "status": overall,
                          "result": result, "log": f"Workflow finished ({overall})"})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - any failure is reported as a failed session
         await emit(sid, {"type": "session_status", "status": "failed",
                          "log": f"error: {type(e).__name__}: {e}"})
 

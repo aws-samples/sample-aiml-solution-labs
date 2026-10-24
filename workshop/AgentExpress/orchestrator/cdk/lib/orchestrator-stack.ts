@@ -1503,7 +1503,14 @@ export class OrchestratorStack extends cdk.Stack {
   public readonly authConfigJs: string;
 
   constructor(scope: Construct, id: string, props: OrchestratorStackProps) {
-    super(scope, id, props);
+    // A control plane (consoleMode=builder) is termination-protected, so a deploy no longer
+    // turns protection off. Build stacks (consoleMode "app", deployed by deployer/runner.py)
+    // stay unprotected so the console's Destroy works. -c terminationProtection=true|false
+    // overrides either default (bin/orchestrator.ts).
+    super(scope, id, {
+      ...props,
+      terminationProtection: props.terminationProtection ?? props.consoleMode === "builder",
+    });
 
     const { agentName, memoryEventExpiryDays } = props;
     // ---- What this deployment is --------------------------------------------
@@ -2508,10 +2515,12 @@ export class OrchestratorStack extends cdk.Stack {
         new iam.PolicyStatement({
           // AgentCore "unified" telemetry: AgentCore adds a CloudWatch Logs resource
           // policy so X-Ray can deliver spans to the agent's own log group. Without
-          // this, unified spans never reach CloudWatch. Account-scoped API, so "*".
-          // Mirrors terraform/main.tf AgentCoreUnifiedSpanDelivery.
+          // this, unified spans never reach CloudWatch. Scoped to the runtimes' log groups,
+          // as the execution role in
+          // https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html
+          // shows. Mirrors terraform/main.tf AgentCoreUnifiedSpanDelivery.
           actions: ["logs:PutResourcePolicy"],
-          resources: ["*"],
+          resources: [`arn:aws:logs:${this.region}:${this.account}:log-group:/aws/bedrock-agentcore/runtimes/*`],
         }),
         new iam.PolicyStatement({
           actions: ["xray:PutTraceSegments", "xray:PutTelemetryRecords", "xray:GetSamplingRules", "xray:GetSamplingTargets"],
@@ -3896,17 +3905,33 @@ def handler(event, context):
             // equivalent step via local-exec using the deployer's own credentials.
             "application-signals:StartDiscovery",
             "xray:GetIndexingRules",
-            // StartDiscovery creates a service-linked CloudTrail event channel and
-            // the Application Signals service-linked role, so both of these are
-            // required on a first-time enable.
+            // StartDiscovery also creates a service-linked CloudTrail event channel,
+            // so this is required on a first-time enable. The Service Authorization
+            // Reference does not confirm a channel ARN this could be scoped to.
             "cloudtrail:CreateServiceLinkedChannel",
-            "iam:CreateServiceLinkedRole",
-            // The shared span-delivery resource policy (ensure_policy). These
-            // actions have no resource type, so they can only be granted on "*".
+            // The shared span-delivery resource policy (ensure_policy).
             "logs:DescribeResourcePolicies",
             "logs:PutResourcePolicy",
           ],
+          // The xray, application-signals and logs resource-policy actions above
+          // have no resource type, so they can only be granted on "*".
           resources: ["*"],
+        })
+      );
+      // StartDiscovery creates the Application Signals service-linked role
+      // (AWSServiceRoleForCloudWatchApplicationSignals) on a first-time enable. It is
+      // the only service-linked role it creates, so the grant is limited to that
+      // role's path and service, as terraform/deploy-role-policy.json
+      // IamServiceLinkedRoles does for the deployer.
+      tsHandler.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["iam:CreateServiceLinkedRole"],
+          resources: [
+            `arn:aws:iam::${this.account}:role/aws-service-role/application-signals.cloudwatch.amazonaws.com/*`,
+          ],
+          conditions: {
+            StringEquals: { "iam:AWSServiceName": "application-signals.cloudwatch.amazonaws.com" },
+          },
         })
       );
       // The first enable in a region also creates the aws/spans log group and its

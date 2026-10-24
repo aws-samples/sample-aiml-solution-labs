@@ -133,7 +133,7 @@ def _redact(text: str) -> str:
 def _post(url: str, body: dict, key: str) -> tuple[dict, dict]:
     """One HTTPS POST through the SSRF guard. Returns (json body, lower-cased headers)."""
     # https enforced by _settings and again by netguard.urlopen.
-    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={  # noqa: S310
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={  # noqa: S310 - https only, enforced by _settings and netguard
         "Authorization": f"Bearer {key}", "Content-Type": "application/json",
         "Accept": "application/json"})
     try:

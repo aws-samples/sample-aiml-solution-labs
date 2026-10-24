@@ -346,8 +346,8 @@ def test_an_event_decides_only_a_waiting_gate_that_takes_events(gates_bff):
     table = StatusTable([{"session_id": "s1", "overall": "waiting_human", "hitl": {"node": "a"}},
                          {"session_id": "s2", "overall": "running"}])
     decided = []
-    resume = lambda *a: decided.append(a)  # noqa: E731
-    ev = lambda **d: {"axGate": "decision", "event": {"detail": {"app": "ax_1", **d}}}  # noqa: E731
+    resume = lambda *a: decided.append(a)  # noqa: E731 - a one-line test helper
+    ev = lambda **d: {"axGate": "decision", "event": {"detail": {"app": "ax_1", **d}}}  # noqa: E731 - a one-line test helper
     assert gates_bff.dispatch(ev(session="s1", gate="a", decision="approve", by="slack:ana"), table, resume)["decided"]
     assert decided == [("s1", "approve", "", "event:slack:ana")]
     assert not gates_bff.dispatch(ev(session="s2", decision="approve"), table, resume)["decided"]
@@ -373,7 +373,7 @@ def test_a_timeout_decides_once(gates_bff):
         {"session_id": "early", "overall": "waiting_human",
          "hitl": {"node": "a", "timeoutAt": future, "timeoutAction": "deny"}}])
     decided = []
-    resume = lambda *a: decided.append(a)  # noqa: E731
+    resume = lambda *a: decided.append(a)  # noqa: E731 - a one-line test helper
     assert gates_bff.dispatch({"axGate": "sweep"}, table, resume) == {"timedOut": ["late"]}
     assert decided[0][:2] == ("late", "deny") and decided[0][3] == "timeout"
     assert gates_bff.sweep(table, resume) == {"timedOut": []}

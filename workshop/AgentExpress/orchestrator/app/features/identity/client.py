@@ -81,7 +81,7 @@ async def get_token(provider_name: str, scopes: list[str] | None = None) -> str:
         return ""
     try:
         return await asyncio.to_thread(_oauth_token, provider_name, scopes)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - no token is an empty string; the caller decides
         print(f"[identity] no token from {provider_name!r}: {type(e).__name__}: {e}")
         return ""
 
@@ -92,6 +92,6 @@ async def get_api_key(name: str) -> str:
         return ""
     try:
         return await asyncio.to_thread(_api_key, name)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - no API key is an empty string; the caller decides
         print(f"[identity] no API key from {name!r}: {type(e).__name__}: {e}")
         return ""

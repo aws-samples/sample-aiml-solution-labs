@@ -85,7 +85,8 @@ def test_the_default_guardrail_semantic_memory_and_an_existing_guardrail(rn):
     wf = {"agents": {"a": {"agentcore": {"guardrails": {"output": True}, "memory": {"longTerm": True}}},
                      "b": {"agentcore": {"guardrails": {"input": True, "guardrailId": "gr-abc123"}}}},
           "steps": [{"agent": "a"}, {"agent": "b"}], "guardrail": {"contentFilters": {"HATE": "HIGH"}}}
-    res = lambda agent, kind, workflow=wf: rn.resources(workflow, agent, {"kind": kind}, "demo", rn.own_memory_ids(), {})
+    def res(agent, kind, workflow=wf):
+        return rn.resources(workflow, agent, {"kind": kind}, "demo", rn.own_memory_ids(), {})
     assert res("a", "guardrail") == [{"label": "Bedrock Guardrail", "value": "demo-guardrail"}, {"label": "Version", "value": "DRAFT"}]
     assert res("b", "guardrail") == [{"label": "Bedrock Guardrail ID", "value": "gr-abc123"}, {"label": "Version", "value": "DRAFT"}]
     assert res("a", "memory") == [{"label": "AgentCore Memory", "value": "demo_semantic"},

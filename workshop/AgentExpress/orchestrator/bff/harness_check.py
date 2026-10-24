@@ -32,13 +32,13 @@ RESERVED_TOOLS = ("gateway", "browser", "code_interpreter")
 MAX_MCP, MAX_SKILLS, MAX_MOUNTS = 10, 20, 5
 
 # The patterns are botocore's (bedrock-agentcore-control CreateHarness), anchored.
-HARNESS_ARN_RE = re.compile(r"^arn:aws[a-z-]*:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:harness/[a-zA-Z][a-zA-Z0-9_]{0,39}-[a-zA-Z0-9]{10}$")
-API_KEY_ARN_RE = re.compile(r"^arn:aws:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:token-vault/[a-zA-Z0-9-.]+/apikeycredentialprovider/[a-zA-Z0-9-.]+$")
-BROWSER_ARN_RE = re.compile(r"^arn:aws(-[^:]+)?:bedrock-agentcore:[a-z0-9-]+:(aws|[0-9]{12}):browser(-custom)?/(aws\.browser\.v1|[a-zA-Z][a-zA-Z0-9_]{0,47}-[a-zA-Z0-9]{10})$")
-CODE_ARN_RE = re.compile(r"^arn:aws(-[^:]+)?:bedrock-agentcore:[a-z0-9-]+:(aws|[0-9]{12}):code-interpreter(-custom)?/(aws\.codeinterpreter\.v1|[a-zA-Z][a-zA-Z0-9_]{0,47}-[a-zA-Z0-9]{10})$")
-CONTAINER_RE = re.compile(r"^(([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com|public\.ecr\.aws)/((?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*)(?::([^:@]{1,300}))?(?:@(.+))?$")
+HARNESS_ARN_RE = re.compile(r"^arn:aws[a-z-]*:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:harness/[a-zA-Z][a-zA-Z0-9_]{0,39}-[a-zA-Z0-9]{10}$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
+API_KEY_ARN_RE = re.compile(r"^arn:aws:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:token-vault/[a-zA-Z0-9-.]+/apikeycredentialprovider/[a-zA-Z0-9-.]+$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
+BROWSER_ARN_RE = re.compile(r"^arn:aws(-[^:]+)?:bedrock-agentcore:[a-z0-9-]+:(aws|[0-9]{12}):browser(-custom)?/(aws\.browser\.v1|[a-zA-Z][a-zA-Z0-9_]{0,47}-[a-zA-Z0-9]{10})$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
+CODE_ARN_RE = re.compile(r"^arn:aws(-[^:]+)?:bedrock-agentcore:[a-z0-9-]+:(aws|[0-9]{12}):code-interpreter(-custom)?/(aws\.codeinterpreter\.v1|[a-zA-Z][a-zA-Z0-9_]{0,47}-[a-zA-Z0-9]{10})$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
+CONTAINER_RE = re.compile(r"^(([0-9]{12})\.dkr\.ecr\.([a-z0-9-]+)\.amazonaws\.com|public\.ecr\.aws)/((?:[a-z0-9]+(?:[._-][a-z0-9]+)*/)*[a-z0-9]+(?:[._-][a-z0-9]+)*)(?::([^:@]{1,300}))?(?:@(.+))?$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
 EFS_ARN_RE = re.compile(r"^arn:aws[-a-z]*:elasticfilesystem:[0-9a-z-]+:[0-9]{12}:access-point/fsap-[0-9a-f]{8,40}$")
-S3FILES_ARN_RE = re.compile(r"^arn:aws[-a-z]*:s3files:[0-9a-z-]+:[0-9]{12}:file-system/fs-[0-9a-f]{17,40}/access-point/fsap-[0-9a-f]{17,40}$")
+S3FILES_ARN_RE = re.compile(r"^arn:aws[-a-z]*:s3files:[0-9a-z-]+:[0-9]{12}:file-system/fs-[0-9a-f]{17,40}/access-point/fsap-[0-9a-f]{17,40}$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
 MOUNT_RE = re.compile(r"^/mnt/[a-zA-Z0-9._-]+/?$")
 ENDPOINT_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
 TOOL_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
@@ -139,9 +139,11 @@ def check(agents: dict, add, wf: dict | None = None) -> None:
         model = a.get("model")
         if isinstance(model, str) and model.startswith("litellm/"):
             add("error", where, f"{path}.model", "a harness calls its model itself, not through this deployment's "
-                'LiteLLM proxy: set harness.provider "litellm" and the provider\'s model id (e.g. gemini/gemini-2.5-pro)')
+                'LiteLLM proxy: set harness.provider "litellm" and the provider\'s model id '
+                '(e.g. gemini/gemini-2.5-pro)')
         if provider in ("openai", "gemini", "litellm") and not (isinstance(model, str) and model.strip()):
-            add("error", where, f"{path}.model", f'harness.provider "{provider}" needs `model`: the provider\'s model id')
+            add("error", where, f"{path}.model",
+                f'harness.provider "{provider}" needs `model`: the provider\'s model id')
         if "apiKey" in block:
             if provider == "bedrock":
                 add("error", where, f"{hp}.apiKey", "a Bedrock model needs no API key — remove it")
@@ -219,7 +221,8 @@ def check(agents: dict, add, wf: dict | None = None) -> None:
         if _obj(net):
             for k, pattern, what in (("subnetIds", SUBNET_RE, "subnet-"), ("securityGroupIds", SG_RE, "sg-")):
                 v = net.get(k)
-                if not isinstance(v, list) or not 1 <= len(v) <= 16 or not all(isinstance(x, str) and pattern.match(x) for x in v):
+                if (not isinstance(v, list) or not 1 <= len(v) <= 16
+                        or not all(isinstance(x, str) and pattern.match(x) for x in v)):
                     add("error", where, f"{hp}.network.{k}", f"1-16 ids, each {what}...")
             for k in net:
                 if k not in ("subnetIds", "securityGroupIds"):
@@ -246,7 +249,8 @@ def check(agents: dict, add, wf: dict | None = None) -> None:
             if kind != "session":
                 pattern = EFS_ARN_RE if kind == "efs" else S3FILES_ARN_RE
                 if not isinstance(m.get(kind), str) or not pattern.match(m[kind]):
-                    add("error", where, f"{mp}.{kind}", f"must be an {'EFS' if kind == 'efs' else 'S3 Files'} access point ARN")
+                    add("error", where, f"{mp}.{kind}",
+                        f"must be an {'EFS' if kind == 'efs' else 'S3 Files'} access point ARN")
                 if not _obj(net):
                     add("error", where, f"{mp}.{kind}", "EFS and S3 Files mounts need harness.network (a VPC)")
 
@@ -254,7 +258,8 @@ def check(agents: dict, add, wf: dict | None = None) -> None:
 def _endpoint(block: dict, add, where, hp: str) -> None:
     v = block.get("endpoint")
     if isinstance(v, str) and (not ENDPOINT_RE.match(v) or v == "DEFAULT"):
-        add("error", where, f"{hp}.endpoint", "1-48 letters, digits and underscores, starting with a letter, not DEFAULT")
+        add("error", where, f"{hp}.endpoint",
+            "1-48 letters, digits and underscores, starting with a letter, not DEFAULT")
 
 
 def _skill(s, identities: dict, add, where, sp: str) -> None:
@@ -271,7 +276,8 @@ def _skill(s, identities: dict, add, where, sp: str) -> None:
     if kind == "aws":
         if not isinstance(v, list) or not all(isinstance(p, str) and p and not p.startswith("/") and ".." not in p
                                               and not re.search(r"[?\[\]]", p) for p in v):
-            add("error", where, f"{sp}.aws", 'a list of catalog paths like "core-skills/*" ([] for all), relative, no ".."')
+            add("error", where, f"{sp}.aws",
+                'a list of catalog paths like "core-skills/*" ([] for all), relative, no ".."')
     elif kind == "git":
         if not isinstance(v, str) or not public_https(v) or "#" in v or "@" in v:
             add("error", where, f"{sp}.git", "must be the repository's https:// URL on a public host")

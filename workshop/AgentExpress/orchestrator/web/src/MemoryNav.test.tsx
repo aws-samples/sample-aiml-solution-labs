@@ -42,7 +42,12 @@ function memoryStorage(): Storage {
     setItem: (k, v) => { m.set(k, String(v)); },
   };
 }
-const links = () => [...document.querySelectorAll(".axn-links li")].map((li) => li.textContent ?? "");
+// The words only: each link's emoji (lib/emoji.ts, aria-hidden) is decoration.
+const links = () => [...document.querySelectorAll(".axn-links li")].map((li) => {
+  const c = li.cloneNode(true) as Element;
+  c.querySelectorAll(".axn-emoji").forEach((x) => x.remove());
+  return c.textContent ?? "";
+});
 
 describe("the Memory records link", () => {
   beforeEach(() => { vi.stubGlobal("localStorage", memoryStorage()); asked.paths = []; window.location.hash = ""; });

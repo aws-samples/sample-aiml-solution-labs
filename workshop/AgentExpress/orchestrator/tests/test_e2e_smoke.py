@@ -737,7 +737,7 @@ def test_polling_backs_off(make_app):
     app = make_app(never_done=True)
     smoke.run(["--url", app.url, "--poll", "0.03", "--poll-max", "0.4", "--timeout", "1.5"],
               env={"AX_ID_TOKEN": TOKEN})
-    gaps = [b - a for a, b in zip(app.get_times, app.get_times[1:])]
+    gaps = [b - a for a, b in zip(app.get_times, app.get_times[1:], strict=False)]
     assert len(gaps) >= 4
     assert gaps[-1] > gaps[0] * 3          # it slows down
     assert max(gaps) < 0.6                 # and stops at poll-max
@@ -749,7 +749,7 @@ def _proc(*argv, env=None):
     e.update({"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"})
     e.update(env or {})
     # Runs this repo's own script with the test's arguments; no outside input reaches it.
-    return subprocess.run([sys.executable, str(SCRIPT), *argv],  # noqa: S603  # nosec B603
+    return subprocess.run([sys.executable, str(SCRIPT), *argv],  # noqa: S603 - argv list, no shell  # nosec B603
                           env=e, capture_output=True, text=True, timeout=60)
 
 

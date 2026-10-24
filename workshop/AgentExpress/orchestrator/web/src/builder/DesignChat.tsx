@@ -114,6 +114,15 @@ const PHASE: Record<string, string> = {
   applying: "Updating the build…",
   checking: "Checking the change…",
 };
+/** What the bubble says while it works: while a page is fetched ("reading"), the
+ *  "Reading <host>" line the designer added last to the progress list. */
+export function phaseLabel(t: Pick<DesignTurn, "phase" | "progress" | "changes">): string {
+  if (t.phase === "reading") {
+    const line = t.progress?.[t.progress.length - 1] ?? "";
+    return line.startsWith("Reading ") ? `${line}…` : "Reading the page…";
+  }
+  return PHASE[t.phase ?? ""] ?? (t.changes?.length ? PHASE.applying : PHASE.thinking);
+}
 
 /** 14:05 today; Sep 8, 14:05 before that. */
 export function when(at: string, now = new Date()): string {
@@ -142,7 +151,7 @@ function Turn({ turn: t }: { turn: DesignTurn }) {
     );
   }
   const live = t.status === "thinking";
-  const phase = PHASE[t.phase ?? ""] ?? (t.changes?.length ? PHASE.applying : PHASE.thinking);
+  const phase = phaseLabel(t);
   // How long this reply has been going: a model's reasoning streams no text, so a long
   // think should at least show that time is passing.
   const started = Date.parse(t.at);
@@ -173,7 +182,7 @@ function Turn({ turn: t }: { turn: DesignTurn }) {
           // The model's reasoning as it streams, so a long think is not a bare spinner.
           <div className="axd-thinking" aria-live="polite" data-testid="design-thinking">{t.thinking}</div>
         ) : null}
-        {live && (t.phase === "applying" || t.phase === "checking") && t.progress?.length ? (
+        {live && (t.phase === "applying" || t.phase === "checking" || t.phase === "reading") && t.progress?.length ? (
           // Each edit of the change being written, named as it streams in.
           <ul className="axd-progress" aria-live="polite" data-testid="design-progress">
             {t.progress.slice(-8).map((step, i) => <li key={`${i}-${step}`}>{step}</li>)}

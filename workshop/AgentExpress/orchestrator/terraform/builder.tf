@@ -495,6 +495,8 @@ resource "aws_iam_role_policy" "deploy" {
         Action = ["logs:DeleteLogGroup"]
         Resource = [
           "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/${local.build_agent_prefix}*",
+          # A harness's runtime logs: AgentCore names them harness_<agent>_<step>-<id>-DEFAULT.
+          "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/harness_${local.build_agent_prefix}*",
           "arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/lambda/ax-*",
           "arn:aws:logs:${var.region}:${local.account_id}:log-group:ax-*"
         ]

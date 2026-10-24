@@ -2,6 +2,7 @@
   "name": "multiagent-orchestrator-cdk",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT-0",
   "description": "AWS CDK (TypeScript) deployment for the multi-agent orchestrator sample",
   "bin": {
     "orchestrator": "bin/orchestrator.js"

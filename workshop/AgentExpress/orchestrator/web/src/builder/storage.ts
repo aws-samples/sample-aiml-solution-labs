@@ -539,7 +539,7 @@ export interface DesignTurn {
   at: string;
   status?: "thinking" | "done" | "error";
   /** While the reply is being written: what the designer is doing right now. */
-  phase?: "thinking" | "writing" | "applying" | "checking";
+  phase?: "thinking" | "writing" | "applying" | "checking" | "reading";
   /** While a change is being written: each edit it has named so far ("Adding agent x"). */
   progress?: string[];
   /** While the designer thinks: the latest part of its reasoning, as it streams. */

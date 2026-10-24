@@ -21,7 +21,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from conftest import ORCH_ROOT
 
 TF = ORCH_ROOT / "terraform"

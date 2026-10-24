@@ -32,4 +32,4 @@ Key files:
                                    memory on ANY agent is a workflow.json edit
 """
 
-from app.features.memory.client import recall, store  # noqa: F401
+from app.features.memory.client import recall, store  # noqa: F401 - the package's public API

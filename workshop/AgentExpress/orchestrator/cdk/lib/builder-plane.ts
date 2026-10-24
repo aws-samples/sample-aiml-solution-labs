@@ -258,6 +258,8 @@ export class BuilderPlane extends Construct {
       actions: ["logs:DeleteLogGroup"],
       resources: [
         `arn:aws:logs:${stack.region}:${stack.account}:log-group:/aws/bedrock-agentcore/runtimes/${BUILD_AGENT_PREFIX}*`,
+        // A harness's runtime logs: AgentCore names them harness_<agent>_<step>-<id>-DEFAULT.
+        `arn:aws:logs:${stack.region}:${stack.account}:log-group:/aws/bedrock-agentcore/runtimes/harness_${BUILD_AGENT_PREFIX}*`,
         `arn:aws:logs:${stack.region}:${stack.account}:log-group:/aws/lambda/ax-*`,
         `arn:aws:logs:${stack.region}:${stack.account}:log-group:ax-*`,
       ],

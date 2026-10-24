@@ -295,11 +295,11 @@ def test_no_cache_tokens_costs_exactly_what_it_did(priced):
 ROWS_RUN = [
     {"agent_id": "intake", "kind": "llm", "label": HAIKU45, "cost_usd": Decimal("0.01"),
      "input_tokens": 5000, "output_tokens": 10, "cache_read_tokens": 0, "cache_write_tokens": 4200,
-     "cache_read_cost_usd": Decimal("0"), "cache_write_cost_usd": Decimal("0.005775"),
+     "cache_read_cost_usd": Decimal(0), "cache_write_cost_usd": Decimal("0.005775"),
      "cache_saving_usd": Decimal("-0.001155"), "cache_cost_known": True},
     {"agent_id": "intake", "kind": "llm", "label": HAIKU45, "cost_usd": Decimal("0.002"),
      "input_tokens": 5000, "output_tokens": 10, "cache_read_tokens": 4200, "cache_write_tokens": 0,
-     "cache_read_cost_usd": Decimal("0.000462"), "cache_write_cost_usd": Decimal("0"),
+     "cache_read_cost_usd": Decimal("0.000462"), "cache_write_cost_usd": Decimal(0),
      "cache_saving_usd": Decimal("0.004158"), "cache_cost_known": True},
     {"agent_id": "report", "kind": "llm", "label": HAIKU45, "cost_usd": Decimal("0.003"),
      "input_tokens": 100, "output_tokens": 10},

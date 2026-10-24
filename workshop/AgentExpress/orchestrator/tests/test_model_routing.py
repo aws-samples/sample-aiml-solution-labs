@@ -28,7 +28,7 @@ from botocore.exceptions import ClientError
 from conftest import ORCH_ROOT, workflow
 
 moto = pytest.importorskip("moto")
-from test_builds import CTX, FakeCodeBuild, _events_table, _status_table, create_builds_table  # noqa: E402
+from test_builds import CTX, FakeCodeBuild, _events_table, _status_table, create_builds_table  # noqa: E402 - after the moto importorskip
 
 H = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 S = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -476,6 +476,16 @@ def test_a_granted_pick_is_stored_on_the_run_and_sent_on_start_only(make):
     assert json.loads(sent["payload"])["modelOverride"] == {"all": S, "agents": {"b": OP}}
     e.handler._run({"action": "rerun_from", "session_id": "s1", "modelOverride": {"all": OP}})
     assert "modelOverride" not in json.loads(sent["payload"])
+
+
+def test_a_rerun_the_runtime_refuses_is_logged_not_dropped(make, capsys):
+    """POST /rerun answers at once and the worker invokes the runtime; a rewind it refuses
+    (a step after an ungated parallel stage) changed nothing and left no trace anywhere."""
+    e = make(_wf())
+    answer = io.BytesIO(json.dumps({"error": "cannot rewind across the previous step"}).encode())
+    e.handler.agentcore = types.SimpleNamespace(invoke_agent_runtime=lambda **kw: {"response": answer})
+    e.handler._run({"action": "rerun_from", "session_id": "s1", "agent_id": "b"})
+    assert "re-run refused for s1: cannot rewind across the previous step" in capsys.readouterr().out
 
 
 def test_a_run_without_a_pick_carries_nothing(make):

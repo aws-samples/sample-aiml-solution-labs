@@ -38,6 +38,9 @@ afterEach(cleanup);
 const field = (label: string) => createWrapper(document.body).findAllInputs()
   .find((i) => i.findNativeInput().getElement().getAttribute("aria-label") === label)!;
 const autosaved = () => act(async () => { await new Promise((r) => setTimeout(r, 950)); });
+/** A whole Builder render plus the autosave's real-time wait: about 2 s alone, more than
+ *  vitest's default 5 s under the whole suite's parallel load. */
+const SLOW = 30_000;
 
 /** A valid value for each field, by connector. */
 const SAMPLE: Record<string, Record<string, string>> = {
@@ -227,7 +230,10 @@ describe("Connectors in the Builder", () => {
     const notify = vi.fn();
     await act(async () => { render(<Builder notify={notify} />); });
     await act(async () => { fireEvent.click(screen.getAllByRole("button", { name: "Add a connector" })[0]); });
-    await act(async () => { fireEvent.click(await screen.findByRole("button", { name: "Set up Jira" })); });
+    // findBy outside act: a wait inside an act scope holds that scope open, and if the test
+    // times out the next test's render lands in it and never commits.
+    const jira = await screen.findByRole("button", { name: "Set up Jira" });
+    await act(async () => { fireEvent.click(jira); });
     act(() => { field("Cloud ID").setInputValue(SAMPLE.jira.cloudId); });
     act(() => { field("Client ID").setInputValue("client-123"); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Add tool" })); });
@@ -236,7 +242,7 @@ describe("Connectors in the Builder", () => {
     expect(saved.workflow.tools.jira).toEqual(connectorTool(CONNECTORS.find((c) => c.id === "jira")!, SAMPLE.jira, "app", "client-123"));
     expect(notify).toHaveBeenCalledWith("success", expect.stringContaining("Jira"));
     expect(screen.getByText("Valid")).toBeTruthy();
-  });
+  }, SLOW);
 
   it("is not in the Project menu: it belongs with the tools", async () => {
     await act(async () => { render(<Builder notify={vi.fn()} />); });

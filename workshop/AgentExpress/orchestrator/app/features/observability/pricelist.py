@@ -325,7 +325,7 @@ def _load(region: str) -> None:
         with _lock:
             _book, _loaded_region = book, region
         print(f"[observability] price list: {len(book)} Bedrock models priced for {region}")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - falls back to configured/built-in rates, logged
         with _lock:
             _failed_at = time.time()
         print(f"[observability] price list unavailable, using configured/built-in rates: "

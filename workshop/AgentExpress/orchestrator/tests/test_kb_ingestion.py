@@ -118,7 +118,7 @@ def _data_source_block() -> str:
 
 def test_terraform_names_the_data_source_from_the_digest_and_keeps_docs_by_default():
     block = _data_source_block()
-    assert re.search(r"^\s*name\s*=\s*local\.kb_data_source_name\s*$", block, re.M)
+    assert re.search(r"^\s*name\s*=\s*local\.kb_data_source_name\s*$", block, re.MULTILINE)
     assert re.search(r'kb_data_source_name\s*=\s*local\.kb_ingestion_set \? "docs-\$\{substr\(sha256\(local\.kb_ingestion_key\), 0, 8\)\}" : "docs"',
                      INGEST_TF)
     # The canonical string is the one cdk/lib/kb-ingestion.ts builds (pinned by digest in

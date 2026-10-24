@@ -18,3 +18,6 @@ jsonschema==4.26.0
 # moto's in-memory DynamoDB and S3, because what they depend on — conditional writes,
 # nested-map updates, a GSI — is exactly what a hand-rolled fake would get wrong.
 moto[dynamodb,s3,cognitoidp]==5.2.3
+# The linter. Pinned because its finding count depends on its version (pyproject.toml
+# holds the rule set; the bar is zero): `ruff check .` from orchestrator/.
+ruff==0.17.0

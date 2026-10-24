@@ -18,8 +18,8 @@ import pytest
 from conftest import ORCH_ROOT
 
 sys.path.insert(0, str(ORCH_ROOT / "bff"))
-import buildstore  # noqa: E402
-import validate_build  # noqa: E402
+import buildstore
+import validate_build
 
 BASE = json.loads((ORCH_ROOT / "tests" / "fixtures" / "validation_cases.json").read_text())["base"]
 CASES = json.loads((ORCH_ROOT / "tests" / "fixtures" / "hosted_mcp_cases.json").read_text())["cases"]
@@ -181,7 +181,7 @@ def test_hosted_code_is_checked_by_the_shared_code_source_validator():
                 {"image": "docker.io/x:1"}, {"git": {}, "s3": {}}):
         got = []
         hosted_mcp_check.check("orders", {"type": "mcp", "hosted": {"code": src}}, "tools.orders", {},
-                               lambda sev, w, p, m: got.append((p, m)))
+                               lambda sev, w, p, m, got=got: got.append((p, m)))
         assert got == code_source.problems(src, "tools.orders.hosted.code", allow=("git", "s3", "image"))
         assert got
 
@@ -198,7 +198,7 @@ def test_a_fetch_failure_or_no_server_fails_the_deploy_by_name(runner, fetched):
     src = {"git": {"url": "https://git.example.com/o/r.git", "ref": "missing"}}
     with pytest.raises(runner.StepFailed, match=r"tools\.orders\.hosted\.code: ref not found"):
         runner.prepare_hosted_mcp(_wf({"code": src}), "b1", {})
-    with pytest.raises(runner.StepFailed, match="neither a Dockerfile nor a server.py"):
+    with pytest.raises(runner.StepFailed, match=r"neither a Dockerfile nor a server\.py"):
         runner.prepare_hosted_mcp({"tools": {"other": {"type": "mcp", "hosted": {}}}}, "b1", {})
 
 
@@ -207,7 +207,7 @@ def test_unpinned_requirements_are_refused_before_the_image_is_built(runner, fet
     folder.mkdir(parents=True)
     (folder / "server.py").write_text("x\n")
     (folder / "requirements.txt").write_text("git+https://example.com/x.git\n")
-    with pytest.raises(runner.StepFailed, match="requirements.txt"):
+    with pytest.raises(runner.StepFailed, match=r"requirements\.txt"):
         runner.prepare_hosted_mcp(_wf({}), "b1", {})
 
 

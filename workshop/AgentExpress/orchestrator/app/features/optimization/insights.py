@@ -85,7 +85,7 @@ def _store(fields: dict) -> str:
     try:
         item = {"id": _INSIGHTS_KEY, "updated_at": _now(), **fields}
         _table().put_item(Item=item)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - the failure is logged and returned as the reason
         reason = f"{type(e).__name__}: {e}"
         print(f"[insights] store failed: {reason}")
         return reason
@@ -97,7 +97,7 @@ def _load() -> dict:
         return {}
     try:
         return _table().get_item(Key={"id": _INSIGHTS_KEY}).get("Item") or {}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - an unreadable item reads as no findings, logged
         print(f"[insights] load failed: {type(e).__name__}: {e}")
         return {}
 
@@ -129,7 +129,7 @@ def _known_sessions() -> set | None:
                 break
             kw["ExclusiveStartKey"] = lek
         return out
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a failed scan returns None, told apart from no runs
         print(f"[insights] known-sessions scan failed: {type(e).__name__}: {e}")
         # None, not an empty set. "The scan failed" and "there are no runs" are
         # different facts and _avail has to tell them apart — see below.
@@ -339,7 +339,7 @@ def _start_batch(lookback_hours: int = _DEFAULT_LOOKBACK_HOURS, user: str = "") 
     try:
         ac = _agentcore()
         started = ac.start_batch_evaluation(**req)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a failed start is stored as FAILED
         print(f"[insights] StartBatchEvaluation failed: {type(e).__name__}: {e}")
         _store({"status": "FAILED", "error": f"{type(e).__name__}: {e}"})
         return {"status": "error", "error": f"StartBatchEvaluation failed: {type(e).__name__}: {e}"}
@@ -366,7 +366,7 @@ def _start_batch(lookback_hours: int = _DEFAULT_LOOKBACK_HOURS, user: str = "") 
             break
         try:
             resp = ac.get_batch_evaluation(batchEvaluationId=batch_id)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - a poll error is kept and reported
             poll_error = f"{type(e).__name__}: {e}"
             print(f"[insights] GetBatchEvaluation failed: {poll_error}")
             break
@@ -418,11 +418,11 @@ def get_latest() -> dict:
                     "batch_arn": item.get("batch_arn"), "started_by": item.get("started_by", ""),
                     "findings_json": json.dumps(findings) if findings else (item.get("findings_json") or "")})
             item = _load()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - a failed refresh keeps the stored findings, logged
             print(f"[insights] refresh failed: {type(e).__name__}: {e}")
     try:
         findings = json.loads(item.get("findings_json") or "{}")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - unparseable findings read as none
         findings = {}
     return {"status": item.get("status", "none"), "batch_id": item.get("batch_id", ""),
             "updated_at": item.get("updated_at", ""), "findings": findings}

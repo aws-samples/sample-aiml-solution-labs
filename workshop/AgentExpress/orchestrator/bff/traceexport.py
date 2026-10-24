@@ -333,7 +333,7 @@ def send_test(url: str, headers: dict[str, str], destination: str, service: str,
     trace_id, span_id = secrets.token_bytes(16), secrets.token_bytes(8)
     end = time.time_ns()
     body = test_request(trace_id, span_id, end - 1_000_000, end, service)
-    req = urllib.request.Request(url, data=body, method="POST",
+    req = urllib.request.Request(url, data=body, method="POST",  # noqa: S310 - opened by netguard, https only
                                  headers={**headers, "Content-Type": "application/x-protobuf"})
     host = urllib.parse.urlsplit(url).hostname or url
     out = {"ok": False, "status": 0, "error": "", "traceId": trace_id.hex(), "url": url}
@@ -357,7 +357,7 @@ def send_test(url: str, headers: dict[str, str], destination: str, service: str,
         if detail:
             out["error"] += f" It said: {detail}"
         return out
-    except (TimeoutError, socket.timeout):
+    except TimeoutError:
         out["error"] = f"{host} did not answer within {TEST_TIMEOUT_S} seconds."
         return out
     except (urllib.error.URLError, OSError, ValueError) as e:
@@ -428,7 +428,7 @@ def _now_iso() -> str:
 
 def _when(at) -> _dt.datetime | None:
     try:
-        t = _dt.datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+        t = _dt.datetime.fromisoformat(str(at))
     except ValueError:
         return None
     return t if t.tzinfo else t.replace(tzinfo=_dt.UTC)

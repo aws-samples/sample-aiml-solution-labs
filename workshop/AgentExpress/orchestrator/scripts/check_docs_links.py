@@ -38,6 +38,7 @@ Exit codes: 0 every anchor found; 1 an anchor or a page is missing; 2 it could n
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -84,7 +85,8 @@ def hrefs_from_ui(base: str) -> dict[str, str]:
     with tempfile.TemporaryDirectory() as d:
         out = Path(d) / "hrefs.json"
         env = {**os.environ, "DOCS_HREFS_OUT": str(out), "DOCS_HREFS_BASE": base}
-        r = subprocess.run(["npx", "vitest", "run", EXPORT_TEST], cwd=WEB, env=env,
+        # S607: npx from PATH, as a developer runs it by hand; the argv is fixed and there is no shell.
+        r = subprocess.run(["npx", "vitest", "run", EXPORT_TEST], cwd=WEB, env=env,  # noqa: S603,S607 - fixed argv, no shell; npx from PATH  # nosec B603
                            capture_output=True, text=True, check=False)
         if r.returncode != 0 or not out.exists():
             sys.stderr.write(r.stdout[-4000:] + r.stderr[-4000:])
@@ -152,8 +154,8 @@ def by_page(hrefs: dict[str, str], base: str) -> tuple[dict[str, list[tuple[str,
 
 def fetch(url: str, timeout: int) -> str:
     # https only: main() refuses any other base URL, and every page is under it.
-    req = urllib.request.Request(url, headers={"User-Agent": "agentexpress-check-docs-links"})  # noqa: S310
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+    req = urllib.request.Request(url, headers={"User-Agent": "agentexpress-check-docs-links"})  # noqa: S310 - https:// base only  # nosec B310 - https:// base only
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - https:// base only  # nosec B310 - https:// base only
         return r.read().decode("utf-8", "replace")
 
 
@@ -223,10 +225,9 @@ def check_wiki(a, base: str) -> int:
         for url, want in sorted(pages.items()):
             try:
                 tab.goto(url, wait_until="domcontentloaded", timeout=a.timeout * 1000)
-                try:
+                # A page that keeps polling never goes network-idle, and is still loaded.
+                with contextlib.suppress(Exception):
                     tab.wait_for_load_state("networkidle", timeout=a.timeout * 1000)
-                except Exception:  # noqa: BLE001 - a page that keeps polling is still loaded
-                    pass
             except Exception as e:  # noqa: BLE001 - reported, then the next page
                 why = f"{type(e).__name__}: {str(e).splitlines()[0]}"
                 missing += [f"{feature}: {url} did not load ({why})" for feature, _ in want]

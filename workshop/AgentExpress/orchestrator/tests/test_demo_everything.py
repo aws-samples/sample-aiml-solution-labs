@@ -27,7 +27,7 @@ def _project(name: str) -> dict:
 
 
 def test_files_are_what_the_generator_writes():
-    run = subprocess.run([sys.executable, str(HERE / "make_project.py"), "--check"],  # noqa: S603  # nosec B603
+    run = subprocess.run([sys.executable, str(HERE / "make_project.py"), "--check"],  # noqa: S603 - argv list, no shell  # nosec B603
                          capture_output=True, text=True, cwd=ORCH_ROOT)
     assert run.returncode == 0, run.stderr
 
@@ -79,6 +79,31 @@ def test_one_run_uses_every_kind():
     orch = wf["orchestrator"]
     for key in ("limits", "liveConfig", "models", "files", "attachments", "interceptors", "policy"):
         assert orch.get(key), key
+    # The request audit line names the run, agent and user only when the headers are passed:
+    # without them every line had "session": "", "agent": "", "user": "".
+    assert "audit" in orch["interceptors"]["request"]["templates"]
+    assert orch["interceptors"]["request"]["passRequestHeaders"] is True
+
+
+def test_the_model_card_lookup_names_the_model_the_demo_runs_on():
+    """It looked up Claude 3 Haiku, which Bedrock retired: the harness got "reached end of
+    life" instead of the card. The demo's own model is live whenever the demo runs."""
+    wf = _project("project.json")["workflow"]
+    base = wf["orchestrator"]["defaultModel"].split(".", 1)[1]
+    smithy = wf["tools"]["bedrockApi"]
+    assert smithy["allow"]["resources"] == [f"arn:aws:bedrock:us-east-1::foundation-model/{base}"]
+    assert base in wf["agents"]["gwHarness"]["instructions"]
+
+
+def test_prompt_caching_is_in_the_run_on_a_tool_calling_agent():
+    """An "every feature" run with no promptCache showed no cache hits. A tool-calling agent
+    re-sends its conversation on every call, so its later calls can read the cache; on Nova
+    it caches from 1K tokens, which the run's tool answers pass."""
+    wf = _project("project.json")["workflow"]
+    cached = {k: a for k, a in wf["agents"].items() if a.get("promptCache")}
+    assert cached, "no agent caches its prompt"
+    assert any(a.get("toolMode") == "model" and a["promptCache"].get("messages")
+               and "nova" in str(a.get("model")) for a in cached.values())
 
 
 def test_the_policy_deny_is_reachable_in_the_run():

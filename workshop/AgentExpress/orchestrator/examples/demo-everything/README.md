@@ -69,7 +69,7 @@ in?"** (answer `English`, or `Spanish` to show it follows), and the **Sign-off**
 | | Read the invoice (`readInvoice`) | task, `extract` | Textract; an S3 attachment named in the request | the invoice total, 42.50 |
 | | Controller OS support (`osSupport`) | task, `tool` | `openapi` tool (inline schema) through the Gateway | Ubuntu releases; 22.04 support ends 2027-06-01 |
 | | Policy check (`policyCheck`) | main | `kb` tool on your own bucket, fixed-size chunking, corpus `policy`; long-term memory `summary` | robot 3 years, battery 18 months: covered |
-| | Research (`research`) | main, `toolMode: model` | `websearch` and `mcp` (AWS Knowledge MCP Server) | one web result and one AWS docs page, each with a link |
+| | Research (`research`) | main, `toolMode: model`, Nova Pro | `websearch` and `mcp` (AWS Knowledge MCP Server); prompt caching (`promptCache` system and messages) | one web result and one AWS docs page, each with a link; cache reads on its later calls (Observability, **Cache saving**) |
 | | Cover calculator (`coder`) | main, `toolMode: model` | `lambda` tool `source: codeInterpreter` | `daysOfCoverLeft: 12`; the code and its log on **Files** |
 | | Service portal (`browse`) | main, `toolMode: model` | `lambda` tool `source: browser`, `allowDomains`, a Cedar permit narrowed to two URLs (`policy.restrictTo`) | title `Example Domain` |
 | | Battery specialist (`specialist`) | **dedicated** runtime | an agent in its own AgentCore Runtime | three checks |
@@ -83,7 +83,8 @@ in?"** (answer `English`, or `Spanish` to show it follows), and the **Sign-off**
 
 Around the steps:
 
-* **Interceptors**: the request interceptor logs each tool call and refuses arguments matching
+* **Interceptors**: the request interceptor logs each tool call with the run, agent and user that
+  made it (`passRequestHeaders`), and refuses arguments matching
   `drop table` or `rm -rf`; the response interceptor masks email addresses in every tool answer.
 * **Short-term memory** is the checkpointer: the run stops at the question and at the gate and
   resumes from it.

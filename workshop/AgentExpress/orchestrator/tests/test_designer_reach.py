@@ -13,8 +13,8 @@ The registry is faked as in tests/test_registry.py.
 from __future__ import annotations
 
 import pytest
-from test_builds import CTX, call, env, save  # noqa: F401
-from test_designer import BASE, draft, model, run_background, says, send, tool_use  # noqa: F401
+from test_builds import CTX, call, env, save  # noqa: F401 - env is the builds fixture, taken by name; CTX and call are spare
+from test_designer import BASE, draft, model, run_background, says, send, tool_use  # noqa: F401 - model is a fixture, taken by name
 from test_registry import RID, FakeDp, agent, mcp, skill
 
 pytest.importorskip("moto")

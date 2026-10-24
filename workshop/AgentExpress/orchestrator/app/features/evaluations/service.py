@@ -120,7 +120,7 @@ def _agent_version(session_id: str, agent_id: str) -> int:
         )
         history = (item.get("history") or {}).get(agent_id) or []
         return len(history)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - a failed lookup counts as version 0, logged
         print(f"[evaluations] version lookup failed for {agent_id}: {exc}")
         return 0
 
@@ -135,7 +135,7 @@ def _span_log_groups(client) -> list[str]:
         try:
             resp = client.describe_log_groups(logGroupNamePrefix=_RUNTIME_LOG_PREFIX)
             groups += [g["logGroupName"] for g in resp.get("logGroups", [])]
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - runtime log groups are optional; spans are still read
             print(f"[evaluations] describe_log_groups failed: {type(e).__name__}: {e}")
     groups.append(_SPANS_LOG_GROUP)
     return groups
@@ -189,7 +189,7 @@ def runtime_trace_sources(agent_id: str | None = None) -> dict:
             token = resp.get("nextToken")
             if not token:
                 break
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - no trace sources is a logged, empty answer
         print(f"[optimization] runtime_trace_sources failed: {type(e).__name__}: {e}")
     if not by_service:
         return {"logGroupArns": [], "logGroupNames": [], "serviceNames": []}
@@ -338,7 +338,7 @@ def _telemetry_rows(session_id: str) -> list[dict]:
             if not lek:
                 return out
             kw["ExclusiveStartKey"] = lek
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - an unreadable telemetry table yields no rows, logged
         print(f"[evaluations] telemetry read failed: {type(e).__name__}: {e}")
         return []
 
@@ -444,7 +444,7 @@ def _score_spans(ac, evaluators: list[str], spans: list[dict], agent_id: str,
                                   latency_ms=latency_ms, status="error", prompt=prompt)
                 summaries.append({"evaluator": evaluator, "status": "error", "prompt": prompt,
                                   "error": msg})
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - one evaluator's failure is recorded; the rest still run
             print(f"[evaluations] {evaluator} failed for {agent_id}/{prompt}: {type(e).__name__}: {e}")
             summaries.append({"evaluator": evaluator, "status": "error", "prompt": prompt,
                               "error": str(e)})
@@ -546,5 +546,5 @@ def auto_evaluate_session(session_id: str, user: str = "") -> None:
     for aid in auto_agents:
         try:
             evaluate_agent(session_id, aid, user=user)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - one agent's auto-eval failing must not stop the others
             print(f"[evaluations] auto-eval {aid} skipped: {type(e).__name__}: {e}")

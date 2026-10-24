@@ -18,8 +18,8 @@ import json
 import pytest
 import review
 from botocore.exceptions import ReadTimeoutError
-from test_builds import CTX, call, env, save  # noqa: F401
-from test_designer import FRAUD, FRAUD_PROMPT, add_fraud, draft, model, run_background, says, tool_use  # noqa: F401
+from test_builds import CTX, call, env, save  # noqa: F401 - env is the builds fixture, taken by name
+from test_designer import FRAUD, FRAUD_PROMPT, add_fraud, draft, model, run_background, says, tool_use  # noqa: F401 - model is a fixture, taken by name
 
 pytest.importorskip("moto")
 
@@ -368,6 +368,33 @@ def test_notes_back_after_the_turn_budget_reach_the_assistant_in_the_continuatio
     assert reply["review"] == {"status": "applied", "count": 1} and len(reply["changes"]) == 1
     assert draft(env)["workflow"]["agents"]["fraud_check"]["maxTokens"] == 2500
     assert seen == []
+
+
+def test_a_held_change_is_saved_unrevised_when_the_continuation_cannot_start(env, model, reviewer,
+                                                                           monkeypatch):
+    """The turn runs out of time while the change is held, and the self-invoke for the
+    continuation fails: the change is saved as proposed and the review is unavailable
+    (fail open), never dropped."""
+    designer = env.handler.designer
+    save(env)
+    script = model(tool_use(add_fraud()), says("unused"))
+    def fail(ev):
+        raise RuntimeError("TooManyRequestsException")
+    monkeypatch.setattr(designer, "_continue", fail)
+    now = [0.0]
+    def late(text):
+        now[0] = designer.TURN_BUDGET_S + 1
+        return {"verdict": "issues", "notes": ["Give fraud_check more maxTokens."]}
+    monkeypatch.setattr(designer._review, "call_reviewer", late)
+    monkeypatch.setattr(designer.time, "monotonic", lambda: now[0])
+    send(env, "Add a fraud check after intake", "always")
+    assert run_background(env) == {"ok": True}
+    assert len(script.calls) == 1
+    reply = last_reply(env)
+    assert reply["status"] == "done" and reply["review"] == {"status": "unavailable"}
+    assert len(reply["changes"]) == 1
+    assert draft(env)["workflow"]["agents"]["fraud_check"]["maxTokens"] == 1500
+    assert "reviewHeld" not in designer._load("pclaims01")
 
 
 def test_a_second_apply_changes_in_the_same_reply_is_not_the_revision(env, model, reviewer):

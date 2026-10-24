@@ -221,16 +221,26 @@ React on Cloudscape. Details: [ARCHITECTURE.md](ARCHITECTURE.md). The diagram's 
 
 ```
 .kiro/skills/agentexpress-author/  Kiro skill: describe a use case, get a workflow
+docs/user-guide/    the user guide (Markdown and screenshots) the UI's info icons link to
 orchestrator/
 ├── app/            workflow.json, subagents/, tools/ (yours); common/, features/, orchestrator/ (framework)
 ├── web/            console UI (Vite, React, Cloudscape)
 ├── bff/            Lambda BFF: API, RBAC, assistants, Builder, library
 ├── deployer/       CodeBuild runner that deploys builds
+├── a2a_lambda/     stand-in A2A server (its own Lambda and Function URL) for the sample's a2a agents
+├── kb_lambda/      Gateway Lambda target that retrieves chunks from a Bedrock Knowledge Base
+├── signup_lambda/  Cognito triggers: default group for a self-registered user, and the sign-in log
 ├── kb_docs/        Knowledge Base corpora (yours)
 ├── examples/, scripts/, docs/   demo build, smoke test, reference docs
 ├── tests/          pytest (no AWS, no model)
 ├── cdk/            CDK app
-└── terraform/      Terraform
+├── terraform/      Terraform
+├── scaffold.py     reset the sample, add an agent, or apply a bundle exported from the Build view
+├── build_schema.py generate workflow.schema.json, defaults.json and the UI's builder-meta.json (--check for CI)
+├── format_workflow.py  format app/workflow.json for reading
+├── leftovers.sh    list what a destroy left behind (tagged agentexpress:app=<agent_name>); deletes nothing
+├── docs_default.json   the user-guide URL the UI links to when no docsUrl is set (read by CDK and Terraform)
+└── VERSION         framework version, stamped into exported bundles
 ```
 
 ## Documentation

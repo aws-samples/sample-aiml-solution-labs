@@ -25,7 +25,6 @@ from app.common.errors import ToolNeedsConsent, ToolUnavailable
 from app.features.gateway import client, person
 
 
-
 def _b64(s: str) -> str:
     return base64.urlsafe_b64encode(s.encode()).decode().rstrip("=")
 

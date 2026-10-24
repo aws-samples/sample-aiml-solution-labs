@@ -39,7 +39,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "bff"))
-import code_source  # noqa: E402  - the shape and its checks, shared with the Builder
+import code_source  # the shape and its checks, shared with the Builder
 
 MAX_TREE_BYTES = 250 * 1024 * 1024
 MAX_FILES = 10_000
@@ -145,7 +145,7 @@ def _git_env(token: str, allow_local: bool) -> dict:
 
 def _git(args: list[str], cwd: Path, env: dict, secrets: list[str]) -> None:
     try:
-        proc = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True,  # noqa: S603, S607  # nosec B603 B607
+        proc = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True,  # noqa: S603, S607 - git from PATH, argv list, no shell  # nosec B603 B607
                               timeout=GIT_TIMEOUT_SECONDS, check=False)
     except subprocess.TimeoutExpired as e:
         raise CodeSourceError(f"git {args[0]} took longer than {GIT_TIMEOUT_SECONDS} s") from e
@@ -155,12 +155,13 @@ def _git(args: list[str], cwd: Path, env: dict, secrets: list[str]) -> None:
 
 def _git_checkout(g: dict, tokens: dict, work: Path, allow_local: bool) -> Path:
     name = g.get("token")
-    token = ""
+    token = ""  # nosec B105 - empty default; the token comes from the build's gitTokens secret
     if name:
         token = str((tokens or {}).get(name) or "")
         if not token:
             raise CodeSourceError(f"the git token secret {name!r} is not set on the build")
-    secrets = [token, base64.b64encode((token if ":" in token else f"x-access-token:{token}").encode()).decode()] if token else []
+    basic = (token if ":" in token else f"x-access-token:{token}").encode()
+    secrets = [token, base64.b64encode(basic).decode()] if token else []
     env = _git_env(token, allow_local)
     repo = work / "repo"
     repo.mkdir()
@@ -268,7 +269,7 @@ def _s3_tree(src: dict, s3, work: Path, max_bytes: int) -> Path:
                 raise CodeSourceError(f"nothing under {src['uri']}{src.get('path') or ''}")
     except CodeSourceError:
         raise
-    except Exception as e:  # noqa: BLE001 - botocore's, with no secret in it
+    except Exception as e:  # botocore's, with no secret in it
         raise CodeSourceError(f"cannot read {src['uri']}: {type(e).__name__}: {e}") from e
     return root
 
@@ -350,7 +351,7 @@ def read_script(source: dict, *, tokens: dict[str, str] | None = None, s3=None,
                 s3.download_file(bucket, key, str(target))
             except CodeSourceError:
                 raise
-            except Exception as e:  # noqa: BLE001 - botocore's, with no secret in it
+            except Exception as e:  # botocore's, with no secret in it
                 raise CodeSourceError(f"cannot read s3://{bucket}/{key}: {type(e).__name__}: {e}") from e
             return _read_file(target)
         return _read_file(_inside(root, _rel(spec["path"])))

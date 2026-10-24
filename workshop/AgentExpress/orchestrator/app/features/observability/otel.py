@@ -122,7 +122,7 @@ def set_session(session_id: str):
     try:
         ctx = baggage.set_baggage("session.id", normalize_session_id(session_id))
         return context.attach(ctx)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - tracing must never fail the run
         return None
 
 
@@ -221,7 +221,7 @@ def capture_prompt(name: str, system: str, user: str) -> None:
     output capture so the SAME call's response is paired with this prompt."""
     try:
         holder = _prompt_capture.get()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - no capture context means nothing to record
         return
     if holder is None:
         return
@@ -244,7 +244,7 @@ def capture_output(text: str) -> None:
     span's primary output. No-op outside a capture."""
     try:
         holder = _prompt_capture.get()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - no capture context means nothing to record
         return
     if holder is None:
         return
@@ -307,7 +307,7 @@ def carrier() -> dict:
     out: dict = {}
     try:
         inject(out)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - no trace headers rather than a failed call
         return {}
     return out
 
@@ -320,5 +320,5 @@ def attach_carrier(carrier_dict: dict):
     try:
         ctx = extract(carrier_dict)
         return context.attach(ctx)
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - an unreadable carrier starts a fresh trace
         return None

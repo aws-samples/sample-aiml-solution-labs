@@ -234,12 +234,12 @@ _CEDAR_ACTION = re.compile(r'AgentCore::Action::"([A-Za-z][A-Za-z0-9]*)(?:___[^"
 
 def _custom_policies(workflow: dict) -> list[dict]:
     """orchestrator.policy.custom entries and the tool keys their statement names."""
-    pol = ((workflow.get("orchestrator") or {}).get("policy") or {}) if isinstance(workflow.get("orchestrator"), dict) else {}
-    out = []
-    for c in (pol.get("custom") if isinstance(pol, dict) and isinstance(pol.get("custom"), list) else []):
-        if isinstance(c, dict) and isinstance(c.get("name"), str) and c["name"] and isinstance(c.get("statement"), str):
-            out.append({"name": c["name"], "tools": list(dict.fromkeys(_CEDAR_ACTION.findall(c["statement"])))})
-    return out
+    orch = workflow.get("orchestrator")
+    pol = ((orch or {}).get("policy") or {}) if isinstance(orch, dict) else {}
+    return [{"name": c["name"], "tools": list(dict.fromkeys(_CEDAR_ACTION.findall(c["statement"])))}
+            for c in (pol.get("custom") if isinstance(pol, dict) and isinstance(pol.get("custom"), list) else [])
+            if isinstance(c, dict) and isinstance(c.get("name"), str) and c["name"]
+            and isinstance(c.get("statement"), str)]
 
 
 def components(workflow: dict, agent_id: str) -> list[dict]:
@@ -267,7 +267,8 @@ def components(workflow: dict, agent_id: str) -> list[dict]:
                  else "input" if g.get("input") is True else "output")
         named = g.get("use") if isinstance(g.get("use"), str) and g.get("use") else (
             "existing guardrail" if g.get("guardrailId") else
-            "deployment guardrail" if isinstance(workflow.get("guardrail"), dict) and workflow["guardrail"] else "default guardrail")
+            "deployment guardrail" if isinstance(workflow.get("guardrail"), dict) and workflow["guardrail"]
+            else "default guardrail")
         out.append({"kind": "guardrail", "name": named, "detail": f"checks {sides}"})
     m = core.get("memory") if isinstance(core.get("memory"), dict) else {}
     long_term = ["semantic"] if m.get("longTerm") is True else _strs(m.get("longTerm"))
@@ -280,32 +281,35 @@ def components(workflow: dict, agent_id: str) -> list[dict]:
         out.append({"kind": "memory", "name": use or "agent memory",
                     "detail": " \u00b7 ".join(x for x in (", ".join(kinds), scope) if x)})
     for key in tool_keys:
-        for p in _strs((tools_cfg.get(key) or {}).get("policies") if isinstance(tools_cfg.get(key), dict) else None):
-            out.append({"kind": "policy", "name": p, "tool": key, "detail": f"on {key}"})
+        out.extend({"kind": "policy", "name": p, "tool": key, "detail": f"on {key}"}
+                   for p in _strs((tools_cfg.get(key) or {}).get("policies")
+                                  if isinstance(tools_cfg.get(key), dict) else None))
     # orchestrator.policy.custom: a statement naming one of this agent's tools governs every call to
     # that tool, so it is listed here too (web/src/builder/components.ts does the same).
     for cp in _custom_policies(workflow):
         for key in tool_keys:
-            if key in cp["tools"] and not any(r["kind"] == "policy" and r.get("tool") == key and r["name"] == cp["name"] for r in out):
+            if key in cp["tools"] and not any(r["kind"] == "policy" and r.get("tool") == key and r["name"] == cp["name"]
+                                              for r in out):
                 out.append({"kind": "policy", "name": cp["name"], "tool": key, "detail": f"on {key} \u00b7 every agent",
                             "custom": True})
-    for sk in _strs(agent.get("skills")):
-        out.append({"kind": "skill", "name": sk, "detail": ""})
+    out.extend({"kind": "skill", "name": sk, "detail": ""} for sk in _strs(agent.get("skills")))
     ev = core.get("evaluations") if isinstance(core.get("evaluations"), dict) else {}
     if ev.get("enabled") is True:
         names = _strs(ev.get("evaluators"))
         for e in names:
             prefix, _, rest = e.partition(".")
             out.append({"kind": "evaluation", "name": rest if prefix in ("Builtin", "Custom") and rest else e,
-                        "evaluator": e, "detail": "built-in" if prefix == "Builtin" else "custom" if prefix == "Custom" else ""})
+                        "evaluator": e,
+                        "detail": "built-in" if prefix == "Builtin" else "custom" if prefix == "Custom" else ""})
         if not names:
             out.append({"kind": "evaluation", "name": "Evaluations", "detail": "no evaluator picked"})
-    for ident in _strs((core.get("identity") or {}).get("outbound") if isinstance(core.get("identity"), dict) else None):
-        out.append({"kind": "identity", "name": ident, "detail": "outbound credential"})
+    outbound = (core.get("identity") or {}).get("outbound") if isinstance(core.get("identity"), dict) else None
+    out.extend({"kind": "identity", "name": ident, "detail": "outbound credential"} for ident in _strs(outbound))
     ask = agent.get("askPerson")
     if ask is True or isinstance(ask, dict):
         n = ask.get("maxQuestions") if isinstance(ask, dict) and isinstance(ask.get("maxQuestions"), int) else 3
-        out.append({"kind": "human", "name": "Asks questions", "detail": f"up to {n} question{'' if n == 1 else 's'} a step"})
+        out.append({"kind": "human", "name": "Asks questions",
+                    "detail": f"up to {n} question{'' if n == 1 else 's'} a step"})
     return out
 
 

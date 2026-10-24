@@ -27,8 +27,8 @@ vi.mock("../api", () => {
 });
 
 import { Builder } from "./Builder";
-import { ASSISTANT_HELP, defaultsUsed, hintFull, openInputs, readExpanded, REVIEW_HELP, REVIEW_LABEL, reviewLine,
-  secretsNeeded, when } from "./DesignChat";
+import { ASSISTANT_HELP, defaultsUsed, hintFull, openInputs, phaseLabel, readExpanded, REVIEW_HELP, REVIEW_LABEL,
+  reviewLine, secretsNeeded, when } from "./DesignChat";
 import { record, redo, start, undo } from "./history";
 import { Markdown } from "./markdown";
 import { addAgent, migrateFramework, newProject, replaceWorkflow, type Project } from "./model";
@@ -294,6 +294,19 @@ describe("the AgentExpress Assistant tab", () => {
     expect(reviewLine({ status: "ok" })).toBe("Reviewed: no issues");
     expect(reviewLine(undefined)).toBe("");
   });
+  it("says which page it is reading while a fetch is in flight, not that it is checking", async () => {
+    const user = { id: "u1", role: "user" as const, text: "Use https://docs.example.com/claims", at: "2026-09-09T10:00:00Z" };
+    replies = { "GET /api/builds/pclaims01/design": [doc({ status: "thinking", turns: [user, {
+      id: "a1", role: "assistant", text: "", at: "", status: "thinking", phase: "reading",
+      progress: ["Adding tool policyKb", "Reading docs.example.com"] }] })] };
+    await act(async () => { render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    expect(await screen.findByText("Reading docs.example.com…")).toBeTruthy();
+    expect(screen.queryByText("Checking the change…")).toBeNull();
+    // The progress list (its last 8 lines) is there too, the fetch's line last.
+    expect(screen.getByTestId("design-progress").textContent).toBe("Adding tool policyKbReading docs.example.com");
+    expect(phaseLabel({ phase: "reading" })).toBe("Reading the page…");
+    expect(phaseLabel({ phase: "checking" })).toBe("Checking the change…");
+  });
   it("keeps the input's hint to one line, with the full text in its tooltip and its info icon", async () => {
     replies = { "GET /api/builds/pclaims01/design": [doc()] };
     let view!: ReturnType<typeof render>;
@@ -360,7 +373,7 @@ describe("the AgentExpress Assistant tab", () => {
     await act(async () => { render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
     await waitFor(() => expect(screen.getByRole("button", { name: "Collapse Assistant" })).toBeTruthy());
     expect(readExpanded()).toBe(true);
-  });
+  }, 30_000);   // about 1.7 s alone; two whole Builder renders, so slow under a full run
   it("offers the demo video only to someone who owns no builds yet", async () => {
     const url = "https://videos.example.com/demo";
     replies = { "GET /api/builds/pclaims01/design": [doc()] };
@@ -371,7 +384,7 @@ describe("the AgentExpress Assistant tab", () => {
     const owns = { ...serverStore({ project: stored, saves: [] }), list: async () => [sharedBuild, summary] };
     const { unmount } = await act(async () => render(
       <Builder notify={vi.fn()} store={owns} demoUrl={url} request={{ id: stored.id, nonce: 1 }} />));
-    expect(screen.getByText("What would you like to build?")).toBeTruthy();
+    expect(await screen.findByText("What would you like to build?")).toBeTruthy();
     expect(screen.queryByTestId("design-demo-video")).toBeNull();
     unmount();
     // Only builds shared with them or with everyone: someone else's, so still the welcome.

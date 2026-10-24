@@ -20,4 +20,4 @@ Key files:
   app/common/context.py            — ctx.get_identity_token(provider)
 """
 
-from app.features.identity.client import get_api_key, get_token  # noqa: F401
+from app.features.identity.client import get_api_key, get_token  # noqa: F401 - the package's public API

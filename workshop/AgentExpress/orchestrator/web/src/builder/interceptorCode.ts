@@ -25,7 +25,7 @@ export interface TemplateDef {
 export const TEMPLATES: Record<Point, TemplateDef[]> = {
   request: [
     { id: "audit", label: "Audit log", defaults: {},
-      description: "One JSON line per request in CloudWatch Logs: the method, tool, session, agent, user and decision. Argument names only, never values." },
+      description: "One JSON line per request in CloudWatch Logs: the method, tool, session, agent, user and decision. Argument names only, never values. Session, agent and user are blank unless Pass the request headers is on." },
     { id: "blockTools", label: "Block tools", defaults: { tools: [] },
       description: "Refuse calls to the tools listed, for every agent or only the agents listed. The agent is told it was refused." },
     { id: "argumentGuard", label: "Argument guard", defaults: { denyPatterns: [], maxArgumentChars: 20000 },

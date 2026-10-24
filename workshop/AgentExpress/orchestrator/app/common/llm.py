@@ -309,7 +309,7 @@ async def run_llm_tools(name: str, system: str, messages: list, tools: list[dict
                 convo = [HumanMessage(content=f"{system}\n\n{first.content}"), *rest]
             else:
                 cached = _pc.system_content(system, plan)
-                convo = [SystemMessage(content=cached if cached else system), *messages]
+                convo = [SystemMessage(content=cached or system), *messages]
             convo = _pc.with_message_point(convo, plan)
             try:
                 msg = await llm.ainvoke(convo)

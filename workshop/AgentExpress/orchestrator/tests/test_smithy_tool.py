@@ -12,8 +12,8 @@ import sys
 from conftest import ORCH_ROOT
 
 sys.path.insert(0, str(ORCH_ROOT / "bff"))
-import smithy_tool  # noqa: E402
-import validate_build  # noqa: E402
+import smithy_tool
+import validate_build
 
 TF = ORCH_ROOT / "terraform"
 SMITHY_TF = (TF / "tools_smithy.tf").read_text()

@@ -36,7 +36,7 @@ import botocore.validate
 import pytest
 
 moto = pytest.importorskip("moto")
-from test_builds import _events_table, _status_table, call, create_builds_table, env, save  # noqa: E402,F401
+from test_builds import _events_table, _status_table, call, create_builds_table, env, save  # noqa: E402,F401 - after the moto importorskip; env is the fixture, taken by name
 
 ORCH = Path(__file__).resolve().parents[1]
 PRESETS = json.loads((ORCH / "tests" / "fixtures" / "export_presets.json").read_text())
@@ -139,19 +139,19 @@ class Vendor:
 
 
 @pytest.fixture()
-def vendor(env, monkeypatch):
+def vendor(env, monkeypatch):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     v = Vendor()
     monkeypatch.setattr(_te(env).netguard, "urlopen", v)
     _te(env)._tests.clear()
     return v
 
 
-def _lf_test(env, **over):
+def _lf_test(env, **over):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     body = {"destination": "langfuse", "region": "eu", "headers": LF_HEADERS, **over}
     return call(env, "POST /api/builds/{id}/export/test", params={"id": "pclaims01"}, body=body)
 
 
-def test_a_test_sends_one_protobuf_span_to_the_preset_with_the_headers(env, vendor):
+def test_a_test_sends_one_protobuf_span_to_the_preset_with_the_headers(env, vendor):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     status, got = _lf_test(env)
     assert status == 200 and got["ok"] is True and got["message"] == "Langfuse accepted a test trace."
@@ -176,7 +176,7 @@ def test_a_test_sends_one_protobuf_span_to_the_preset_with_the_headers(env, vend
 @pytest.mark.parametrize(("status", "words"), [
     (401, "Langfuse refused the key (HTTP 401). Check the public and secret keys"),
     (404, "Nothing receives traces at"), (503, "could not take it just now"), (400, "refused the test trace")])
-def test_a_refusal_is_said_plainly_and_no_header_value_comes_back(env, vendor, status, words):
+def test_a_refusal_is_said_plainly_and_no_header_value_comes_back(env, vendor, status, words):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     # A vendor that echoes the credentials back in its error.
     vendor.status = status
@@ -187,7 +187,7 @@ def test_a_refusal_is_said_plainly_and_no_header_value_comes_back(env, vendor, s
     assert "cGstbGYtMTIzNDpzay1sZi01Njc4" not in json.dumps(got)
 
 
-def test_a_timeout_and_an_unreachable_host_are_said_plainly(env, vendor, monkeypatch):
+def test_a_timeout_and_an_unreachable_host_are_said_plainly(env, vendor, monkeypatch):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     monkeypatch.setattr(_te(env).netguard, "urlopen", lambda req, timeout=None: (_ for _ in ()).throw(TimeoutError()))
     assert _lf_test(env)[1]["error"] == "cloud.langfuse.com did not answer within 5 seconds."
@@ -198,7 +198,7 @@ def test_a_timeout_and_an_unreachable_host_are_said_plainly(env, vendor, monkeyp
 
 @pytest.mark.parametrize("endpoint", ["https://127.0.0.1/v1/traces", "https://169.254.169.254/v1/traces",
                                       "https://10.0.0.8:4318/v1/traces", "https://[::1]/v1/traces"])
-def test_the_ssrf_guard_refuses_a_private_address_before_connecting(env, endpoint, monkeypatch):
+def test_the_ssrf_guard_refuses_a_private_address_before_connecting(env, endpoint, monkeypatch):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     _te(env)._tests.clear()
     connected = []
@@ -220,14 +220,14 @@ def test_the_ssrf_guard_refuses_a_private_address_before_connecting(env, endpoin
     ({"destination": "langfuse", "region": "eu", "headers": {"x-a": "one\r\nx-b: two"}}, "one line"),
     ({"destination": "langfuse", "region": "eu", "headers": {f"h{i}": "v" for i in range(11)}}, "at most 10"),
 ])
-def test_a_bad_setup_is_refused_before_anything_is_sent(env, vendor, body, words):
+def test_a_bad_setup_is_refused_before_anything_is_sent(env, vendor, body, words):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     status, got = call(env, "POST /api/builds/{id}/export/test", params={"id": "pclaims01"},
                        body={"headers": {"x-api-key": "k"}, **body})
     assert status == 400 and words in got["error"] and vendor.requests == []
 
 
-def test_saved_keys_are_used_only_for_the_address_they_were_saved_for(env, vendor):
+def test_saved_keys_are_used_only_for_the_address_they_were_saved_for(env, vendor):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     name = _te(env).secret_name(LF_URL)
     assert call(env, "PUT /api/builds/{id}/secrets", params={"id": "pclaims01"},
@@ -244,7 +244,7 @@ def test_saved_keys_are_used_only_for_the_address_they_were_saved_for(env, vendo
     assert len(vendor.requests) == 1
 
 
-def test_only_someone_who_may_change_the_build_and_deploy_may_test(env, vendor):
+def test_only_someone_who_may_change_the_build_and_deploy_may_test(env, vendor):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     assert call(env, "POST /api/builds/{id}/export/test", params={"id": "pclaims01"}, sub="u2",
                 body={"destination": "langfuse", "region": "eu", "headers": LF_HEADERS})[0] == 404
@@ -255,7 +255,7 @@ def test_only_someone_who_may_change_the_build_and_deploy_may_test(env, vendor):
     assert vendor.requests == []
 
 
-def test_tests_are_held_to_ten_a_minute(env, vendor):
+def test_tests_are_held_to_ten_a_minute(env, vendor):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     save(env)
     assert all(_lf_test(env)[0] == 200 for _ in range(10))
     status, got = _lf_test(env)
@@ -365,7 +365,7 @@ def test_a_control_plane_console_answers_404(monkeypatch):
 
 def test_the_status_says_where_runs_go_and_admins_also_get_the_last_day(app):
     now = app.handler.traceexport._dt.datetime.now(app.handler.traceexport._dt.UTC)
-    iso = lambda h: (now - app.handler.traceexport._dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+    iso = lambda h: (now - app.handler.traceexport._dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731 - a one-line test helper
     _run(app, "s00000000001", "alice", {"status": "sent", "traceId": "a" * 32, "at": iso(1)})
     _run(app, "s00000000002", "bob", {"status": "failed", "error": "HTTP 401 from Langfuse", "at": iso(2)})
     _run(app, "s00000000003", "bob", {"status": "failed", "error": "older", "at": iso(5)})
@@ -445,7 +445,7 @@ def test_pause_is_the_contracts_row_and_is_never_a_run(app):
     ({"destination": "langfuse", "region": "mars"}, False),
     ({"destination": "langfuse", "region": "eu", "send": {"content": "yes"}}, False),
 ])
-def test_a_saved_setup_keeps_no_keys(env, definition, ok):
+def test_a_saved_setup_keeps_no_keys(env, definition, ok):  # noqa: F811 - `env` is test_builds' fixture, which pytest injects by name
     status, got = call(env, "POST /api/library", body={"kind": "export", "name": "teamLangfuse", "definition": definition})
     assert (status == 200) is ok, got
     if ok:

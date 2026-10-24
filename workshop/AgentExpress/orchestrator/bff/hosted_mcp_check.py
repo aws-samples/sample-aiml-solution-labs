@@ -27,7 +27,8 @@ import code_source  # bff/code_source.py
 #: 48 (AgentRuntimeName) - len("ax_12345678_mcp_").
 MAX_KEY = 32
 #: What cdk/lib/hosted-mcp.ts ecrRepositoryArn and terraform/tools_hosted_mcp.tf parse.
-ECR_IMAGE_RE = re.compile(r"^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9._/-]+(:[\w.-]+|@sha256:[0-9a-f]{64})?$", re.ASCII)
+ECR_IMAGE_RE = re.compile(
+    r"^\d{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9._/-]+(:[\w.-]+|@sha256:[0-9a-f]{64})?$", re.ASCII)
 VARIANTS = ("git", "s3", "image")
 
 
@@ -35,8 +36,8 @@ def _code_problems(code, p: str) -> list[tuple[str, str]]:
     out = list(code_source.problems(code, p, allow=VARIANTS))
     image = code.get("image") if isinstance(code, dict) and len(code) == 1 else None
     if not out and isinstance(image, str) and not ECR_IMAGE_RE.fullmatch(image):
-        out.append((f"{p}.image", "a hosted MCP server's image must be a private ECR image URI, "
-                    "<account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag | @sha256:<digest>]"))
+        out.append((f"{p}.image", ("a hosted MCP server's image must be a private ECR image URI, "
+                                   "<account>.dkr.ecr.<region>.amazonaws.com/<repo>[:tag | @sha256:<digest>]")))
     return out
 
 

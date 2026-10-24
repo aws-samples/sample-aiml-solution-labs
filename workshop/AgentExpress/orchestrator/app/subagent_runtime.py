@@ -72,7 +72,7 @@ async def invoke(payload, context=None):
             out = await _agent.run(ctx)
             await ctx.memory_store(out)
         return {"agent_id": AGENT_ID, "output": out, "logs": _timeline(session_id)}
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - the error goes back to the orchestrator in the response
         return {"agent_id": AGENT_ID, "error": f"{type(e).__name__}: {e}",
                 "logs": _timeline(session_id)}
     finally:

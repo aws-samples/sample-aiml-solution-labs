@@ -29,9 +29,7 @@ import uuid
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 
-from app.common import liveconfig
-from app.common import model_routing
-from app.common import asks
+from app.common import asks, liveconfig, model_routing
 from app.common.config import AGENT_ORDER, DEFAULT_TOPIC, LAST_AGENT_ID, MEMORY_ID, REGION
 from app.common.sink import WorkflowCancelled, emit, ensure_session, is_cancelled
 from app.features.gateway import person
@@ -116,7 +114,7 @@ async def _finalize(session_id: str, invoked=None) -> None:
             from app.features.evaluations import service as eval_service
             await asyncio.to_thread(eval_service.auto_evaluate_session,
                                     session_id, values.get("user", ""))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - auto-eval must never fail the run
             print(f"[evaluations] auto-eval skipped: {type(e).__name__}: {e}")
 
 
@@ -204,7 +202,7 @@ async def _reconcile_incomplete(session_id: str, status: str) -> None:
         for nid in nodes_in_status(session_id, "running"):
             await emit(session_id, {"type": "node_status", "node": nid, "status": status,
                                     "log": f"{nid}: {status} (run {status} before this agent finished)"})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - reconciling node statuses is best effort
         print(f"[reconcile] {type(e).__name__}: {e}")
 
 
@@ -220,7 +218,7 @@ async def _reconcile_skipped(session_id: str) -> None:
         for nid in nodes_in_status(session_id, "pending"):
             await emit(session_id, {"type": "node_status", "node": nid, "status": "skipped",
                                     "log": f"{nid}: skipped (the run did not reach it)"})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - reconciling node statuses is best effort
         print(f"[reconcile] {type(e).__name__}: {e}")
 
 
@@ -248,7 +246,7 @@ async def _run(session_id: str, initial=None, resume=None, rerun=None, user: str
         await emit(session_id, {"type": "session_status", "status": "cancelled",
                                 "result": "Stopped by user.", "log": "Workflow cancelled by user"})
         await _reconcile_incomplete(session_id, "cancelled")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - any failure ends the run as cancelled or failed
         # A node may raise WorkflowCancelled wrapped by the graph runtime; if the
         # user asked to stop, report it as cancelled rather than a failure.
         if is_cancelled(session_id):
@@ -324,7 +322,7 @@ async def _run_eval(session_id: str, agent_id: str, user: str = "", prompt: str 
             from app.features.observability import runexport
             if runexport.settings() is not None:
                 await asyncio.to_thread(runexport.after_eval, session_id, agent_id, since)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - an eval failure is reported in the run log
         await emit(session_id, {"type": "log",
                                 "log": f"Evaluation failed for {agent_id}: {type(e).__name__}: {e}"})
     finally:
@@ -339,7 +337,7 @@ async def _run_insights(lookback_hours: int = _DEFAULT_INSIGHTS_LOOKBACK, user: 
     try:
         from app.features.optimization import insights
         await asyncio.to_thread(insights.run_batch, lookback_hours, user)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a failed insights batch is logged; the task still ends
         print(f"[insights] run failed: {type(e).__name__}: {e}")
     finally:
         app.complete_async_task(task_id)
@@ -357,7 +355,7 @@ async def invoke(payload, context=None):
         try:
             from app.features.optimization import insights
             return insights.get_latest()
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001 - the error goes back to the caller
             return {"error": f"{type(e).__name__}: {e}"}
 
     # Insights: start a cross-run batch analysis in the background.

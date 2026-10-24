@@ -9,7 +9,7 @@ vi.mock("../api", () => ({ api: {
   get: vi.fn(async (p: string) => (p.endsWith("/docs") ? [] : { models: [] })),
   post: vi.fn(async () => ({})), put: vi.fn(async () => ({})), del: vi.fn(async () => ({})),
 } }));
-import { Builder, DESIGN_CAPTION } from "../builder/Builder";
+import { Builder, DESIGN_CAPTION, DESIGN_CAPTION_SHORT } from "../builder/Builder";
 import type { Selection } from "../builder/Canvas";
 import { Inspector } from "../builder/Inspector";
 import { addTool, newProject, type Entry, type Project } from "../builder/model";
@@ -103,6 +103,13 @@ describe("no info icon stands alone", () => {
     expectNoneAlone("Design");
     // Design's caption is in the canvas, beside Show: no row between the tab bar and the canvas.
     expectIcon("tab.design", DESIGN_CAPTION);
+    // What shows is short enough never to be cut off; the whole sentence is its tooltip,
+    // and the only copy a screen reader reads.
+    expect(DESIGN_CAPTION_SHORT.split(/\s+/).length).toBeLessThanOrEqual(4);
+    const caption = document.querySelector("[data-testid=canvas-caption] .axb-canvas-caption-text")!;
+    expect(caption.getAttribute("title")).toBe(DESIGN_CAPTION);
+    expect(within(caption as HTMLElement).getByText(DESIGN_CAPTION_SHORT).closest("[aria-hidden=true]")).not.toBeNull();
+    expect(within(caption as HTMLElement).getByText(DESIGN_CAPTION).closest("[aria-hidden=true]")).toBeNull();
     expect(document.querySelector("[data-testid=canvas-caption]")?.closest(".axb-canvas")).not.toBeNull();
     expect(document.querySelector("[data-testid=tab-level-design]")).toBeNull();
     await expectLink("tab.design");

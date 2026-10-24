@@ -36,6 +36,7 @@ import type { Action, NodeStatus, SessionSnapshot, Workflow } from "../types";
 import { Graph } from "./Graph";
 import { StepBadge } from "./StepBadge";
 import { stepNumbers } from "../lib/stepNumbers";
+import { rerunBlocked } from "../lib/rerun";
 import { RunFiles } from "./RunFiles";
 import { RunFlow } from "./RunFlow";
 import { RunGantt } from "./RunGantt";
@@ -326,7 +327,7 @@ export function RunDetail({
               >
                 <Graph
                   workflow={workflow} nodes={nodes} selected={selected} onSelect={onSelect} events={flow}
-                  rerunnable={(id) => settled && can("rerun") && ran(id)}
+                  rerunnable={(id) => settled && can("rerun") && ran(id) && !rerunBlocked(workflow.steps, id)}
                   onRerunFrom={settled && can("rerun") ? (id) => onSelect(id) : undefined}
                   onRestart={
                     settled && can("rerun") && ids.length > 0 && ran(ids[0])

@@ -466,7 +466,7 @@ describe("the built-in code interpreter function (source: codeInterpreter)", () 
 });
 
 describe("a cross-account lambda tool", () => {
-  const CROSS = "arn:aws:lambda:us-east-1:999999999999:function:shared-tool";
+  const CROSS = "arn:aws:lambda:us-east-1:444455556666:function:shared-tool";
   const template = plane({ shared: { ...LAMBDA_TOOL, lambdaArn: CROSS } });
 
   it("is still granted on the Gateway role", () => {

@@ -22,6 +22,7 @@ import re
 import sys
 import urllib.error
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from conftest import workflow
@@ -50,7 +51,7 @@ MODS = ("workflow", "authz", "chatbot", "handler", "triggers", "gates", "a2a_ser
 
 
 class ConditionalCheckFailed(Exception):
-    response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+    response: ClassVar[dict] = {"Error": {"Code": "ConditionalCheckFailedException"}}
 
 
 class RunTable:
@@ -649,7 +650,7 @@ def test_the_three_route_lists_agree():
     sys.path.insert(0, str(BFF))
     server = importlib.import_module("a2a_server")
     tf = (TF / "a2a_server.tf").read_text()
-    tf_routes = re.findall(r'^\s*"((?:GET|POST) /api/a2a[^"]*)",?$', _hcl_block(tf, "a2a_routes = ["), re.M)
+    tf_routes = re.findall(r'^\s*"((?:GET|POST) /api/a2a[^"]*)",?$', _hcl_block(tf, "a2a_routes = ["), re.MULTILINE)
     ts = (CDK / "lib" / "a2a-server.ts").read_text()
     cdk_routes = json.loads(re.search(r"export const A2A_ROUTES = (\[[^\]]*\]);", ts).group(1))
     assert tf_routes == cdk_routes == list(server.ROUTES)
@@ -664,7 +665,7 @@ def test_the_main_route_lists_do_not_carry_the_a2a_routes():
 def test_terraform_creates_nothing_unless_exposed():
     tf = (TF / "a2a_server.tf").read_text()
     variables = (TF / "variables.tf").read_text()
-    assert re.search(r'variable "expose_a2a" \{[^}]*type\s*=\s*bool\s*default\s*=\s*false', variables, re.S)
+    assert re.search(r'variable "expose_a2a" \{[^}]*type\s*=\s*bool\s*default\s*=\s*false', variables, re.DOTALL)
     for header in ('resource "aws_cognito_resource_server" "a2a"', 'resource "aws_cognito_user_pool_client" "a2a"'):
         assert re.search(r"count\s*=\s*local\.a2a_create \? 1 : 0", _hcl_block(tf, header)), header
     assert re.search(r"local\.a2a_create\s*=|a2a_create\s*=\s*var\.expose_a2a &&", tf)

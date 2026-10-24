@@ -315,7 +315,8 @@ class A2AAgent(Agent):
                 f"sign with. In the runtime this is the execution role; locally, configure a "
                 f"profile.")
         # AgentCore Runtime signs as "bedrock-agentcore"; a Function URL as "lambda".
-        service = str(A2A_INVOKE.get("sigv4Service") or ("bedrock-agentcore" if _AGENTCORE_HOST.match(host) else "lambda"))
+        service = str(A2A_INVOKE.get("sigv4Service")
+                      or ("bedrock-agentcore" if _AGENTCORE_HOST.match(host) else "lambda"))
         region = session.region_name or os.getenv("AWS_REGION", "us-east-1")
         signed = AWSRequest(method=request.get_method(), url=request.full_url,
                             data=request.data, headers=dict(request.headers))

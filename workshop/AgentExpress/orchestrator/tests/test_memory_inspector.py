@@ -35,7 +35,7 @@ from botocore.exceptions import ClientError
 
 moto = pytest.importorskip("moto")
 
-from test_builds import CTX, MODULES, _events_table, _status_table, create_builds_table  # noqa: E402
+from test_builds import CTX, MODULES, _events_table, _status_table, create_builds_table  # noqa: E402 - after the moto importorskip
 
 ORCH = Path(__file__).resolve().parents[1]
 SEMANTIC = "orch_semantic-abcdefghij"
@@ -117,10 +117,10 @@ class FakeMemory:
         # matches that path and everything under it, on whole segments.
         if "namespace" in kw:
             want = kw["namespace"]
-            hit = lambda n: n == want  # noqa: E731
+            hit = lambda n: n == want  # noqa: E731 - a one-line test helper
         else:
             path = kw["namespacePath"]
-            hit = lambda n: n.startswith(path)  # noqa: E731
+            hit = lambda n: n.startswith(path)  # noqa: E731 - a one-line test helper
         rows = [r for r in store.values() if any(hit(n) for n in r["namespaces"])]
         return sorted(rows, key=lambda r: r["createdAt"], reverse=True)
 
@@ -434,8 +434,8 @@ def test_search_is_scoped_capped_and_needs_a_query(env):
     n = len(env.mem.calls)
     too_long = "x" * (env.memories.QUERY_MAX + 1)
     for q in (too_long, "", "   ", None, 7):
-        status, resp = call(env, "POST /api/memory/search",
-                            body={"agent": "research", "namespace": "insights/research-acme", "query": q})
+        status, _resp = call(env, "POST /api/memory/search",
+                             body={"agent": "research", "namespace": "insights/research-acme", "query": q})
         assert status == 400, q
     assert len(env.mem.calls) == n
     assert call(env, "POST /api/memory/search", body={"agent": "research", "namespace": "insights/research-acme",

@@ -26,6 +26,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AssetView } from "../assets/AssetView";
 import { fmtTime } from "../lib/clock";
 import { statusIndicator } from "../lib/status";
+import { rerunBlocked } from "../lib/rerun";
 import type { SessionSnapshot, Workflow } from "../types";
 import { toolsLabel, toolsOf } from "../lib/tools";
 import { useDocsBase } from "../docs/docsLinks";
@@ -64,6 +65,8 @@ export function StepPanel({
 
   const ran = (id: string) =>
     Boolean(snap.nodes?.[id]?.output) || snap.nodes?.[id]?.status === "done";
+  /** Why the runtime would refuse a re-run from this step alone, if it would. */
+  const blocked = rerunBlocked(workflow.steps, agentId);
 
   const [comment, setComment] = useState("");
   const [busy, setBusy] = useState(false);
@@ -180,17 +183,19 @@ export function StepPanel({
                     />
                   </FormField>
 
-                  <FormField
-                    label="Re-run this step and everything after it"
-                    description="Each review gate downstream pauses again."
-                  >
-                    <Button
-                      variant="primary" iconName="redo" loading={busy} disabled={!canRerun}
-                      onClick={() => void submit([agentId])}
+                  {blocked ? <Alert type="info">{blocked}</Alert> : (
+                    <FormField
+                      label="Re-run this step and everything after it"
+                      description="Each review gate downstream pauses again."
                     >
-                      {`Re-run ${meta.name ?? agentId}`}
-                    </Button>
-                  </FormField>
+                      <Button
+                        variant="primary" iconName="redo" loading={busy} disabled={!canRerun}
+                        onClick={() => void submit([agentId])}
+                      >
+                        {`Re-run ${meta.name ?? agentId}`}
+                      </Button>
+                    </FormField>
+                  )}
 
                   {siblings && siblings.length > 1 ? (
                     <FormField

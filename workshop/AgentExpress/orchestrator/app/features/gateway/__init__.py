@@ -32,4 +32,4 @@ At runtime, agents reach it through AgentContext:
   context,  mode = await ctx.retrieve(query, doc_type="reference")
 """
 
-from app.features.gateway.client import query_tool, retrieve  # noqa: F401
+from app.features.gateway.client import query_tool, retrieve  # noqa: F401 - the package's public API

@@ -11,7 +11,6 @@ import sys
 from pathlib import Path
 
 import pytest
-
 from test_bff_routes import CTX, WORKFLOW, FakeTable, call
 
 MODS = ("workflow", "authz", "chatbot", "handler")

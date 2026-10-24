@@ -302,8 +302,11 @@ const TAB_DOCS: Record<string, DocsFeature> = {
 const TAB_CAPTION: Record<string, string> = {
   settings: "Build-wide settings that apply to every agent",
 };
-/** The Design tab's caption, at the canvas's top left beside Show (wiki: Canvas). */
+/** The Design tab's caption, at the canvas's top left beside Show (wiki: Canvas): the
+ *  short line shown (DESIGN_CAPTION_SHORT, short enough never to be cut off on a narrow
+ *  canvas) and the whole sentence, its tooltip and what a screen reader reads. */
 export const DESIGN_CAPTION = "Stages run top to bottom, with each stage's agents inside";
+export const DESIGN_CAPTION_SHORT = "Stages run top-down";
 /** The tabs in TAB_ORDER, each with its level note on one row with the tab's own
  *  `actions` (buttons such as Add from registry), the note left and the buttons right.
  *  With a documentation URL (`docs`), every tab in TAB_DOCS has the row, for its info
@@ -911,7 +914,8 @@ function Editor({
                 <Canvas workflow={wf} issues={issues} selection={selection} onSelect={setSelection}
                   caption={docs ? <>
                     <span className="axb-canvas-caption-text" title={DESIGN_CAPTION}>
-                      <Box variant="small" color="text-body-secondary">{DESIGN_CAPTION}</Box></span>
+                      <span aria-hidden="true"><Box variant="small" color="text-body-secondary">{DESIGN_CAPTION_SHORT}</Box></span>
+                      <span className="axb-vh">{DESIGN_CAPTION}</span></span>
                     <InfoLink feature="tab.design" /></> : undefined}
                   onDropPayload={onDropPayload} onMoveAgent={onMoveAgent} dragging={dragging}
                   onAddChoice={addRow} onRemoveComponent={removeRow} onMoveComponent={moveRow} onCreate={createRow} />

@@ -499,10 +499,10 @@ step (not a parallel peer, not itself) and warns if it isn't an image agent.
 Set `"attachments": true` on the agents that should read the files a run is started with.
 **Start run** then shows **Attach files** (up to 5; documents 4.5 MB, images 3.75 MB), and the
 request may name S3 objects or folders as `s3://bucket/key` or `s3://bucket/folder/` inside a
-location `orchestrator.attachments.s3` lists:
+location `orchestrator.attachments.s3` lists (name a bucket you own):
 
 ```json
-"orchestrator": { "attachments": { "s3": ["customer-docs/contracts"] } },
+"orchestrator": { "attachments": { "s3": ["amzn-s3-demo-bucket/contracts"] } },
 "agents": { "intake": { "name": "Intake", "attachments": true } }
 ```
 

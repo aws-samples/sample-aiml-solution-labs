@@ -14,26 +14,27 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 ORCH = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ORCH / "bff"))
 
-import builds  # noqa: E402
-import limits  # noqa: E402
+import builds  # noqa: E402 - after the sys.path insert that makes it importable
+import limits  # noqa: E402 - after the sys.path insert that makes it importable
 
-from app.features.observability import spend  # noqa: E402
+from app.features.observability import spend  # noqa: E402 - after the sys.path insert that makes it importable
 
 D = decimal.Decimal
 
 
 class ConditionalCheckFailed(Exception):
-    response = {"Error": {"Code": "ConditionalCheckFailedException"}}
+    response: ClassVar[dict] = {"Error": {"Code": "ConditionalCheckFailedException"}}
 
 
 class Throttled(Exception):
-    response = {"Error": {"Code": "ProvisionedThroughputExceededException"}}
+    response: ClassVar[dict] = {"Error": {"Code": "ProvisionedThroughputExceededException"}}
 
 
 class FakeTable:
@@ -348,7 +349,7 @@ def test_a_failed_telemetry_write_adds_nothing_to_the_total(monkeypatch):
 def test_a_trigger_run_is_limited_as_whoever_it_runs_as():
     """_begin_run gets the (owner, user) that triggers.run_identity picked, and keys the limit on
     `user`. A service trigger is its own user; an owner trigger spends the owner's budget."""
-    import triggers  # noqa: PLC0415
+    import triggers
     svc = triggers.run_identity("nightly", {"runAs": "service"})
     assert svc == ("trigger:nightly", "trigger:nightly")
     t = FakeTable()
@@ -450,7 +451,7 @@ def test_a_failed_day_write_does_not_stop_the_month_from_being_added(monkeypatch
 
 # ---- the step guard: a run that was let in and has since crossed a limit --------------------
 
-from app.common.errors import BudgetReached  # noqa: E402
+from app.common.errors import BudgetReached  # noqa: E402 - kept beside the tests that use it
 
 
 def test_a_step_does_not_start_once_the_users_day_is_spent():

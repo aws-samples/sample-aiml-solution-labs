@@ -24,9 +24,8 @@ Three defects these tests pin, all found by running the real API:
   3. Usage types carry a REGION PREFIX outside us-east-1 (`EU-Lambda-GB-Second`),
      so patterns anchored for one region match nothing anywhere else.
 """
-import importlib
+import importlib.util
 import json
-import sys
 
 import pytest
 
@@ -155,10 +154,11 @@ def tl(monkeypatch):
     if not (pricing / "handler.py").is_file():
         pytest.skip("app/tools/pricing/ is absent: this sample's demo `lambda` tool "
                     "has been removed, and these tests only cover that tool")
-    sys.path.insert(0, str(pricing))
-    import handler
-
-    importlib.reload(handler)
+    # Loaded from its file under its own name: on sys.path, or as sys.modules["handler"], it
+    # would shadow bff/handler.py for every later test that imports "handler" (test_trace_export).
+    spec = importlib.util.spec_from_file_location("ax_pricing_handler", pricing / "handler.py")
+    handler = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(handler)
     handler._SERVICE_CODES = []          # the per-container catalog cache
     return handler
 

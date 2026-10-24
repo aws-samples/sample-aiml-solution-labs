@@ -32,8 +32,8 @@ from urllib.parse import parse_qs, urlsplit
 import netguard
 import pytest
 import webfetch
-from test_builds import env, save  # noqa: F401
-from test_designer import conversation, model, run_background, says, send, tool_use  # noqa: F401
+from test_builds import env, save  # noqa: F401 - env is the builds fixture, taken by name
+from test_designer import conversation, model, run_background, says, send, tool_use  # noqa: F401 - model is a fixture, taken by name
 
 PAGE = b"""<!doctype html><html><head><title>Agent  Patterns &amp; Notes</title>
 <style>body{color:red}</style><script>window.steal(document.cookie)</script></head>
@@ -371,7 +371,7 @@ def test_in_a_turn_the_model_reads_the_linked_page_and_the_reply_names_it(env, m
     assert run_background(env) == {"ok": True}
 
     # The chat said what it was reading while it read it.
-    assert seen_mid_fetch[0]["phase"] == "checking"
+    assert seen_mid_fetch[0]["phase"] == "reading"
     assert seen_mid_fetch[0]["progress"] == ["Reading docs.example.com"]
     # The model got the page as untrusted data, and was told what to do with it.
     result = script.calls[1]["messages"][-1]["content"][0]["toolResult"]["content"][0]["json"]
@@ -385,6 +385,29 @@ def test_in_a_turn_the_model_reads_the_linked_page_and_the_reply_names_it(env, m
     reply = conversation(env)[1]["turns"][-1]
     assert reply["status"] == "done" and url in reply["text"]
     assert reply["pages"] == [{"url": url, "ok": True}]
+def test_reading_stays_up_for_a_second_even_after_a_fast_fetch(env, monkeypatch):
+    """The page polls every 700 ms: "Reading <host>" is not replaced by "thinking" for
+    READING_S, and the progress list keeps its last 8 lines."""
+    designer = env.handler.designer
+    monkeypatch.setattr(designer, "_store", lambda bid, doc: None)
+    now = [100.0]
+    monkeypatch.setattr(designer.time, "monotonic", lambda: now[0])
+    reply = {"progress": [f"Adding tool t{i}" for i in range(8)]}
+    live = designer._Live("pclaims01", {}, reply)
+    live.reading("docs.example.com")
+    assert reply["phase"] == "reading" and len(reply["progress"]) == 8
+    assert reply["progress"][-1] == "Reading docs.example.com"
+    now[0] += 0.2                                   # the fetch was fast
+    live.phase("thinking")
+    assert reply["phase"] == "reading"
+    now[0] += designer._Live.READING_S
+    live.phase("thinking")
+    assert reply["phase"] == "thinking"
+    live.reading("example.org")
+    live.phase("writing")                           # the reply's text replaces it at once
+    assert reply["phase"] == "writing"
+
+
 def test_a_turn_the_safety_filter_stops_says_so_instead_of_done(env, model):
     """Seen live: a metadata URL in the message ended the model call with
     stopReason content_filtered and no text, and the chat said only "Done."."""

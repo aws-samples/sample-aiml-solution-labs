@@ -18,8 +18,8 @@ from __future__ import annotations
 import pytest
 
 moto = pytest.importorskip("moto")
-from test_builds import call, project, save  # noqa: E402
-from test_builds import env as env  # noqa: E402
+from test_builds import call, project, save  # noqa: E402 - after the moto importorskip
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 B = "pteam0001"
 ADMIN = ("admins",)
@@ -166,7 +166,7 @@ def test_only_editors_create_in_a_team(env, team):
 def test_the_workspace_lists_the_teams_builds_and_my_builds_do_not(env, team):
     assert save(env, "pmine0001")[0] == 200                                 # u1's own
     assert _put(env, "u2", team=team)[0] == 200                             # the team's, made by u2
-    ids = lambda r: [b["id"] for b in r[1]]                                 # noqa: E731
+    ids = lambda r: [b["id"] for b in r[1]]                                 # noqa: E731 - a one-line test helper
     for sub in ("u1", "u2", "u3"):
         assert ids(_workspace(env, sub, team)) == [B], sub
     assert [b.get("readOnly") for b in _workspace(env, "u3", team)[1]] == [True]
@@ -251,7 +251,7 @@ def test_team_changes_are_in_the_activity_log(env, team):
     _put_team(env, team, "u1", members=_members(("u1", "owner"), ("u2", "editor"), ("u5", "viewer")))
     assert save(env, B)[0] == 200
     _move(env, "u1", team)
-    actions = lambda sub: [(e["action"], e["detail"]) for e in call(env, "GET /api/audit", sub=sub)[1]]  # noqa: E731
+    actions = lambda sub: [(e["action"], e["detail"]) for e in call(env, "GET /api/audit", sub=sub)[1]]  # noqa: E731 - a one-line test helper
     admin = dict(actions("admin1"))
     assert admin["team.created"]["team"] == team and admin["team.created"]["members"] == 3
     mine = dict(actions("u1"))

@@ -9,7 +9,9 @@ cdk/lib/kb-data-source.ts validateKbConnector and the precondition in terraform/
 https://docs.aws.amazon.com/bedrock/latest/userguide/data-source-connectors.html
 """
 from __future__ import annotations
+
 import re
+
 #: The one store AWS supports these connectors on.
 CONNECTOR_STORE = "opensearchServerless"
 _FILTER_KEYS = ("objectType", "include", "exclude")
@@ -63,7 +65,8 @@ def check(tool: dict, path: str, where: dict, add, vocab_extra, vocab) -> None:
     vs = tool.get("vectorStore")
     if not isinstance(vs, dict) or vs.get("type") != CONNECTOR_STORE:
         add("error", where, f"{p}.type",
-            f'needs vectorStore.type "{CONNECTOR_STORE}": AWS supports the {kind} connector only on OpenSearch Serverless')
+            f'needs vectorStore.type "{CONNECTOR_STORE}": '
+            f'AWS supports the {kind} connector only on OpenSearch Serverless')
     if tool.get("s3Uri") is not None:
         add("error", where, f"{p}", "takes the place of s3Uri: the documents come from one or the other")
     for name in required:

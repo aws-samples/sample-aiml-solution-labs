@@ -171,7 +171,9 @@ def test_api_me_reports_what_this_caller_may_do(bff):
                     "permittedActions": ["start", "decision", "rerun", "cancel"],
                     "authzEnabled": True, "builder": False, "email": "user@example.com",
                     # No Builder and no audit table: an app, with no activity log.
-                    "consoleMode": "app", "audit": False}
+                    "consoleMode": "app", "audit": False,
+                    # No DOCS_URL in the fixture, so no documentation links.
+                    "docsLinks": False}
 
 
 def test_api_me_for_a_caller_with_nothing(bff):

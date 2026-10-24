@@ -200,7 +200,8 @@ def check(raw: dict, overlay, region: str, account: str, model_problems=None) ->
             bad(path, "a task step makes no model call; nothing here can change it")
             continue
         if (known[aid] or {}).get("runtime") == "harness":
-            bad(path, "a harness agent's instructions and model are set on its AgentCore Harness; change them in the build and deploy")
+            bad(path, "a harness agent's instructions and model are set on its AgentCore Harness; "
+                      "change them in the build and deploy")
             continue
         if not isinstance(fields, dict) or not fields:
             bad(path, "must change at least one setting")
@@ -262,7 +263,7 @@ def create(table, raw: dict, body: dict, who: str, region: str, account: str,
                                  "overlay": json.dumps(overlay, sort_keys=True)},
                            ConditionExpression="attribute_not_exists(sk)")
             return version(table, n)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             if _code(e) != "ConditionalCheckFailedException":
                 raise
     raise builds.BuildError(409, "another version was being saved at the same time; save again")
@@ -296,7 +297,7 @@ def activate(table, n, who: str, expected=None) -> tuple[int, int]:
             ExpressionAttributeNames={"#p": "pointer", "#at": "at", "#by": "by"},
             ExpressionAttributeValues={":p": {"active": n}, ":at": clock.now_str(), ":by": who,
                                        ":was": before})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         if _code(e) == "ConditionalCheckFailedException":
             raise builds.BuildError(409, "the active version changed while this was saved: reload and try again") from e
         raise

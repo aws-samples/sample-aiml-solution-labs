@@ -16,7 +16,7 @@ import { exportPlan } from "../lib/export";
 
 const ORCH_ROOT = path.join(__dirname, "..", "..");
 const SHIPPED = JSON.parse(fs.readFileSync(path.join(ORCH_ROOT, "app", "workflow.json"), "utf8"));
-const ARN = "arn:aws:secretsmanager:eu-west-1:210987654321:secret:langfuse-headers-AbC123";
+const ARN = "arn:aws:secretsmanager:eu-west-1:444455556666:secret:langfuse-headers-AbC123";
 // A fake header value, joined at run time so secret scanners do not read it as a real one.
 const HEADERS = JSON.stringify({ Authorization: "Basic " + "cGstbGY6c2stbGY=" });
 const ENV_KEYS = ["OTLP_EXPORT_DESTINATION", "OTLP_EXPORT_HEADERS_SECRET_ARN", "OTLP_EXPORT_INCLUDE_CONTENT"];
@@ -127,7 +127,7 @@ describe("orchestrator.export giving a secret ARN", () => {
     const st = exportStatements(byArn);
     expect(st.map((s) => s.Sid)).toEqual(["ReadExportHeadersSecret", "DecryptExportHeadersSecret"]);
     expect(st[0].Resource).toBe(ARN);
-    expect(st[1].Resource).toBe("arn:aws:kms:eu-west-1:210987654321:key/*");
+    expect(st[1].Resource).toBe("arn:aws:kms:eu-west-1:444455556666:key/*");
     expect(st[1].Condition).toEqual({ StringEquals: {
       "kms:ViaService": "secretsmanager.eu-west-1.amazonaws.com", "kms:EncryptionContext:SecretARN": ARN } });
   });
@@ -147,7 +147,7 @@ describe("the settings are checked at synth, as Terraform checks them at plan", 
   it.each([
     [{ destination: "splunk", secret: "x" }, {}, "destination must be one of"],
     [{ destination: "otlp" }, {}, "export.secret must name"],
-    [{ destination: "otlp", secret: "arn:aws:secretsmanager:eu-west-1:210987654321:secret:short" }, {}, "export.secret must name"],
+    [{ destination: "otlp", secret: "arn:aws:secretsmanager:eu-west-1:444455556666:secret:short" }, {}, "export.secret must name"],
     [{ destination: "otlp", secret: "missing" }, {}, "no exportHeaders secret by that name"],
     [{ destination: "otlp", secret: "h" }, { h: "not json" }, "must be a JSON object of HTTP headers"],
     [{ destination: "otlp", secret: "h" }, { h: "[1]" }, "must be a JSON object of HTTP headers"],

@@ -171,7 +171,7 @@ def record_audit(table, owner: str, email: str, action: str, **detail) -> None:
         # already holds.
         for item in audit_items(owner, email, action, detail):
             table.put_item(Item=item)
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a missed audit row is logged, never fails the action
         print(f"[audit] could not record {action} by {owner}: {type(e).__name__}: {e} "
               f"{detail}")
 

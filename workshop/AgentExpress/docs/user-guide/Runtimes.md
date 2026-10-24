@@ -118,7 +118,7 @@ An A2A agent is somebody else's agent, reached over the Agent2Agent protocol. No
 
 ## Try A2A with the framework's stand-in
 
-The framework ships a stand-in A2A server, so you can try an A2A step without a partner's agent:
+The framework ships a stand-in A2A server, so you can try an A2A step without a third party's agent:
 
 - `"source": "a2a_lambda"` reaches the A2A server the framework deploys for you, instead of an Agent Card URL. The deploy fills in its address, so there is nothing to commit.
 - Set `auth` to `sigv4`: the stand-in is called with the orchestrator's role. `source` and `agentCard` cannot be used together.

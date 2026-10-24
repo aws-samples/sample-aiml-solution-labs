@@ -15,7 +15,7 @@ import { OrchestratorStack } from "../lib/orchestrator-stack";
 import { litellmProxy } from "../lib/litellm";
 
 const ORCH_ROOT = path.join(__dirname, "..", "..");
-const ARN = "arn:aws:secretsmanager:eu-west-1:210987654321:secret:litellm-key-AbC123";
+const ARN = "arn:aws:secretsmanager:eu-west-1:444455556666:secret:litellm-key-AbC123";
 const BASE = "https://litellm.example.com";
 const ENV_KEYS = ["LITELLM_BASE_URL", "LITELLM_KEY_SECRET_ARN"];
 const SIDS = ["ReadLitellmKeySecret", "DecryptLitellmKeySecret"];
@@ -115,7 +115,7 @@ describe("LiteLLM, on", () => {
         Sid: "ReadLitellmKeySecret", Effect: "Allow", Action: "secretsmanager:GetSecretValue", Resource: ARN });
       expect(st.find((s) => s.Sid === "DecryptLitellmKeySecret")).toEqual({
         Sid: "DecryptLitellmKeySecret", Effect: "Allow", Action: "kms:Decrypt",
-        Resource: "arn:aws:kms:eu-west-1:210987654321:key/*",
+        Resource: "arn:aws:kms:eu-west-1:444455556666:key/*",
         Condition: { StringEquals: {
           "kms:ViaService": "secretsmanager.eu-west-1.amazonaws.com",
           "kms:EncryptionContext:SecretARN": ARN,
@@ -140,7 +140,7 @@ describe("the settings are checked at synth, as Terraform checks them at plan", 
     [{ litellmBaseUrl: "http://litellm.example.com", litellmKeySecretArn: ARN }, "https://"],
     [{ litellmBaseUrl: "https://u:p@litellm.example.com", litellmKeySecretArn: ARN }, "https://"],
     [{ litellmBaseUrl: "https://litellm.example.com/?k=v", litellmKeySecretArn: ARN }, "https://"],
-    [{ litellmBaseUrl: BASE, litellmKeySecretArn: "arn:aws:secretsmanager:eu-west-1:210987654321:secret:key" }, "full ARN"],
+    [{ litellmBaseUrl: BASE, litellmKeySecretArn: "arn:aws:secretsmanager:eu-west-1:444455556666:secret:key" }, "full ARN"],
     [{ litellmBaseUrl: BASE, litellmKeySecretArn: "*" }, "full ARN"],
   ])("refuses %j", (settings, message) => {
     expect(() => litellmProxy(settings)).toThrow(message);

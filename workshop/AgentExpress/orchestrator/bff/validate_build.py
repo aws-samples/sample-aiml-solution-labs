@@ -23,12 +23,12 @@ import cedar
 import code_source
 import export_check
 import harness_check
+import hosted_mcp_check
 import kb_data_source
 import kb_ingestion
 import kb_vector_store
 import model_routing_check
 import network_check
-import hosted_mcp_check
 import prompt_cache_check
 import smithy_tool
 import task_check
@@ -729,7 +729,9 @@ def _check_files(orch, add) -> None:
             f"must be a whole number of days, 1 to {FILES_MAX_DAYS}")
 
 
-AGENT_POLICY_NO_EFFECT = ("has no effect: AgentCore Policy evaluates Cedar only at the Gateway, on each tool call, for every agent (orchestrator.policy). There is no API for a check from agent code. Remove it.")
+AGENT_POLICY_NO_EFFECT = ("has no effect: AgentCore Policy evaluates Cedar only at the Gateway, on each tool call, "
+                          "for every agent (orchestrator.policy). There is no API for a check from agent code. "
+                          "Remove it.")
 
 
 def _check_agent_policy(agents: dict, add) -> None:
@@ -739,7 +741,8 @@ def _check_agent_policy(agents: dict, add) -> None:
     for aid, a in agents.items():
         core = a.get("agentcore") if _is_obj(a) else None
         if _is_obj(core) and _is_obj(core.get("policy")) and "enabled" in core["policy"]:
-            add("warning", {"kind": "agent", "id": aid}, f"agents.{aid}.agentcore.policy.enabled", AGENT_POLICY_NO_EFFECT)
+            add("warning", {"kind": "agent", "id": aid}, f"agents.{aid}.agentcore.policy.enabled",
+                AGENT_POLICY_NO_EFFECT)
 
 
 def _check_live_config(orch, auth, add) -> None:
@@ -1499,7 +1502,8 @@ def validate(wf: dict) -> list[dict]:
             kb_vector_store.check(tool, path, where, add, vocab_extra, vocab)
             kb_data_source.check(tool, path, where, add, vocab_extra, vocab)
             if kb_id:
-                for k in ("s3Uri", "kmsKeyArn", "embeddingModel", "dimensions", "dataSource", "vectorStore", "chunking", "parsing"):
+                for k in ("s3Uri", "kmsKeyArn", "embeddingModel", "dimensions", "dataSource", "vectorStore",
+                          "chunking", "parsing"):
                     if tool.get(k) is not None:
                         add("error", where, f"{path}.{k}",
                             "does not apply with knowledgeBaseId: that Knowledge Base already has its "

@@ -47,7 +47,12 @@ function memoryStorage(): Storage {
   };
 }
 
-const navLinks = () => [...document.querySelectorAll(".axn-links li")].map((li) => li.textContent ?? "");
+// The words only: each link's emoji (lib/emoji.ts, aria-hidden) is decoration.
+const navLinks = () => [...document.querySelectorAll(".axn-links li")].map((li) => {
+  const c = li.cloneNode(true) as Element;
+  c.querySelectorAll(".axn-emoji").forEach((x) => x.remove());
+  return c.textContent ?? "";
+});
 
 describe("the Analytics link", () => {
   beforeEach(() => { vi.stubGlobal("localStorage", memoryStorage()); asked.paths = []; });

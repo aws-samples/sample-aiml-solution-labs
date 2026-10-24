@@ -61,7 +61,7 @@ def _changed_paths() -> list[str]:
     directory that contains it.
     """
     out = subprocess.run(  # nosec B603  # nosemgrep
-        ["git", "status", "--porcelain", "-uall"],  # noqa: S607
+        ["git", "status", "--porcelain", "-uall"],  # noqa: S607 - git from PATH
         cwd=REPO, capture_output=True, text=True, check=False)
     if out.returncode != 0:
         pytest.skip("not a git repository, so there is nothing to compare against")

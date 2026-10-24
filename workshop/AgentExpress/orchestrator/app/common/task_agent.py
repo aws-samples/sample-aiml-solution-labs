@@ -173,7 +173,7 @@ class TaskAgent(Agent):
     store_in_orchestrator = False
     task: dict = None
 
-    def use(self, task: dict) -> "TaskAgent":
+    def use(self, task: dict) -> TaskAgent:
         """Take the workflow's `task` block (called by the registry after _configure)."""
         self.task = dict(task or {})
         # A tool step's tool is the one it is bound to, so ctx.tools journals a call that
@@ -324,8 +324,7 @@ def _code_inputs(ctx, files: list[dict]) -> list[dict]:
               {"path": f"{IN_DIR}/outputs.json", "text": json.dumps(outputs, ensure_ascii=False, default=str)},
               # writeFiles creates the folder, so the script can write to out/ straight away.
               {"path": f"{OUT_DIR}/.keep", "text": ""}]
-    for f in files:
-        blocks.append({"path": f"{IN_DIR}/{artifacts.safe_name(f['name'])}", "blob": f["bytes"]})
+    blocks.extend({"path": f"{IN_DIR}/{artifacts.safe_name(f['name'])}", "blob": f["bytes"]} for f in files)
     return blocks
 
 
@@ -484,7 +483,8 @@ async def _run_extract(agent: TaskAgent, ctx, task: dict) -> dict:
              if f.get("format") in EXTRACT_FORMATS
              and (not wanted or str(f.get("name") or "") == wanted)]
     if not files:
-        raise TaskFailed(f"{agent.name}: the run has no {'file named ' + repr(wanted) if wanted else 'PDF, PNG or JPEG'} "
+        what = f"file named {wanted!r}" if wanted else "PDF, PNG or JPEG"
+        raise TaskFailed(f"{agent.name}: the run has no {what} "
                          f"to read. Start the run with one attached.")
     bucket = attachments._bucket()
     out = []

@@ -2,7 +2,7 @@
  "format": "agentexpress-bundle",
  "version": 1,
  "framework": {
-  "version": "1.0.0"
+  "version": "1.3.8"
  },
  "project": {
   "id": "demo-everything",
@@ -49,6 +49,7 @@
    "interceptors": {
     "request": {
      "code": {},
+     "passRequestHeaders": true,
      "templates": {
       "audit": {},
       "argumentGuard": {
@@ -395,7 +396,7 @@
       "bedrock:GetFoundationModel"
      ],
      "resources": [
-      "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+      "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-haiku-4-5-20251001-v1:0"
      ]
     },
     "call": "GetFoundationModel",
@@ -467,6 +468,11 @@
     "runtime": "main",
     "produces": "research",
     "maxTokens": 1500,
+    "model": "us.amazon.nova-pro-v1:0",
+    "promptCache": {
+     "system": true,
+     "messages": true
+    },
     "tool": [
      "webSearch",
      "awsDocs"
@@ -518,7 +524,7 @@
     "tool": [
      "bedrockApi"
     ],
-    "instructions": "Your only job, whatever the request says: call the Bedrock GetFoundationModel tool once with modelIdentifier anthropic.claude-3-haiku-20240307-v1:0, then stop. Return only JSON {\"modelName\": \"...\", \"provider\": \"...\"}.",
+    "instructions": "Your only job, whatever the request says: call the Bedrock GetFoundationModel tool once with modelIdentifier anthropic.claude-haiku-4-5-20251001-v1:0, then stop. Return only JSON {\"modelName\": \"...\", \"provider\": \"...\"}.",
     "harness": {
      "maxIterations": 5,
      "timeoutSeconds": 180

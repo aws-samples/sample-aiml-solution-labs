@@ -273,23 +273,23 @@ def _hosted_mcp_text() -> list[str]:
     runtime-mcp-protocol-contract.html)."""
     return [
         "### Hosted MCP server (tools.<key>.hosted)",
-        "  - When the user wants an MCP server of their own that the build runs, add a tool "
-        "{\"type\": \"mcp\", \"description\": ..., \"hosted\": {}} (no `endpoint`, no `auth`: the Gateway "
-        "reaches it with SigV4) and write its files with set_tool_code on that key: server.py and "
-        "requirements.txt (pinned with ==; it starts with exactly these lines, the tested pins of "
-        f"the MCP Python SDK and pydantic: {', '.join(HOSTED_MCP_REQUIREMENTS)}; never another "
-        "mcp or pydantic version, since older SDKs fail to import on current pydantic), optionally "
-        "a Dockerfile. With no Dockerfile the deploy "
-        "builds an ARM64 Python 3.13 image that runs `python server.py`.",
-        "  - server.py must serve MCP over streamable HTTP on host 0.0.0.0, port 8000, path /mcp, "
-        "stateless by default: with the MCP Python SDK, FastMCP(host=\"0.0.0.0\", stateless_http=True), "
-        "@mcp.tool() functions, then mcp.run(transport=\"streamable-http\"). The server must offer tools.",
-        "  - Code the user already has: hosted.code = {\"git\": {...}} or {\"s3\": {...}} (the code-source "
-        "shape), or {\"image\": \"<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>\"} for an image "
-        "they built. hosted.network = {\"mode\": \"VPC\", \"subnetIds\": [...], \"securityGroupIds\": [...]} "
-        "to reach a private network; omitted it is PUBLIC.",
-        "  - The server gets no AWS permissions and no credential providers in this version: it suits "
-        "logic and public APIs. Agents bind to it with `tool` and `call` like any MCP tool.",
+        ("  - When the user wants an MCP server of their own that the build runs, add a tool "
+         "{\"type\": \"mcp\", \"description\": ..., \"hosted\": {}} (no `endpoint`, no `auth`: the Gateway "
+         "reaches it with SigV4) and write its files with set_tool_code on that key: server.py and "
+         "requirements.txt (pinned with ==; it starts with exactly these lines, the tested pins of "
+         f"the MCP Python SDK and pydantic: {', '.join(HOSTED_MCP_REQUIREMENTS)}; never another "
+         "mcp or pydantic version, since older SDKs fail to import on current pydantic), optionally "
+         "a Dockerfile. With no Dockerfile the deploy "
+         "builds an ARM64 Python 3.13 image that runs `python server.py`."),
+        ("  - server.py must serve MCP over streamable HTTP on host 0.0.0.0, port 8000, path /mcp, "
+         "stateless by default: with the MCP Python SDK, FastMCP(host=\"0.0.0.0\", stateless_http=True), "
+         "@mcp.tool() functions, then mcp.run(transport=\"streamable-http\"). The server must offer tools."),
+        ("  - Code the user already has: hosted.code = {\"git\": {...}} or {\"s3\": {...}} (the code-source "
+         "shape), or {\"image\": \"<account>.dkr.ecr.<region>.amazonaws.com/<repo>:<tag>\"} for an image "
+         "they built. hosted.network = {\"mode\": \"VPC\", \"subnetIds\": [...], \"securityGroupIds\": [...]} "
+         "to reach a private network; omitted it is PUBLIC."),
+        ("  - The server gets no AWS permissions and no credential providers in this version: it suits "
+         "logic and public APIs. Agents bind to it with `tool` and `call` like any MCP tool."),
     ]
 
 
@@ -300,8 +300,8 @@ def _prompt_cache_text(table: dict) -> list[str]:
     rows = table.get("byModel") or {}
     if not rows:
         return []
-    out = ["### Prompt caching by model (vocabulary.json promptCacheModels, base model ids; "
-           "`promptCache` keys a model's row does not list are not sent)"]
+    out = [("### Prompt caching by model (vocabulary.json promptCacheModels, base model ids; "
+            "`promptCache` keys a model's row does not list are not sent)")]
     for mid, r in rows.items():
         out.append(f"  - {mid}: fields {'/'.join(r.get('fields') or [])}; ttl {'/'.join(r.get('ttls') or [])}"
                    f"{' (omit ttl)' if list(r.get('ttls') or []) == ['5m'] else ''}; "
@@ -332,6 +332,9 @@ and use them in the design (fields, sample rows, endpoints, rules).
 You cannot deploy, run, delete or publish anything: the user presses Deploy themselves, and
 an admin publishes with "Publish to registry" (on the Deployment panel for the deployed
 build, on the Skills tab for a skill). Say so if asked.
+You cannot write or run test suites either: the user writes them (requests with checks on
+what the run should produce) and runs them against the deployed build on the Tests tab.
+When asked for tests, say so, and suggest cases they could add there.
 
 # How to run the conversation
 1. DRAFT FIRST, UNLESS THE BRIEF IS TOO THIN. Four things shape a workflow: (a) INPUT,
@@ -1404,12 +1407,19 @@ def _cached(messages: list) -> list:
     """`messages` with a cache point after the newest one. The system prompt is cached
     already; this caches the CONVERSATION too — the whole draft and every earlier call of
     this turn — so each fix round or follow-up call reads it from the cache instead of
-    processing it again. Cleared from older messages, so at most one is sent."""
+    processing it again. Cleared from older messages, so at most one is sent.
+
+    Bedrock rejects a cache point right after a `document` block ("Cache point cannot be
+    inserted after the preceding content block"), and a message with attached files ends
+    with them, so the point goes after the newest block that is not a document."""
     out = []
     for i, m in enumerate(messages):
         content = [b for b in m.get("content") or [] if "cachePoint" not in b]
-        if i == len(messages) - 1 and content:
-            content = [*content, {"cachePoint": {"type": "default"}}]
+        if i == len(messages) - 1:
+            at = next((j + 1 for j in range(len(content) - 1, -1, -1)
+                       if "document" not in content[j]), 0)
+            if at:
+                content = [*content[:at], {"cachePoint": {"type": "default"}}, *content[at:]]
         out.append({**m, "content": content})
     return out
 
@@ -1478,9 +1488,14 @@ def _converse(messages: list, on_delta=lambda kind, piece: None) -> dict:
 class _Live:
     """Writes the reply as it is being written, at most every FLUSH_S, so the page (which
     polls the conversation) shows it growing. phase: thinking | writing | applying |
-    checking."""
+    checking | reading (fetch_url: the page says "Reading <host>…")."""
 
     FLUSH_S = 0.4
+
+    #: How long "Reading <host>…" stays up at least, so a fast fetch is still seen by a
+    #: page that polls every POLL_MS (web DesignChat.tsx): only a later "thinking" waits
+    #: for it; anything else (writing, applying) replaces it at once.
+    READING_S = 1.0
 
     #: How much of the model's reasoning the page shows while it thinks: the latest part.
     THINKING_TAIL = 600
@@ -1492,6 +1507,7 @@ class _Live:
         self.last = 0.0
         self.reasoning = ""
         self.tool_json = ""
+        self.reading_until = 0.0
 
     def text(self) -> str:
         return "\n\n".join(p for p in [*self.done, self.current.strip()] if p)
@@ -1505,9 +1521,20 @@ class _Live:
         self.last = time.monotonic()
 
     def phase(self, phase: str) -> None:
+        if phase == "thinking" and self.reply.get("phase") == "reading" \
+                and time.monotonic() < self.reading_until:
+            return                  # "Reading <host>…" stays up for READING_S at least
         if self.reply.get("phase") != phase:
             self.reply["phase"] = phase
             self.flush(force=True)
+
+    def reading(self, host: str) -> None:
+        """A fetch_url call is in flight: its "Reading <host>" line ends the progress list
+        (its last 8 kept), and the page shows it as the reply's phase."""
+        self.reply["progress"] = [*(self.reply.get("progress") or []), f"Reading {host}"][-8:]
+        self.reply["phase"] = "reading"
+        self.reading_until = time.monotonic() + self.READING_S
+        self.flush(force=True)
 
     def delta(self, kind: str, piece: str) -> None:
         if kind == "text":
@@ -1623,7 +1650,7 @@ def _library_offer(who) -> list[dict]:
                                     or "")[:200]}
                 for i in library.list_items(who)
                 if i.get("kind") in ("tool", "guardrail", "memory", "evaluator", "identity", "policy", "skill")][:60]
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - an unreadable library offers no items
         return []
 
 
@@ -2013,10 +2040,27 @@ def run_turn(event: dict) -> dict:
                     live.end_call()
                     reply.update(text=live.text(), changes=changes, phase="thinking")
                     doc.update(cont=cont + 1, attempts=0)
-                    _store(build_id, doc)
-                    _continue({**event, "cont": cont + 1})
-                    print(f"[designer] turn {turn}: continuing in invocation {cont + 2}")
-                    return {"ok": True, "continued": cont + 1}
+                    _store(build_id, doc)        # the held change is saved before the invoke
+                    try:
+                        _continue({**event, "cont": cont + 1})
+                    except Exception as e:  # a held change is never dropped
+                        held = (doc.pop("reviewHeld", None) or {}).get("args")
+                        if held is None:
+                            raise
+                        # No continuation to give the revision: save the change as
+                        # proposed and fail open, as for any other reviewer error.
+                        print(f"[designer] turn {turn}: couldn't continue ({type(e).__name__}: "
+                              f"{str(e)[:300]}); saving the held change unrevised")
+                        doc["cont"] = cont
+                        _r, record = _apply(build_id, owner, email, doc, held, fix_rounds,
+                                            user_turn.get("attachments"))
+                        if record:
+                            changes.append(record)
+                            reply["changes"] = changes
+                        rv.status = "unavailable"
+                    else:
+                        print(f"[designer] turn {turn}: continuing in invocation {cont + 2}")
+                        return {"ok": True, "continued": cont + 1}
                 note = "That took too long, so I stopped. What I changed so far is saved."
                 break
             resp = _converse(messages, live.delta)
@@ -2068,9 +2112,7 @@ def run_turn(event: dict) -> dict:
                         host = (urlsplit(url).hostname or url)[:80]
                     except ValueError:
                         host = url[:80]
-                    reply["progress"] = [*(reply.get("progress") or []), f"Reading {host}"][-8:]
-                    live.phase("checking")
-                    live.flush(force=True)
+                    live.reading(host)
                     page = pages.fetch(url)
                     reply["pages"] = [*(reply.get("pages") or []), {
                         "url": str(page.get("finalUrl") or page.get("url") or "")[:500],

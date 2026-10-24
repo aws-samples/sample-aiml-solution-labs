@@ -8,7 +8,9 @@ cdk/lib/kb-ingestion.ts validateKbIngestion and the preconditions in terraform/k
 https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agent_VectorIngestionConfiguration.html
 """
 from __future__ import annotations
+
 import re
+
 #: A Bedrock model id (anthropic.claude-3-haiku-20240307-v1:0) or a system inference
 #: profile id (us.amazon.nova-pro-v1:0). No ARN, no wildcard: the id is put into the
 #: Knowledge Base role's grant, so it must name exactly one model.
@@ -51,7 +53,8 @@ def _check_chunking(c: dict, p: str, where: dict, add, vocab_extra, vocab, own_s
         v = c[name]
         if _whole(v) and (v < lo or (hi is not None and v > hi)):
             add("error", where, f"{p}.{name}",
-                f"must be a whole number from {lo} to {hi}" if hi is not None else f"must be a whole number, {lo} or more")
+                f"must be a whole number from {lo} to {hi}" if hi is not None
+                else f"must be a whole number, {lo} or more")
     for name in c:
         if name != "strategy" and name in ranges and name not in params:
             add("error", where, f"{p}.{name}", f"does not apply to {strategy} chunking")

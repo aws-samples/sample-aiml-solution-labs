@@ -83,7 +83,7 @@ def sessions(started):
 
 
 @pytest.fixture()
-def env(base_env, monkeypatch):  # noqa: F811
+def env(base_env, monkeypatch):  # noqa: F811 - overrides test_builds' env fixture on purpose
     """test_builds' fixture, with one module it leaves stale: bff/limits.py is not re-imported
     with the rest, so it would raise the refusal of a build module no handler uses any more."""
     monkeypatch.setattr(base_env.handler.limits, "builds", base_env.builds)

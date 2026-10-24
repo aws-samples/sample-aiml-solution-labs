@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 
 import pytest
-from test_builds import env  # noqa: F401
+from test_builds import env  # noqa: F401 - env is the builds fixture, taken by name
 from test_designer import BASE
 
 pytest.importorskip("moto")
@@ -47,7 +47,7 @@ def test_a_tool_file_from_nothing_is_refused(env, op, attached, why):
 def test_an_attachment_not_in_the_message_is_named(env):
     d = env.handler.designer
     read = d._attached_reader([{"name": "a.py", "source": "upload", "key": "k"}])
-    with pytest.raises(d.OpError, match="'b.py' is not attached"):
+    with pytest.raises(d.OpError, match=r"'b\.py' is not attached"):
         read("b.py")
     assert d._attached_reader([]) is None
 

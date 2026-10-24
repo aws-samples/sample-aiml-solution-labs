@@ -21,4 +21,4 @@ Key files:
   terraform/guardrail.tf             — the guardrail definition
 """
 
-from app.features.guardrails.client import GuardrailBlocked, check  # noqa: F401
+from app.features.guardrails.client import GuardrailBlocked, check  # noqa: F401 - the package's public API

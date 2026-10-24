@@ -388,11 +388,12 @@ resource "aws_iam_role_policy" "harness" {
         Resource = ["arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*"]
       },
       {
-        # Span delivery to its own log group; no resource type (see main.tf).
+        # Span delivery to its own log group (see main.tf). Scope per
+        # https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/runtime-permissions.html
         Sid      = "HarnessSpanDelivery"
         Effect   = "Allow"
         Action   = ["logs:PutResourcePolicy"]
-        Resource = "*"
+        Resource = ["arn:aws:logs:${var.region}:${local.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"]
       },
       {
         # X-Ray has no resource types for these.

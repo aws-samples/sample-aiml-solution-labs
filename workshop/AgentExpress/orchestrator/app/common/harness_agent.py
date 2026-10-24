@@ -93,7 +93,7 @@ NOT_FOR_HARNESS = ("framework", "output", "image", "vision", "attachments", "sto
 #: CreateHarness `harnessName`: what the IaC names it, "<agentName>_<agent id>".
 HARNESS_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,39}$")
 #: InvokeHarness harnessArn and qualifier (botocore HarnessArn, HarnessEndpointName).
-HARNESS_ARN_RE = re.compile(r"^arn:aws[a-z-]*:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:harness/[a-zA-Z][a-zA-Z0-9_]{0,39}-[a-zA-Z0-9]{10}$")
+HARNESS_ARN_RE = re.compile(r"^arn:aws[a-z-]*:bedrock-agentcore:[a-z0-9-]+:[0-9]{12}:harness/[a-zA-Z][a-zA-Z0-9_]{0,39}-[a-zA-Z0-9]{10}$")  # noqa: E501 - botocore's pattern verbatim, so it can be compared with the model
 ENDPOINT_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{0,47}$")
 
 #: How often the stream reader checks whether the user stopped the run (a DynamoDB read).
@@ -186,7 +186,8 @@ def problem(agent_id: str, spec: dict) -> str:
             return f"agent {agent_id!r}: harness.{key} must be a whole number from {low} to {high}"
     if str(block.get("provider") or "bedrock") not in PROVIDERS:
         return f"agent {agent_id!r}: harness.provider must be one of {', '.join(PROVIDERS)}"
-    if block.get("endpoint") is not None and (not ENDPOINT_RE.match(str(block["endpoint"])) or block["endpoint"] == "DEFAULT"):
+    if block.get("endpoint") is not None and (not ENDPOINT_RE.match(str(block["endpoint"]))
+                                              or block["endpoint"] == "DEFAULT"):
         return (f"agent {agent_id!r}: harness.endpoint must be 1-48 letters, digits and underscores, "
                 f"starting with a letter, and not DEFAULT")
     for i, m in enumerate(block.get("mcp") or []):
@@ -302,7 +303,7 @@ class HarnessAgent(Agent):
     _upstream_asset_ids = A2AAgent._upstream_asset_ids
     _as_asset = A2AAgent._as_asset
 
-    def use(self, spec: dict) -> "HarnessAgent":
+    def use(self, spec: dict) -> HarnessAgent:
         """Take the harness-only keys (called by the registry after _configure)."""
         self.instructions = str((spec or {}).get("instructions") or "")
         self.limits = dict((spec or {}).get("harness") or {})
@@ -316,9 +317,9 @@ class HarnessAgent(Agent):
         reach another's run."""
         import hashlib
 
+        from app.common import defaults
         from app.common.config import WORKFLOW
         from app.common.context import _slug
-        from app.common import defaults
         scope = str(((WORKFLOW.get("memories") or {}).get(self.limits.get("memory")) or {}).get("scope")
                     or defaults.get("memory", "scope"))
         user = str(getattr(ctx, "user", "") or "").strip().lower()
@@ -385,7 +386,7 @@ class HarnessAgent(Agent):
             got = await asyncio.to_thread(call)
         except HarnessFailed:
             raise
-        except Exception as e:  # noqa: BLE001 - the step fails with the service's own words
+        except Exception as e:  # the step fails with the service's own words
             raise HarnessFailed(f"InvokeHarness for '{self.id}' failed: {type(e).__name__}: {e}") from e
         provider = str(self.limits.get("provider") or "bedrock")
         # Bedrock is priced as for any agent. Another provider's model, or a harness you

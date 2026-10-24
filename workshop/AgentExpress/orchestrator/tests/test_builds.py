@@ -531,6 +531,40 @@ def test_a_destroy_deletes_only_the_log_groups_carrying_the_builds_id(runner):
     assert "/aws/lambda/someone-else-27dc5302" not in logs.deleted
 
 
+def test_one_log_group_it_may_not_delete_does_not_keep_the_rest(runner):
+    """A harness's runtime group (harness_ax_…) was outside the deploy role's grant: the first
+    AccessDenied ended the loop and every group after it was left behind."""
+    names = ("/aws/bedrock-agentcore/runtimes/harness_ax_27dc5302_writer-AbC123-DEFAULT",
+             "/aws/lambda/ax-27dc5302-stack-CustomS3AutoDeleteObjectsCustomR-914TQq",
+             "ax-27dc5302-stack-UiDeployLogGroupAF2120AA-9xrpGJ")
+
+    class Logs:
+        def __init__(self):
+            self.deleted: list[str] = []
+
+        def describe_log_groups(self, **kw):
+            return {"logGroups": [{"logGroupName": n} for n in names]}
+
+        def delete_log_group(self, logGroupName):
+            if logGroupName == names[0]:
+                raise RuntimeError("AccessDeniedException")
+            self.deleted.append(logGroupName)
+
+    logs = Logs()
+    runner.delete_leftover_logs("ax_27dc5302", logs)
+    assert logs.deleted == list(names[1:])
+
+
+def test_the_deploy_role_may_delete_a_harness_runtime_log_group():
+    """AgentCore names a harness's runtime log group harness_<agent>_…, which the ax_* grant
+    did not cover; both control planes grant it."""
+    orch = Path(__file__).resolve().parents[1]
+    tf = (orch / "terraform" / "builder.tf").read_text()
+    ts = (orch / "cdk" / "lib" / "builder-plane.ts").read_text()
+    assert "log-group:/aws/bedrock-agentcore/runtimes/harness_${local.build_agent_prefix}*" in tf
+    assert "log-group:/aws/bedrock-agentcore/runtimes/harness_${BUILD_AGENT_PREFIX}*" in ts
+
+
 # --- per-user privacy ---------------------------------------------------------------
 # Anyone can sign up to a hosted console, so a run is private to the user who started it:
 # a run id alone must never be enough to read, act on or delete someone else's run.
@@ -859,6 +893,31 @@ def test_every_build_resource_is_tagged_with_its_build_version_and_owner(runner)
                     "agentexpress:owner": "me@example.com", "agentexpress:console": "agentexpress"}
     flags = runner.cdk_context("ax_12345678", False, tags)
     assert json.loads(flags[flags.index("-c", len(flags) - 2) + 1][len("tags="):]) == tags
+
+
+def test_the_deploy_log_never_shows_the_owners_email(runner, monkeypatch, capsys):
+    tags = runner.build_tags("pclaims01", 3, "sub-1", "me@example.com", "agentexpress")
+    cmd = ["npx", "cdk", "deploy", *runner.cdk_context("ax_12345678", False, tags)]
+    seen = {}
+
+    class Proc:
+        stdout = iter(["done\n"])
+        returncode = 0
+
+        def wait(self):
+            return 0
+
+    def popen(argv, **kw):
+        seen["argv"] = argv
+        return Proc()
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    runner.run(cmd, runner.ROOT)
+    printed = capsys.readouterr().out
+    assert "me@example.com" not in printed
+    assert "runOwnerEmail=<redacted>" in printed and '"agentexpress:owner":"<redacted>"' in printed
+    assert seen["argv"] == cmd                       # the command that runs is unchanged
+    assert "runOwnerEmail=me@example.com" in seen["argv"]
+    assert json.loads(seen["argv"][-1][len("tags="):])["agentexpress:owner"] == "me@example.com"
 
 
 def test_the_owner_is_invited_into_the_builds_own_app(runner):
@@ -1447,7 +1506,7 @@ def test_an_admin_can_destroy_anyones_build_and_the_owner_is_told(env):
 
 def test_admin_and_audit_are_closed_unless_granted_and_insights_whenever_rbac_is_on(env, monkeypatch):
     authz = env.handler.authz
-    ev = lambda *g: {"requestContext": {"authorizer": {"jwt": {"claims": {  # noqa: E731
+    ev = lambda *g: {"requestContext": {"authorizer": {"jwt": {"claims": {  # noqa: E731 - a one-line test helper
         "sub": "x", "cognito:groups": list(g)}}}}}
     assert not authz.permitted("admin", ev("operators", "auditors"))
     assert authz.permitted("admin", ev("admins"))
@@ -1876,6 +1935,37 @@ def test_any_other_terraform_destroy_failure_is_reported_as_it_is(runner, monkey
     with pytest.raises(runner.StepFailed):
         runner.deploy_terraform("destroy", "ax_12345678", False, TF_ENV)
     assert ran == ["init", "ui", "destroy"] and waits == []
+
+
+def test_terraforms_own_output_never_shows_the_owners_email_in_the_log(runner, monkeypatch, capsys):
+    """Terraform prints the agentexpress:owner tag in every tags / tags_all diff. The log
+    line is redacted; the tail the destroy-retry matchers read, and the exit code, are not."""
+    monkeypatch.setattr(runner, "PRIVATE", {"me@example.com"})
+    tag = '      + "agentexpress:owner" = "me@example.com"\n'
+    lines = ["  # aws_apigatewayv2_api.bff will be created\n", tag, *TF_RUNTIME_TIMEOUT.splitlines(True),
+             "npm warn deprecated whatwg-encoding@3.1.1\n"]
+
+    def popen(code):
+        class Proc:
+            stdout = iter(lines)
+            returncode = code
+
+            def wait(self):
+                return code
+        return lambda argv, **kw: Proc()
+    monkeypatch.setattr(runner.subprocess, "Popen", popen(1))
+    with pytest.raises(runner.StepFailed) as e:
+        runner.run(["terraform", "destroy", "-auto-approve"], runner.ROOT)
+    printed = capsys.readouterr().out
+    assert "me@example.com" not in printed
+    assert '"agentexpress:owner" = "<redacted>"' in printed
+    assert "whatwg-encoding@3.1.1" in printed                 # only the owner's exact email
+    assert "(exit 1)" in str(e.value) and "me@example.com" in str(e.value)    # the raw tail
+    assert runner.timed_out_tf_runtimes(str(e.value)) == [
+        'awscc_bedrockagentcore_runtime.subagent["fact_checker"]']
+    monkeypatch.setattr(runner.subprocess, "Popen", popen(0))
+    assert tag.rstrip() in runner.run(["terraform", "apply"], runner.ROOT)
+    assert "me@example.com" not in capsys.readouterr().out
 
 
 def test_the_late_log_grant_is_the_same_on_both_paths_and_in_connected_accounts():

@@ -143,7 +143,7 @@ def validate() -> None:
     """Reject a malformed askPerson / approvalTimeout at container start, naming it.
     The page and the BFF say the same earlier (bff/validate_build.py _check_asks)."""
     from app.common import gates
-    for aid, spec in AGENTS.items():
+    for spec in AGENTS.values():
         raw = (spec or {}).get("askPerson")
         if isinstance(raw, dict) and raw.get("timeout") is not None:
             gates.after_seconds(raw["timeout"])
@@ -448,7 +448,7 @@ def waiting(session_id: str) -> dict:
         item = sink._table(sink.STATUS_TABLE).get_item(
             Key={"session_id": session_id}, ProjectionExpression="hitl").get("Item") or {}
         return dict(item.get("hitl") or {})
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 - an unreadable status row reads as no pending asks
         return {}
 
 

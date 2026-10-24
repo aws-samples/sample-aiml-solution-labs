@@ -227,7 +227,7 @@ def test_a_code_step_gives_the_sandbox_its_inputs_and_keeps_what_it_wrote(sandbo
 def test_a_failing_script_fails_the_step_and_still_stops_the_session(sandbox):
     fake, kept = sandbox
     fake.exit_code = 1
-    with pytest.raises(ta.TaskFailed, match="exit status 1.*boom"):
+    with pytest.raises(ta.TaskFailed, match=r"exit status 1.*boom"):
         run(_agent({"kind": "code", "code": "raise SystemExit(1)"}), Ctx())
     assert fake.calls[-1][0] == "stop" and kept["code"], "the script and its log are kept even when it fails"
     assert kept["outputs"] == []
@@ -319,7 +319,7 @@ def test_an_extract_step_with_nothing_to_read_says_so(monkeypatch):
     with pytest.raises(ta.TaskFailed, match="no PDF, PNG or JPEG"):
         run(_agent({"kind": "extract"}), Ctx())
     files = [{"key": f"runs/{SID}/attachments/1-a.pdf", "name": "a.pdf", "kind": "document", "format": "pdf"}]
-    with pytest.raises(ta.TaskFailed, match="no file named 'b.pdf'"):
+    with pytest.raises(ta.TaskFailed, match=r"no file named 'b\.pdf'"):
         run(_agent({"kind": "extract", "file": "b.pdf"}), Ctx(attachments=files))
 
 
@@ -390,18 +390,16 @@ def test_the_registry_builds_a_task_agent_with_no_folder():
 ])
 def test_the_registry_refuses_a_task_it_cannot_run(task, why):
     from conftest import workflow
-    with workflow(_wf(task)) as imp:
-        with pytest.raises(ValueError, match=why):
-            imp("app.orchestrator.registry").load_agents()
+    with workflow(_wf(task)) as imp, pytest.raises(ValueError, match=why):
+        imp("app.orchestrator.registry").load_agents()
 
 
 def test_a_task_block_on_an_agent_is_refused():
     from conftest import workflow
     wf = _wf({"kind": "code", "code": "1"})
     wf["agents"]["first"]["task"] = {"kind": "code", "code": "1"}
-    with workflow(wf) as imp:
-        with pytest.raises(ValueError, match="set runtime \"task\""):
-            imp("app.orchestrator.registry").load_agents()
+    with workflow(wf) as imp, pytest.raises(ValueError, match="set runtime \"task\""):
+        imp("app.orchestrator.registry").load_agents()
 
 
 def test_a_task_steps_figures_are_not_flagged_as_ungrounded(monkeypatch):
@@ -419,6 +417,7 @@ def test_a_task_steps_figures_are_not_flagged_as_ungrounded(monkeypatch):
 def test_the_browser_sees_a_task_steps_kind():
     import importlib
     import sys
+
     from conftest import ORCH_ROOT
     sys.path.insert(0, str(ORCH_ROOT / "bff"))
     sys.modules.pop("workflow", None)
@@ -435,6 +434,7 @@ def test_scaffold_apply_writes_no_folder_for_a_task_step(tmp_path):
     import shutil
     import subprocess
     import sys
+
     from conftest import ORCH_ROOT
     root = tmp_path / "orchestrator"
     root.mkdir()
@@ -451,7 +451,7 @@ def test_scaffold_apply_writes_no_folder_for_a_task_step(tmp_path):
     path = tmp_path / "b.agentexpress.json"
     path.write_text(json.dumps({"format": "agentexpress-bundle", "version": 1, "project": {"name": "C"},
                                 "workflow": wf, "prompts": {}}))
-    result = subprocess.run([sys.executable, str(root / "scaffold.py"), "apply", str(path), "--exact"],  # noqa: S603  # nosec B603
+    result = subprocess.run([sys.executable, str(root / "scaffold.py"), "apply", str(path), "--exact"],  # noqa: S603 - argv list, no shell  # nosec B603
                             capture_output=True, text=True, cwd=root, check=False)
     assert result.returncode == 0, result.stderr
     assert (root / "app" / "subagents" / "claims_intake").is_dir()

@@ -624,7 +624,8 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
 
     unknown = sorted({framework_of(a) for a in workflow["agents"]
                       if framework_of(a) not in FRAMEWORKS
-                      and str((workflow["agents"][a] or {}).get("runtime") or "main") not in ("a2a", "task", "harness")})
+                      and str((workflow["agents"][a] or {}).get("runtime") or "main")
+                      not in ("a2a", "task", "harness")})
     if unknown:
         print(f"scaffold: unknown agent framework(s) {unknown} in the bundle; this framework "
               f"version writes {sorted(FRAMEWORKS)}.", file=sys.stderr)
@@ -749,7 +750,7 @@ def apply(bundle_path: Path, dry_run: bool, exact: bool = False) -> int:
     for aid, custom in rewritten:
         (SUBAGENTS / aid / "prompts.py").write_text(custom)
 
-    subprocess.run([sys.executable, str(ROOT / "format_workflow.py")],  # noqa: S603  # nosec B603  # nosemgrep
+    subprocess.run([sys.executable, str(ROOT / "format_workflow.py")],  # noqa: S603 - this interpreter runs a repo script, no shell  # nosec B603  # nosemgrep
                    cwd=ROOT, check=True)
     _write_marker()
 
@@ -848,11 +849,11 @@ def reset(dry_run: bool, keep_kb: bool) -> int:
     for name, body in files(STARTER_ID).items():
         (folder / name).write_text(body)
 
-    subprocess.run([sys.executable, str(ROOT / "format_workflow.py")],  # noqa: S603  # nosec B603  # nosemgrep
+    subprocess.run([sys.executable, str(ROOT / "format_workflow.py")],  # noqa: S603 - this interpreter runs a repo script, no shell  # nosec B603  # nosemgrep
                    cwd=ROOT, check=True)
     # The schema enumerates some values from what the repo contains, so regenerate it
     # rather than leaving an editor validating against a sample that is now gone.
-    subprocess.run([sys.executable, str(ROOT / "build_schema.py")],  # noqa: S603  # nosec B603  # nosemgrep
+    subprocess.run([sys.executable, str(ROOT / "build_schema.py")],  # noqa: S603 - this interpreter runs a repo script, no shell  # nosec B603  # nosemgrep
                    cwd=ROOT, check=True)
 
     _write_marker()
@@ -990,7 +991,7 @@ def main() -> int:
     WORKFLOW.write_text(json.dumps(workflow, indent=2, ensure_ascii=False) + "\n")
     # Straight back into canonical order and readable form, so the file a customer opens
     # next never shows them a shape the framework would not have written.
-    subprocess.run([sys.executable, str(ROOT / "format_workflow.py")],  # noqa: S603  # nosec B603  # nosemgrep
+    subprocess.run([sys.executable, str(ROOT / "format_workflow.py")],  # noqa: S603 - this interpreter runs a repo script, no shell  # nosec B603  # nosemgrep
                    cwd=ROOT, check=True)
 
     print(f"\nDone. One thing left, and it is the decision only you can make: put "

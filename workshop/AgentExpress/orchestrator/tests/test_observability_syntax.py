@@ -37,7 +37,7 @@ def test_it_parses_as_javascript():
     # nothing here comes from outside the repo.
     node = shutil.which("node")
     assert node is not None
-    r = subprocess.run([node, "--check", str(ISLAND)],  # noqa: S603  # nosec B603  # nosemgrep
+    r = subprocess.run([node, "--check", str(ISLAND)],  # noqa: S603 - argv list, no shell  # nosec B603  # nosemgrep
                        capture_output=True, text=True, check=False)
     assert r.returncode == 0, (
         f"observability.js does not parse, so the Observability tab will not mount:\n"

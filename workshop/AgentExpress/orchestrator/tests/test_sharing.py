@@ -16,8 +16,8 @@ from __future__ import annotations
 import pytest
 
 moto = pytest.importorskip("moto")
-from test_builds import call, project, save, version_object  # noqa: E402
-from test_builds import env as env  # noqa: E402
+from test_builds import call, project, save, version_object  # noqa: E402 - after the moto importorskip
+from test_builds import env as env  # noqa: E402 - after the moto importorskip
 
 B = "pshare001"
 TOOL = {"type": "mcp", "description": "Docs server.", "endpoint": "https://docs.example.com/mcp"}

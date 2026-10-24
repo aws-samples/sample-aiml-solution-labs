@@ -156,7 +156,7 @@ def record_llm(*, model: str, input_tokens: int, output_tokens: int,
             output_text=_truncate(output_text), version=s.version, prompt=prompt or "",
             chosen_by=_chosen_by(), **extra,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_llm skipped: {type(e).__name__}: {e}")
 
 
@@ -171,7 +171,7 @@ def record_session_compute(*, session_id: str, user: str = "", active_seconds: f
             latency_ms=int(active_seconds * 1000),
             cost_usd=costs.session_compute_cost(active_seconds), seq=_next_seq(),
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_session_compute skipped: {type(e).__name__}: {e}")
 
 
@@ -215,7 +215,7 @@ def record_tool(*, provider: str, query: str = "", latency_ms: int = 0,
             user_input=_truncate(query), output_text=_truncate(result_text),
             version=s.version,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_tool skipped: {type(e).__name__}: {e}")
 
 
@@ -236,7 +236,7 @@ def record_image(*, model: str, prompt: str = "", latency_ms: int = 0, cost_usd:
             user_input=_truncate(prompt), output_text=_truncate(result_text),
             version=s.version,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_image skipped: {type(e).__name__}: {e}")
 
 
@@ -257,7 +257,7 @@ def record_memory(*, op: str, namespace: str = "", query: str = "",
             user_input=_truncate(query), output_text=_truncate(result_text),
             version=s.version,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_memory skipped: {type(e).__name__}: {e}")
 
 
@@ -272,7 +272,7 @@ def record_guardrail(*, source: str, action: str, detail: str = "", latency_ms: 
             latency_ms=int(latency_ms or 0), cost_usd=pricing.Decimal("0"), seq=_next_seq(),
             output_text=_truncate(detail), version=s.version,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_guardrail skipped: {type(e).__name__}: {e}")
 
 
@@ -288,7 +288,7 @@ def record_person(*, label: str, status: str, detail: str = "") -> None:
             latency_ms=0, cost_usd=pricing.Decimal("0"), seq=_next_seq(),
             output_text=_truncate(detail), version=s.version,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_person skipped: {type(e).__name__}: {e}")
 
 
@@ -312,7 +312,7 @@ def record_policy(*, tool: str, decision: str, filter_value: str = "",
             user_input=(f"filter={filter_value}" if filter_value else ""),
             output_text=note, version=s.version,
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_policy skipped: {type(e).__name__}: {e}")
 
 
@@ -338,5 +338,5 @@ def record_eval(*, evaluator: str, value=None, label: str = "", explanation: str
             value=(pricing.Decimal(str(value)) if value is not None else pricing.Decimal("0")),
             output_text=_truncate(explanation), version=s.version, prompt=prompt or "",
         ))
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - metering must never fail the run
         print(f"[observability] record_eval skipped: {type(e).__name__}: {e}")

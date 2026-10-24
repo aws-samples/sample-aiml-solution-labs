@@ -72,7 +72,7 @@ def test_a_connector_needs_opensearch_serverless():
     assert _issues(web) == []
     for store in (None, {"type": "aurora"}, {"type": "pinecone"}):
         out: list = []
-        kb_data_source.check({"dataSource": web, "vectorStore": store}, "tools.kb", {}, lambda *a: out.append(a[2]),
+        kb_data_source.check({"dataSource": web, "vectorStore": store}, "tools.kb", {}, lambda *a, out=out: out.append(a[2]),
                              validate_build.vocab_extra, validate_build.vocab)
         assert out == ["tools.kb.dataSource.type"], store
 

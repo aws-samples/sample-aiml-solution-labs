@@ -460,7 +460,7 @@ def test_the_pricing_function_keeps_its_policy_name_and_address():
 
 
 def test_the_source_is_in_the_vocabulary_and_the_shipped_sample_does_not_use_it():
-    import json  # noqa: PLC0415
+    import json
     vocab = json.loads((ORCH / "app" / "vocabulary.json").read_text())
     assert vocab["builtinLambdaSource"]["values"] == ["pricing", "codeInterpreter", "browser"]
     workflow = json.loads((ORCH / "app" / "workflow.json").read_text())

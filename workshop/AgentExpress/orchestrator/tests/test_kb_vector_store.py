@@ -74,7 +74,7 @@ def test_every_store_matches_the_bedrock_agent_model():
 def test_the_patterns_are_bedrocks_and_anchored():
     botocore = pytest.importorskip("botocore.session")
     model = botocore.get_session().get_service_model("bedrock-agent")
-    for name, shape in (("collectionArn", "OpenSearchServerlessCollectionArn"), ("graphArn", "GraphArn"),
+    for _name, shape in (("collectionArn", "OpenSearchServerlessCollectionArn"), ("graphArn", "GraphArn"),
                         ("credentialsSecretArn", "SecretArn"), ("resourceArn", "RdsArn")):
         assert model.shape_for(shape).metadata["pattern"]           # Bedrock constrains it too
     for name, pattern in VOCAB["patterns"].items():

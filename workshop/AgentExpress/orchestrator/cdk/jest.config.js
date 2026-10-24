@@ -15,4 +15,9 @@ module.exports = {
   },
   // CDK synth in the stack tests is the slow part; everything else is instant.
   testTimeout: 60000,
+  // One file at a time. Each stack synth bundles the UI with `npm ci && npm run build` in
+  // ../web (the UiDeploy asset's local bundling), and npm ci deletes node_modules first:
+  // two workers doing it at once broke each other's builds ("Failed to bundle asset") and
+  // left ../web/node_modules empty.
+  maxWorkers: 1,
 };

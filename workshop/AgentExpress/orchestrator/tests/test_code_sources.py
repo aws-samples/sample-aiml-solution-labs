@@ -25,10 +25,10 @@ from conftest import ORCH_ROOT
 
 sys.path.insert(0, str(ORCH_ROOT / "bff"))
 sys.path.insert(0, str(ORCH_ROOT / "deployer"))
-import buildstore  # noqa: E402
-import code_fetch  # noqa: E402
-import code_source  # noqa: E402
-import runner  # noqa: E402
+import buildstore
+import code_fetch
+import code_source
+import runner
 
 GIT = {"git": {"url": "https://github.com/example-org/tools.git", "ref": "v1.2.0", "path": "tools/lookup",
                "token": "tools-repo"}}
@@ -90,7 +90,7 @@ def test_a_fetched_function_travels_as_a_reference_only():
 # --- git -------------------------------------------------------------------------------
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True,
+    return subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True,  # noqa: S603,S607 - git from PATH, argv list, no shell  # nosec B603 - test helper, argv list, no shell; git from PATH
                           env={"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
                                "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
                                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}).stdout.strip()

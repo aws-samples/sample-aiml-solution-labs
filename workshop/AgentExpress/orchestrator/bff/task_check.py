@@ -29,7 +29,8 @@ FROM_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_-]+)*$")
 def _not_one_of(v, allowed: list[str]) -> str:
     """The words for a value outside its set (a non-string is not echoed: Python and
     JavaScript would print it differently)."""
-    return f'"{v}" is not one of: {", ".join(allowed)}' if isinstance(v, str) else f"must be one of: {', '.join(allowed)}"
+    names = ", ".join(allowed)
+    return f'"{v}" is not one of: {names}' if isinstance(v, str) else f"must be one of: {names}"
 
 
 def _refs(value) -> list[str]:

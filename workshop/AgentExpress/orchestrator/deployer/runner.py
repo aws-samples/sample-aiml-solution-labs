@@ -53,19 +53,50 @@ class StepFailed(Exception):
     """A command failed; carries the tail of its output for the Build view."""
 
 
+#: Context keys whose value is never echoed, and any email address elsewhere in an argument
+#: (the agentexpress:owner value inside -c tags=...): the build owner's email is PII.
+SENSITIVE_KEYS = ("runOwnerEmail",)
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def redact(cmd: list[str]) -> list[str]:
+    """A copy of argv safe to print: sensitive context values and email addresses are
+    `<redacted>`. The command that runs is the original argv, unchanged."""
+    out = []
+    for arg in cmd:
+        key = arg.split("=", 1)[0]
+        out.append(f"{key}=<redacted>" if "=" in arg and key in SENSITIVE_KEYS
+                   else EMAIL.sub("<redacted>", arg))
+    return out
+
+
+#: The build owner's exact email, once main() has read it. Terraform's own plan/apply/destroy
+#: output prints it in the agentexpress:owner tag (tags / tags_all), so every output line
+#: written to the log has it replaced. Exact strings, not EMAIL: npm prints name@version.
+PRIVATE: set[str] = set()
+
+
+def redact_output(text: str) -> str:
+    """`text` safe to write to the log: each PRIVATE value is `<redacted>`."""
+    for value in PRIVATE:
+        text = text.replace(value, "<redacted>")
+    return text
+
+
 def run(cmd: list[str], cwd: Path, env: dict | None = None, keep: int = 60) -> list[str]:
-    """Run a command, streaming its output to the CodeBuild log, and keep the tail."""
-    print(f"$ {' '.join(cmd)}", flush=True)
+    """Run a command, streaming its output to the CodeBuild log, and keep the tail. The log
+    gets redact_output(line); the tail stays raw, for the failure matchers."""
+    print(f"$ {' '.join(redact(cmd))}", flush=True)
     tail: collections.deque[str] = collections.deque(maxlen=keep)
-    proc = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **(env or {})},  # noqa: S603  # nosec B603  # nosemgrep
+    proc = subprocess.Popen(cmd, cwd=cwd, env={**os.environ, **(env or {})},  # noqa: S603 - argv list, no shell  # nosec B603  # nosemgrep
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     assert proc.stdout is not None
     for line in proc.stdout:
-        sys.stdout.write(line)
+        sys.stdout.write(redact_output(line))
         tail.append(ANSI.sub("", line.rstrip()))
     sys.stdout.flush()
     if proc.wait() != 0:
-        raise StepFailed(f"`{' '.join(cmd[:3])}` failed (exit {proc.returncode}):\n"
+        raise StepFailed(f"`{' '.join(redact(cmd[:3]))}` failed (exit {proc.returncode}):\n"
                          + "\n".join(tail))
     return list(tail)
 
@@ -357,7 +388,7 @@ RUN if [ -f requirements.txt ]; then pip install --no-cache-dir -r requirements.
 USER mcp
 EXPOSE 8000
 CMD ["python", "server.py"]
-"""
+"""  # noqa: E501 - the FROM line pins the base image by digest, one Dockerfile line
 
 
 def hosted_mcp_tools(workflow: dict) -> dict:
@@ -671,7 +702,7 @@ def invite_owner(session, pool_id: str, email: str, password: str = "") -> str: 
         for g in idp.list_groups(UserPoolId=pool_id).get("Groups", []):
             idp.admin_add_user_to_group(UserPoolId=pool_id, Username=email, GroupName=g["GroupName"])
         return state
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001 - a failed invite is logged; the deploy goes on
         print(f"runner: could not invite the owner: {type(e).__name__}: {e}")
         return ""
 
@@ -1044,7 +1075,7 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
     # finds no files, and the apply DELETES the build's whole UI from its bucket. So a
     # build step that is in state is rebuilt whenever its output is missing.
     if not (ROOT / "web" / "dist" / "index.html").exists():
-        listed = subprocess.run([tf, "state", "list"], cwd=tf_dir,  # noqa: S603  # nosec B603  # nosemgrep
+        listed = subprocess.run([tf, "state", "list"], cwd=tf_dir,  # noqa: S603 - terraform argv list, no shell  # nosec B603  # nosemgrep
                                 capture_output=True, text=True, check=False,
                                 env={**os.environ, **sub_env}).stdout
         if "null_resource.ui_build" in listed.split():
@@ -1074,7 +1105,7 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
                 time.sleep(RUNTIME_DELETE_PAUSE)
         return {}
     run([tf, "apply", "-auto-approve", "-input=false", "-no-color"], tf_dir, sub_env)
-    raw = subprocess.run([tf, "output", "-json"], cwd=tf_dir,  # noqa: S603  # nosec B603  # nosemgrep
+    raw = subprocess.run([tf, "output", "-json"], cwd=tf_dir,  # noqa: S603 - terraform argv list, no shell  # nosec B603  # nosemgrep
                          capture_output=True, text=True, check=True,
                          env={**os.environ, **sub_env}).stdout
     return {"stack": key, **tf_outputs(raw)}
@@ -1103,11 +1134,17 @@ def delete_leftover_logs(agent: str, logs=None, session=None) -> None:
     try:
         if logs is None:
             logs = (session or local_session()).client("logs")
-        for name in leftover_log_groups(logs, agent):
+        names = leftover_log_groups(logs, agent)
+    except Exception as e:  # noqa: BLE001 - tidying up must never fail a destroy that worked
+        print(f"runner: could not list leftover log groups: {type(e).__name__}: {e}")
+        return
+    # One at a time: a group this role may not delete must not keep the rest behind.
+    for name in names:
+        try:
             logs.delete_log_group(logGroupName=name)
             print(f"runner: deleted leftover log group {name}")
-    except Exception as e:  # noqa: BLE001 - tidying up must never fail a destroy that worked
-        print(f"runner: could not delete leftover log groups: {type(e).__name__}: {e}")
+        except Exception as e:  # noqa: BLE001 - tidying up must never fail a destroy that worked
+            print(f"runner: could not delete leftover log group {name}: {type(e).__name__}: {e}")
 
 
 def delete_login(env: dict, bid: str) -> None:
@@ -1164,6 +1201,9 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
         # request — because they decide the state path and the account deployed into.
         meta = table.get_item(Key=buildstore.meta_key(bid)).get("Item") or {}
         owner = str(meta.get("owner") or "")
+        PRIVATE.clear()
+        if meta.get("ownerEmail"):
+            PRIVATE.add(str(meta["ownerEmail"]))
         if not owner:
             raise StepFailed(f"build {bid} has no owner in the builds store")
         state = buildstore.state_prefix(owner, bid)
@@ -1266,10 +1306,10 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
         return 0
     except Exception as e:  # noqa: BLE001 - every failure must reach the Build view
         msg = str(e) if isinstance(e, StepFailed) else f"{type(e).__name__}: {e}"
-        print(f"runner: FAILED — {msg}", file=sys.stderr)
+        print(f"runner: FAILED — {redact_output(msg)}", file=sys.stderr)
         try:
             buildstore.record_failed(table, bid, msg)
-        except Exception as rec:  # noqa: BLE001
+        except Exception as rec:  # noqa: BLE001 - recording the failure must not hide it
             print(f"runner: could not record the failure: {rec}", file=sys.stderr)
         audit("failed", error=msg[-300:])
         return 1

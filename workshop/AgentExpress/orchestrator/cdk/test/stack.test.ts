@@ -30,9 +30,9 @@ import { DEFAULT_DOCS_URL, DOCS_REF } from "../lib/docs-default";
 const ORCH_ROOT = path.join(__dirname, "..", "..");
 const shipped = require(`${ORCH_ROOT}/app/workflow.json`);
 
-function synth(overrides: Record<string, any> = {}) {
+function makeStack(overrides: Record<string, any> = {}) {
   const app = new cdk.App();
-  const stack = new OrchestratorStack(app, "TestStack", {
+  return new OrchestratorStack(app, "TestStack", {
     env: { account: "123456789012", region: "us-east-1" },
     agentName: "multiagent_orchestrator",
     modelId: "us.anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -53,7 +53,9 @@ function synth(overrides: Record<string, any> = {}) {
     transactionSearchIndexingPercentage: 100,
     ...overrides,
   });
-  return Template.fromStack(stack);
+}
+function synth(overrides: Record<string, any> = {}) {
+  return Template.fromStack(makeStack(overrides));
 }
 
 // Synthesizing is the slow part, so do it once and assert many things.
@@ -199,6 +201,8 @@ describe("the BFF deployment package", () => {
       "CODE_SOURCE_BUCKETS",
       "DEPLOY_PROJECT",
       "DEPLOY_ROLE_ARN",
+      // The documentation links, on by default (lib/docs-default.ts).
+      "DOCS_URL",
       "EVENTS_TABLE",
       "MEMORIES",
       "MODEL_ID",
@@ -725,7 +729,7 @@ describe("the Builder control plane", () => {
     const spec = JSON.parse(project.Properties.Source.BuildSpec);
     expect(spec.phases.build.commands.join("\n")).toContain("python3 deployer/runner.py");
     const names = project.Properties.Environment.EnvironmentVariables.map((v: any) => v.Name).sort();
-    expect(names).toEqual(["BUILDS_BUCKET", "BUILDS_TABLE", "CODE_SOURCE_BUCKETS", "CONSOLE_NAME", "SECRETS_PREFIX", "SOURCE_URI",
+    expect(names).toEqual(["BUILDS_BUCKET", "BUILDS_TABLE", "CODE_SOURCE_BUCKETS", "CONSOLE_NAME", "DOCS_URL", "SECRETS_PREFIX", "SOURCE_URI",
       "TERRAFORM_VERSION"]);
   });
 
@@ -904,6 +908,12 @@ describe("self sign-up", () => {
     const policies = JSON.stringify(t.findResources("AWS::IAM::Policy"));
     expect(policies).toContain('"Sid":"AuditLog"');
     expect(policies).not.toContain("AdminAddUserToGroup");
+  });
+  it("termination-protects a control plane, and leaves a build stack destroyable", () => {
+    // A deploy of the console must not turn protection off; the console's Destroy must still
+    // delete a build (deployer/runner.py deploys every build with builder=false, consoleMode app).
+    expect(makeStack({ consoleMode: "builder" }).terminationProtection).toBe(true);
+    expect(makeStack({ builder: false }).terminationProtection).toBe(false);
   });
   it("is a control plane with consoleMode=builder, and refuses it without the Builder", () => {
     const t = synth({ consoleMode: "builder" });
@@ -1269,6 +1279,19 @@ describe("baseline hardening (mirrors the Terraform path)", () => {
     });
     for (const c of Object.values<any>(template.findResources("AWS::Cognito::UserPoolClient"))) {
       expect(JSON.stringify(c.Properties.CallbackURLs ?? [])).not.toContain("localhost");
+    }
+  });
+  it("lets the Transaction Search handler create only the Application Signals service-linked role", () => {
+    const statements = Object.values<any>(template.findResources("AWS::IAM::Policy"))
+      .filter((p) => JSON.stringify(p.Properties.Roles ?? []).includes("TransactionSearchHandler"))
+      .flatMap((p) => p.Properties.PolicyDocument.Statement);
+    const slr = statements.filter((s) => [].concat(s.Action).includes("iam:CreateServiceLinkedRole" as never));
+    expect(slr.length).toBeGreaterThan(0);
+    for (const s of slr) {
+      expect(s.Resource).not.toBe("*");
+      expect(s.Condition?.StringEquals?.["iam:AWSServiceName"]).toBe("application-signals.cloudwatch.amazonaws.com");
+      expect(JSON.stringify(s.Resource)).toContain(
+        "role/aws-service-role/application-signals.cloudwatch.amazonaws.com/*");
     }
   });
 });

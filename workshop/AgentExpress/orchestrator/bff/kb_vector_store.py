@@ -10,7 +10,9 @@ cdk/lib/kb-vector-store.ts validateKbVectorStore and the precondition in terrafo
 https://docs.aws.amazon.com/bedrock/latest/userguide/knowledge-base-setup.html
 """
 from __future__ import annotations
+
 import re
+
 #: Aurora names columns, not document fields: Bedrock's ColumnName shape.
 _AURORA_FIELDS = ("vectorField", "textField", "metadataField")
 

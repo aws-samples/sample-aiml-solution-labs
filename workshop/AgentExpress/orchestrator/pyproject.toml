@@ -47,14 +47,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 # The tests build workflows, agent packages and model payloads inline. Long string
-# fixtures and sample credentials are the fixtures, not smells.
-"tests/*" = ["S105", "S106"]
-# test_asset_rendering.py runs web/index.html's OWN functions under node, which is the
-# only way to assert what a reader actually sees rather than grepping the file for
-# strings — which is how the sample-contract coupling in the renderer survived so
-# long. The executable is an absolute path from shutil.which (no PATH lookup at call
-# time) and the script is built from fixtures in that file.
-"tests/test_asset_rendering.py" = ["S105", "S106", "S603"]
+# fixtures and sample credentials are the fixtures, not smells: E501 for the long
+# fixture lines, S105/S106 for the sample credentials.
+"tests/*" = ["E501", "S105", "S106"]
 
 [tool.pytest.ini_options]
 # Run from orchestrator/ with: pytest

@@ -498,7 +498,7 @@ app links to the same documentation.
 
 **Where the links go: `docsUrl`.** By default, the public [user guide](docs/user-guide/README.md) on
 GitHub, pinned to the release's tag:
-`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.7/workshop/AgentExpress/docs/user-guide/`.
+`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.8/workshop/AgentExpress/docs/user-guide/`.
 A section's link is `<docsUrl><page>.md#<slug>`, GitHub's id for the heading (lower case, punctuation
 but `-` and `_` removed, spaces as `-`, a repeated heading `-1`, `-2`). An organisation that keeps the
 guide in an XWiki space, typically for internal or production deployments, points `docsUrl` at that
@@ -841,6 +841,12 @@ Terraform: set `agent_name = "agentexpress"`, `idp = "cognito"`,
 `enable_builder = true`, the default), then run the two applies of
 [step 3](#deploy-with-terraform). `enableGateway` / `enable_gateway` has no effect in this mode.
 Self sign-up users join `members`, which may deploy and destroy their own builds.
+
+**Termination protection (CDK).** A CDK-deployed control plane (`consoleMode=builder`) has
+CloudFormation termination protection on, and every deploy keeps it on. Workflow apps
+(`consoleMode=app`) and the build stacks a console deploys (`ax-*-stack`) stay unprotected, so the
+console's Destroy works. `-c terminationProtection=true|false` overrides the default. Terraform has no
+equivalent. See [Tear down](#tear-down) to destroy a protected console.
 
 ### The AgentExpress Assistant: links and Review changes
 
@@ -1748,6 +1754,15 @@ terraform destroy                        # leaves Transaction Search and the sta
 FORCE=1 ./teardown.sh                    # no prompt
 KEEP_TRANSACTION_SEARCH=1 ./teardown.sh  # leave the account-wide setting alone
 cdk destroy                              # CDK; leaves Transaction Search enabled
+```
+
+**CDK control plane: turn termination protection off first.** A `consoleMode=builder` stack is
+termination-protected, so `cdk destroy` fails until you clear it (use your stack's name,
+`<agentName>-stack`):
+
+```bash
+aws cloudformation update-termination-protection --no-enable-termination-protection --stack-name agentexpress-stack
+cdk destroy -c agentName=agentexpress -c consoleMode=builder
 ```
 
 **Builds table protection.** The builds table has deletion protection on while the console runs. A

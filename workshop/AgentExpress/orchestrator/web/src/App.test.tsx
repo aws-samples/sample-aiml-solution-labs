@@ -32,6 +32,15 @@ vi.mock("./api", () => ({
 }));
 
 import App from "./App";
+// The views App loads lazily (React.lazy in App.tsx), imported here so their module trees
+// (React Flow, Cloudscape) are compiled when this file is collected. Otherwise the FIRST
+// test to open one compiles it inside its 1 s wait for what the view shows, which under the
+// whole suite's parallel load takes longer than that. The lazy import() then resolves from
+// the module cache, and each wait times only the rendering it is about.
+import "./builder/Accounts";
+import "./builder/Builder";
+import "./builder/Library";
+import "./builder/Teams";
 
 const BASE = { owner: "u1", groups: [], permittedActions: null, authzEnabled: false, email: "u@example.com" };
 
@@ -122,8 +131,10 @@ describe("the demo video link", () => {
   it("is on a console's About panel and first-run view, opening in a new tab", async () => {
     me.value = { ...BASE, builder: true, consoleMode: "builder", demoVideoUrl: URL_ };
     render(<App />);
-    // Before any build: the Assistant's start view offers it.
-    await waitFor(() => expect(screen.getByTestId("design-demo-video").textContent).toMatch(/^New here\?/));
+    // Before any build: the Assistant's start view offers it. The whole App's first render
+    // in this group, so it gets longer than the default 1 s to appear under a full run.
+    await waitFor(() => expect(screen.getByTestId("design-demo-video").textContent).toMatch(/^New here\?/),
+      { timeout: 4000 });
     await openAbout();
     await waitFor(() => expect(screen.getAllByRole("link", { name: /Watch the 10-minute demo/ }).length).toBe(2));
     for (const a of screen.getAllByRole("link", { name: /Watch the 10-minute demo/ })) {
@@ -205,46 +216,53 @@ describe("the documentation links", () => {
     expect(top).toBeTruthy();
     expect(top.getAttribute("target")).toBe("_blank");
     expect(top.getAttribute("rel")).toMatch(/noopener/);
-    // The Build page's own info icon (the Build view loads lazily: slow on a cold first test).
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "About Build page" }).length).toBeGreaterThan(0),
-      { timeout: 5000 });
+    // The Build page's own info icon.
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "About Build page" }).length).toBeGreaterThan(0));
   });
   it("are on a build's own app too", async () => {
     me.value = { ...BASE, builder: false, consoleMode: "app", docsUrl: DOCS_URL };
     render(<App />);
     await waitFor(() => expect(docLinks().some((a) => a.getAttribute("href") === DOCS_URL)).toBe(true));
   });
+  /** The Assistant's own help (DesignChat.tsx): text that is only in a popover, so its
+   *  icon stays with documentation off too (InfoLink `always`), with no Documentation link. */
+  const ALWAYS = ["About AgentExpress Assistant", "About Review changes", "About Sending messages"];
   /** Nothing documentation-related on the page: no link, no info icon, no help toggle. */
   const expectNoDocs = () => {
     expect(docLinks()).toHaveLength(0);
-    expect(screen.queryAllByRole("button", { name: /^About (?!this application)/ })).toHaveLength(0);
-    expect(document.querySelectorAll("[data-docs-feature]")).toHaveLength(0);
+    const icons = screen.queryAllByRole("button", { name: /^About (?!this application)/ });
+    expect(icons.map((b) => b.getAttribute("aria-label")).filter((n) => !ALWAYS.includes(n ?? ""))).toEqual([]);
+    expect(document.querySelectorAll("[data-docs-feature]")).toHaveLength(icons.length);
   };
-  it("are absent when none is set, it is not https, or the deployment turned them off (docsLinks=false)", async () => {
-    for (const docs of [{}, { docsUrl: "http://docs.example.com/product/" }, { docsUrl: DOCS_URL, docsLinks: false }]) {
-      me.value = { ...BASE, builder: true, consoleMode: "builder", ...docs };
-      const { unmount } = render(<App />);
-      await waitFor(() => expect(screen.getByText("What would you like to build?")).toBeTruthy());
-      expectNoDocs();
-      // Nothing to turn off, so no Show help icons either.
-      expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
-      unmount();
-    }
+  // One test per case: each renders the whole App, so three in one test is three times the work
+  // inside one test's time limit.
+  it.each([
+    ["none is set", {}],
+    ["it is not https", { docsUrl: "http://docs.example.com/product/" }],
+    ["the deployment turned them off (docsLinks=false)", { docsUrl: DOCS_URL, docsLinks: false }],
+  ])("are absent when %s", async (_why, docs) => {
+    me.value = { ...BASE, builder: true, consoleMode: "builder", ...docs };
+    const { unmount } = render(<App />);
+    await waitFor(() => expect(screen.getByText("What would you like to build?")).toBeTruthy());
+    expectNoDocs();
+    // Nothing to turn off, so no Show help icons either.
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
+    unmount();
   });
-  it("go to the user guide's Markdown on GitHub by default, and to the wiki's sections on a wiki", async () => {
-    const GITHUB = "https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.6/workshop/AgentExpress/docs/user-guide/";
-    const WIKI = "https://wiki.example.com/bin/view/AgentExpress/";
-    for (const [docsUrl, href] of [[GITHUB, `${GITHUB}Builder_Console.md#read-the-build-page`],
-      [WIKI, `${WIKI}Builder_Console#HReadthebuildpage`]]) {
-      me.value = { ...BASE, builder: true, consoleMode: "builder", docsUrl };
-      const { unmount } = render(<App />);
-      const [icon] = await screen.findAllByRole("button", { name: "About Build page" });
-      fireEvent.click(icon);
-      const link = await screen.findByRole("link", { name: "Documentation: Build page (opens in a new tab)" });
-      expect(link.getAttribute("href")).toBe(href);
-      expect(docLinks().some((a) => a.getAttribute("href") === docsUrl)).toBe(true);
-      unmount();
-    }
+  const GITHUB = "https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.6/workshop/AgentExpress/docs/user-guide/";
+  const WIKI = "https://wiki.example.com/bin/view/AgentExpress/";
+  it.each([
+    ["the user guide's Markdown on GitHub by default", GITHUB, `${GITHUB}Builder_Console.md#read-the-build-page`],
+    ["the wiki's sections on a wiki", WIKI, `${WIKI}Builder_Console#HReadthebuildpage`],
+  ])("go to %s", async (_where, docsUrl, href) => {
+    me.value = { ...BASE, builder: true, consoleMode: "builder", docsUrl };
+    const { unmount } = render(<App />);
+    const [icon] = await screen.findAllByRole("button", { name: "About Build page" });
+    fireEvent.click(icon);
+    const link = await screen.findByRole("link", { name: "Documentation: Build page (opens in a new tab)" });
+    expect(link.getAttribute("href")).toBe(href);
+    expect(docLinks().some((a) => a.getAttribute("href") === docsUrl)).toBe(true);
+    unmount();
   });
   it("go when a person turns Show help icons off, and stay off after a reload", async () => {
     me.value = { ...BASE, builder: true, consoleMode: "builder", docsUrl: DOCS_URL };
@@ -269,5 +287,5 @@ describe("the documentation links", () => {
     await waitFor(() => expect(screen.getAllByRole("button", { name: "About Build page" }).length).toBeGreaterThan(0));
     expect(docLinks().some((a) => a.getAttribute("href") === DOCS_URL)).toBe(true);
     expect(localStorage.getItem("agentexpress.docs.helpIcons")).toBe("on");
-  });
+  }, 30_000);   // about 4 s alone; two whole App renders, so slow under a full run
 });
