@@ -119,6 +119,59 @@ A branch lets a step's own output pick what runs next: send a high-risk case to 
 - A branch goes on a single-agent or sequence step, not on a parallel step or the last step. With a gate on the same step, the person approves first and the branch then reads the approved output.
 - In a run you see a **Branch** pill on the graph, a timeline line naming the rule that matched, and **Skipped** on the steps it bypassed.
 
+# Offer named options at a gate
+
+A gate can offer your own options, such as **Override** and **Abort**, instead of approve, revise and deny. The option the person chooses becomes the run field `decision`, and the step's branch rules route on it.
+
+1. Select the stage, turn on **HITL gate**, and expand **How the gate decides**.
+1. In **Named options**, write 2 to 6 options, one per line.
+1. Under **Branch**, add a rule for each option that should go somewhere other than the next stage.
+
+```json
+{ "agent": "check", "hitl": { "options": ["Override", "Abort"] },
+  "branch": { "when": [
+      { "field": "decision", "equals": "Override", "goto": "deliver" },
+      { "field": "decision", "equals": "Abort", "goto": "END" } ] } }
+```
+
+To ask a person only when a check fails, make it a **threshold** gate with options. A pass asks nobody and takes the branch's `default`:
+
+```json
+{ "agent": "check",
+  "hitl": { "mode": "threshold", "when": [{ "field": "passed", "equals": false }],
+            "options": ["Override", "Abort"] },
+  "branch": { "when": [{ "field": "decision", "equals": "Abort", "goto": "END" }],
+              "default": "deliver" } }
+```
+
+- Each option is at most 60 characters, and no two may be the same ignoring case.
+- Options go on a single-agent or sequence stage. A parallel stage cannot branch, so it cannot offer them. They are answered in the execution plane only, not by an EventBridge event.
+- A gate that approves itself, or a timeout set to **Approve**, chooses no option: the branch takes its `default`. A timeout set to **Deny** stops the run.
+- The checks warn you when no branch rule reads `decision`, or when a rule names an option the gate does not offer.
+- A gate without options works exactly as before.
+
+# Let an agent request a decision
+
+An agent can also stop in the middle of its step and ask a person to choose. Set `agents.<id>.askPerson.options`, or write the options under **Decision options** in the agent's ask-a-person setting. The agent needs `toolMode: "model"`.
+
+- The agent's model can then ask a person to choose one of your options, with a short question that says what is being decided.
+- The options are always yours, never the model's, so branch rules can name them.
+- The agent reads the choice and carries on. The choice is also the run field `decision`, so a branch on the agent's stage can route on it.
+- A request counts as one of the agent's questions (`maxQuestions`). With `timeout`, an unchosen request lapses and the agent carries on without a choice.
+
+# Choose an option
+
+When a run waits for a choice, the run page shows a **Decision required** box (at a gate) or a "&lt;agent> needs a decision" box (an agent's request), with one button per option.
+
+1. Read the step's output or the agent's question.
+1. Optionally write a note in **Comment (optional)**.
+1. Choose an option. The run continues at once.
+
+* Every choice is a line on the run's timeline, with your comment.
+* The Activity log records who chose which option, and when.
+* You need the `decision` action, as for any gate.
+* The Run Assistant cannot choose for you.
+
 # Ask the Assistant
 
 In the control plane, the AgentExpress Assistant can add and change review gates, with their rules, timeouts and EventBridge answers. It can also let an agent ask a person, make a tool's calls wait for approval, add branch rules, and set who may decide. Requests you can paste:
@@ -127,12 +180,15 @@ In the control plane, the AgentExpress Assistant can add and change review gates
 - "At the triage gate, ask a person only when riskScore is 80 or more, and deny after 24 hours"
 - "Let the intake agent ask a person up to 2 questions, and carry on after 1 hour with no answer"
 - "Make every call to the refunds tool wait for a person's approval, and deny it after an hour"
+- "At the check gate, let the person choose Override or Abort: Override goes on to the deliver step, Abort ends the run"
+- "Ask the operator to override or abort only when the check fails; a pass goes straight to delivery"
+- "Let the research agent ask a person to choose Load images or Continue while it works"
 
 With **Review changes** on **Auto** or **Always**, a second model checks approval settings and new stages before they're saved.
 
 What it can't do here:
 
-- Approve, revise or deny a gate, answer an agent's question, or decide a tool call. Do that on the run page in the execution plane. The Run Assistant can decide gates for you, but not answer questions.
+- Approve, revise or deny a gate, choose a named option, answer an agent's question, or decide a tool call. Do that on the run page in the execution plane. The Run Assistant can decide gates for you, but not answer questions or choose an option.
 - Deploy. Gates and questions work in runs once you choose **Deploy**.
 
 All requests by feature: [Ask the Assistant](Ask_the_Assistant.md).

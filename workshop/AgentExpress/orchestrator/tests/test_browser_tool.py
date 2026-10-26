@@ -752,7 +752,7 @@ def test_terraform_attaches_the_policy_to_browser_functions_only():
 
 
 def test_both_paths_give_the_function_60_seconds_and_allow_domains_only_when_set():
-    assert 'timeout     = contains(["codeInterpreter", "browser"], each.value.source) ? 60 : 30' in TOOLS_TF
+    assert 'timeout     = contains(["codeInterpreter", "browser", "docgen"], each.value.source) ? 60 : 30' in TOOLS_TF
     assert "timeout: cdk.Duration.seconds(60)" in TS
     assert 'each.value.source == "browser" && length(each.value.allow_domains) > 0' in TOOLS_TF
     assert 'ALLOW_DOMAINS = join(",", each.value.allow_domains)' in TOOLS_TF

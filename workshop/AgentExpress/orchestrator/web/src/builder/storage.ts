@@ -457,9 +457,12 @@ export const codeTool = {
 // --- a build's secrets and documents ---------------------------------------------------
 
 /** gitTokens: a private repository's token, named by a git code source (codeSource.ts). */
-export type SecretKind = "toolApiKeys" | "a2aTokens" | "identitySecrets" | "gitTokens";
+/** deliverSecrets (v139 Track C deliver): a deliver step's webhook signing secret, named by
+ *  the target's `secret` (taskCheck.ts checkDeliver). */
+export type SecretKind = "toolApiKeys" | "a2aTokens" | "identitySecrets" | "gitTokens" | "deliverSecrets";
 /** Which secrets are set, by kind — names only; no route ever returns a value. */
-export type SecretNames = Record<Exclude<SecretKind, "gitTokens">, string[]> & { gitTokens?: string[] };
+export type SecretNames = Record<Exclude<SecretKind, "gitTokens" | "deliverSecrets">, string[]>
+  & { gitTokens?: string[]; deliverSecrets?: string[] };
 
 export const buildSecrets = {
   names: (id: string) => api.get<SecretNames>(`/api/builds/${enc(id)}/secrets`),
@@ -524,6 +527,9 @@ export interface DesignChange {
   summary: string;
   revision: number;
   undo?: boolean;
+  /** The named version this change made (or, for an undo or a restore, put back). */
+  version?: number;
+  versionName?: string;
   changed: { agents: string[]; tools: string[]; steps: boolean; blocks: string[]; removed: string[] };
   defaultsUsed?: string[];
   needsInput?: { path: string; question: string }[];
@@ -563,7 +569,12 @@ export interface DesignDoc {
   summarized?: number;
   /** What a message may bring: file limits and the buckets s3:// paths may name. */
   attach?: { maxFiles: number; maxBytes: number; types: string[]; s3: string[] };
+  /** Named versions of the Assistant's changes, oldest first (v0: before its first change). */
+  versions?: DesignVersion[];
+  /** The version the build is on now. */
+  version?: number;
 }
+export interface DesignVersion { v: number; name: string; at?: string; current: boolean }
 
 export const designer = {
   get: (id: string) => api.get<DesignDoc>(`/api/builds/${encodeURIComponent(id)}/design`),

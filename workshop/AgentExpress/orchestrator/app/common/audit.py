@@ -45,3 +45,29 @@ def run_finished(status: str, run: dict, session_id: str, error: str = "") -> No
             _table.put_item(Item=item)
     except Exception as e:  # noqa: BLE001 - the run is over; its log line must not fail it
         print(f"[audit] could not record {action} for {session_id}: {type(e).__name__}: {e}")
+
+
+# --- begin v139 Track C deliver -----------------------------------------------------------
+def run_event(session_id: str, action: str, detail: dict) -> None:
+    """Something a run did on its own (a deliver step's delivery, app/common/deliver.py), in
+    its owner's activity log. The owner is read from the run's status item. Best effort."""
+    table_name = os.environ.get("STATUS_TABLE", "")
+    if not (AUDIT_TABLE and table_name):
+        return
+    global _table
+    try:
+        import boto3
+        res = boto3.resource("dynamodb")
+        run = res.Table(table_name).get_item(
+            Key={"session_id": session_id}, ProjectionExpression="#o, #u",
+            ExpressionAttributeNames={"#o": "owner", "#u": "user"}).get("Item") or {}
+        if not run.get("owner"):
+            return
+        if _table is None:
+            _table = res.Table(AUDIT_TABLE)
+        for item in audit_items(str(run["owner"]), str(run.get("user") or ""), action,
+                                {"session": session_id, **detail}):
+            _table.put_item(Item=item)
+    except Exception as e:  # noqa: BLE001 - a log line never fails the run
+        print(f"[audit] could not record {action} for {session_id}: {type(e).__name__}: {e}")
+# --- end v139 Track C deliver -------------------------------------------------------------

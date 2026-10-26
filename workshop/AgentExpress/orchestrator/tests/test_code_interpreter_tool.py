@@ -445,7 +445,7 @@ def test_both_paths_name_the_same_interpreter_and_actions():
 
 
 def test_both_paths_give_the_function_the_same_timeout_and_no_environment():
-    assert 'timeout     = contains(["codeInterpreter", "browser"], each.value.source) ? 60 : 30' in TF
+    assert 'timeout     = contains(["codeInterpreter", "browser", "docgen"], each.value.source) ? 60 : 30' in TF
     assert 'cdk.Duration.seconds(isCodeInterpreter ? 60 : 30)' in TS
     # 60 s must leave room for the 30 s run plus starting and stopping a session.
     handler = HANDLER_PATH.read_text()
@@ -462,7 +462,7 @@ def test_the_pricing_function_keeps_its_policy_name_and_address():
 def test_the_source_is_in_the_vocabulary_and_the_shipped_sample_does_not_use_it():
     import json
     vocab = json.loads((ORCH / "app" / "vocabulary.json").read_text())
-    assert vocab["builtinLambdaSource"]["values"] == ["pricing", "codeInterpreter", "browser"]
+    assert vocab["builtinLambdaSource"]["values"] == ["pricing", "codeInterpreter", "browser", "docgen"]
     workflow = json.loads((ORCH / "app" / "workflow.json").read_text())
     sources = {t.get("source") for t in workflow["tools"].values()}
     assert "codeInterpreter" not in sources, "the shipped sample must not enable the sandbox"

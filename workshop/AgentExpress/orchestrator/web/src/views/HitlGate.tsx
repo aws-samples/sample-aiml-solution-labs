@@ -20,6 +20,7 @@ import { useState } from "react";
 import { AssetView } from "../assets/AssetView";
 import type { SessionSnapshot, Step, Workflow } from "../types";
 import { AskPerson } from "./AskPerson";
+import { DecisionOptions } from "./DecisionOptions";
 import { useDocsBase } from "../docs/docsLinks";
 import { infoSlot } from "../docs/InfoLink";
 
@@ -36,18 +37,57 @@ interface GateProps {
   workflow: Workflow;
   canDecide: boolean;
   denyReason: string | null;
-  onDecide: (d: Decision, comment: string) => Promise<void>;
+  /** `option`: a named option (v139 Track D), sent as {option, comment}. */
+  onDecide: (d: Decision, comment: string, option?: string) => Promise<void>;
   onGroupDecide: (per: Record<string, GroupDecision>, comment: string) => Promise<void>;
 }
 
-/** What the run waits for: a review gate, or an agent asking a person mid-step
- *  (`hitl.kind`, AskPerson.tsx). Separate components, so each keeps its own state. */
+/** What the run waits for: a review gate, a gate with named options, or an agent asking a
+ *  person mid-step (`hitl.kind`, AskPerson.tsx). Separate components, so each keeps its own state. */
 export function HitlGate(props: GateProps) {
   const kind = props.snap.hitl?.kind;
-  return kind === "question" || kind === "toolApproval"
-    ? <AskPerson key={props.snap.hitl?.askId} snap={props.snap} workflow={props.workflow}
-                 canDecide={props.canDecide} denyReason={props.denyReason} onDecide={props.onDecide} />
-    : <ReviewGate {...props} />;
+  if (kind === "question" || kind === "toolApproval" || kind === "decision") {
+    return <AskPerson key={props.snap.hitl?.askId} snap={props.snap} workflow={props.workflow}
+                      canDecide={props.canDecide} denyReason={props.denyReason} onDecide={props.onDecide} />;
+  }
+  return props.snap.hitl?.options?.length ? <OptionGate {...props} /> : <ReviewGate {...props} />;
+}
+
+/** v139 Track D: a review gate with named options (steps[].hitl.options). The person
+ *  chooses one, which decides what runs next; there is no approve / revise / deny. */
+function OptionGate({ snap, workflow, canDecide, denyReason, onDecide }: GateProps) {
+  const docs = useDocsBase();
+  const node = snap.hitl?.node ?? "";
+  const step = gateStep(workflow, node);
+  const ids = step?.sequence ?? [node];
+  const label = step?.gateName ?? workflow.agents[node]?.name ?? node;
+  const hitl = snap.hitl!;
+  return (
+    <Container
+      header={
+        <Header variant="h2" info={infoSlot(docs, "run.decision")}
+          description="Choose one of the options. Your choice is recorded with your comment and decides what runs next.">
+          {`Decision required — ${label}`}
+        </Header>
+      }
+    >
+      <SpaceBetween size="l">
+        <Alert type="info" statusIconAriaLabel="Info">
+          The run is paused at this gate and will stay paused until you choose.
+          {hitl.timeoutAt ? ` With no choice by ${hitl.timeoutAt} (UTC) it ${hitl.timeoutAction === "approve" ? "continues with no option chosen" : "is denied"} automatically.` : ""}
+        </Alert>
+        {denyReason ? <Alert type="warning">{denyReason}</Alert> : null}
+        {ids.map((id) => (
+          <ExpandableSection key={id} defaultExpanded={ids.length === 1}
+                             headerText={workflow.agents[id]?.name ?? id}>
+            <AssetView text={snap.nodes?.[id]?.output ?? ""} />
+          </ExpandableSection>
+        ))}
+        <DecisionOptions options={hitl.options ?? []} canDecide={canDecide}
+                         onChoose={(o, c) => onDecide("approve", c, o)} />
+      </SpaceBetween>
+    </Container>
+  );
 }
 
 function ReviewGate({

@@ -6,7 +6,8 @@
       "mode": "always" | "threshold" | "auto",
       "when": [{"field": "riskScore", "gte": 80}],     # threshold: a person only when one matches
       "approval": "console" | "event",                 # event: also asked for, and answerable, on EventBridge
-      "timeout": {"after": "24h", "action": "deny"}     # no decision by then: approve or deny
+      "timeout": {"after": "24h", "action": "deny"},    # no decision by then: approve or deny
+      "options": ["Override", "Abort"]                  # named options instead of approve/revise/deny
     }
 
   always     the run waits for a decision (the default).
@@ -51,7 +52,53 @@ def spec_of(hitl) -> dict:
     """The gate's spec, with every default filled in."""
     h = hitl if isinstance(hitl, dict) else {}
     return {"mode": h.get("mode") or "always", "when": list(h.get("when") or []),
-            "approval": h.get("approval") or "console", "timeout": h.get("timeout")}
+            "approval": h.get("approval") or "console", "timeout": h.get("timeout"),
+            "options": [str(o) for o in (h.get("options") or [])]}
+
+
+# --- begin v139 Track D (decide): named options ------------------------------------------
+#
+#     "hitl": {"options": ["Override", "Abort"]}
+#
+# The person chooses ONE of the options (with an optional comment) instead of approve /
+# revise / deny. The gate then continues, and the chosen label is the run field `decision`
+# (vocabulary decisionOptions) that the step's `branch.when` routes on:
+#     {"field": "decision", "equals": "Abort", "goto": "END"}
+# A gate that approves itself (auto, threshold with no match, an unattended run) or a timeout
+# with action "approve" chooses no option: `decision` is then unset and the branch takes its
+# default. A timeout with "deny" stops the run, as on any gate. An agent can ask for the same
+# kind of choice mid-step (askPerson.options, app/common/asks.py).
+
+def _decision_vocab() -> tuple[str, int, int, int]:
+    from app.common import vocabulary
+    field = (vocabulary.values("decisionOptions") or ("decision",))[0]
+    return (field, int(vocabulary.field("decisionOptions", "minOptions") or 2),
+            int(vocabulary.field("decisionOptions", "maxOptions") or 6),
+            int(vocabulary.field("decisionOptions", "labelChars") or 60))
+
+
+#: The run field a chosen option becomes, and the bounds on a list of options.
+DECISION_FIELD, MIN_OPTIONS, MAX_OPTIONS, OPTION_CHARS = _decision_vocab()
+
+
+def validate_options(options, where: str) -> None:
+    """Raise ValueError naming `where` for a malformed list of named options."""
+    if (not isinstance(options, list) or not MIN_OPTIONS <= len(options) <= MAX_OPTIONS
+            or not all(isinstance(o, str) and o.strip() for o in options)):
+        raise ValueError(f"{where}: `options` is a list of {MIN_OPTIONS} to {MAX_OPTIONS} option labels, "
+                         f'e.g. ["Override", "Abort"].')
+    if any(len(o.strip()) > OPTION_CHARS for o in options):
+        raise ValueError(f"{where}: each option is at most {OPTION_CHARS} characters.")
+    if len({o.strip().casefold() for o in options}) != len(options):
+        raise ValueError(f"{where}: the options must differ (ignoring case).")
+
+
+def chosen(options: list[str], resumed) -> str:
+    """The option a resume payload chose, as the author spelled it, or "" when it chose none
+    (a self-approval, a timeout, or a label that is not one of `options`)."""
+    want = str((resumed or {}).get("option") or "").strip().casefold() if isinstance(resumed, dict) else ""
+    return next((o.strip() for o in options if want and o.strip().casefold() == want), "")
+# --- end v139 Track D (decide) -----------------------------------------------------------
 
 
 def after_seconds(text: str) -> int:
@@ -67,9 +114,9 @@ def validate(hitl, where: str) -> None:
         return
     if not isinstance(hitl, dict):
         raise ValueError(f"{where}: `hitl` is true, false or an object {{mode, when, approval, timeout}}.")
-    bad = sorted(set(hitl) - {"mode", "when", "approval", "timeout"})
+    bad = sorted(set(hitl) - {"mode", "when", "approval", "timeout", "options"})
     if bad:
-        raise ValueError(f"{where}: `hitl` has unknown key(s) {bad}: it takes mode, when, approval, timeout.")
+        raise ValueError(f"{where}: `hitl` has unknown key(s) {bad}: it takes mode, when, approval, timeout, options.")
     s = spec_of(hitl)
     if s["mode"] not in MODES:
         raise ValueError(f"{where}: `hitl.mode` is one of {list(MODES)}.")
@@ -86,6 +133,11 @@ def validate(hitl, where: str) -> None:
             raise ValueError(f"{where}: `hitl.timeout` is {{\"after\": \"24h\", \"action\": \"approve\" | \"deny\"}}.")
         if after_seconds(t.get("after")) > MAX_AFTER_S:
             raise ValueError(f"{where}: `hitl.timeout.after` is at most 30d.")
+    if "options" in hitl:  # v139 Track D
+        validate_options(hitl["options"], f"{where} hitl")
+        if s["approval"] == "event":
+            raise ValueError(f"{where}: `hitl.options` are chosen on the run page; an event cannot choose "
+                             f"one, so they do not go with `approval: \"event\"`.")
 
 
 def auto_reason(spec: dict, state: dict, outputs: list[str]) -> str:
@@ -109,6 +161,8 @@ def request_extra(spec: dict) -> dict:
     """What the waiting run's `hitl` carries besides node and question: how it is
     answered, and when it times out (read by bff/gates.py and the run page)."""
     out = {"approval": spec["approval"]}
+    if spec.get("options"):  # v139 Track D: the run page shows one button per option
+        out["options"] = list(spec["options"])
     t = spec["timeout"]
     if isinstance(t, dict):
         due = time.time() + after_seconds(t.get("after"))

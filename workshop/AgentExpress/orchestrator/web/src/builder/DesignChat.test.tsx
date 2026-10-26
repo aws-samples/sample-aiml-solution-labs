@@ -307,6 +307,27 @@ describe("the AgentExpress Assistant tab", () => {
     expect(phaseLabel({ phase: "reading" })).toBe("Reading the page…");
     expect(phaseLabel({ phase: "checking" })).toBe("Checking the change…");
   });
+  it("lists the named versions newest first and marks the current one", async () => {
+    replies = { "GET /api/builds/pclaims01/design": [doc({ revision: 3, version: 1, turns: [
+      { id: "u1", role: "user", text: "Go back to v1", at: "" },
+      { id: "a1", role: "assistant", text: "This goes back to v1: multi-agent draft.", at: "", status: "done",
+        changes: [change({ summary: "Went back to v1: multi-agent draft", revision: 3, undo: true, version: 1 })] }],
+    versions: [{ v: 0, name: "before the Assistant's first change", current: false },
+      { v: 1, name: "multi-agent draft", at: "", current: true }, { v: 2, name: "single agent", at: "", current: false }] })] };
+    await act(async () => { render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    const list = await waitFor(() => screen.getByTestId("design-versions"));
+    const items = [...list.querySelectorAll("li")];
+    expect(items.map((li) => li.textContent)).toEqual(
+      ["v2: single agent", "v1: multi-agent draft (current)", "v0: before the Assistant's first change"]);
+    expect(items[1].getAttribute("aria-current")).toBe("true");
+    expect(screen.getByText("Went back to v1: multi-agent draft")).toBeTruthy();
+  });
+  it("shows no versions card before the Assistant has saved a change", async () => {
+    replies = { "GET /api/builds/pclaims01/design": [doc({ versions: [] })] };
+    await act(async () => { render(<Builder notify={vi.fn()} store={serverStore({ project: stored, saves: [] })} />); });
+    await waitFor(() => screen.getByTestId("design-hint"));
+    expect(screen.queryByTestId("design-versions")).toBeNull();
+  });
   it("keeps the input's hint to one line, with the full text in its tooltip and its info icon", async () => {
     replies = { "GET /api/builds/pclaims01/design": [doc()] };
     let view!: ReturnType<typeof render>;

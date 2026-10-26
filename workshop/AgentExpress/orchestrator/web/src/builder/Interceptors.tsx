@@ -31,7 +31,7 @@ import { useEffect, useRef, useState } from "react";
 import { CheckResult, Files, GrantsForm, type Code } from "./CodeTool";
 import type { CodeSource } from "./codeSource";
 import { CodeSourceField } from "./CodeSourceField";
-import { TEMPLATES, interceptorFiles, type Point } from "./interceptorCode";
+import { TEMPLATES, interceptorFiles, isGenerated, type Point } from "./interceptorCode";
 import { IssueList } from "./IssueList";
 import { vocab } from "./meta";
 import type { Json, Project, ToolFiles, Workflow } from "./model";
@@ -335,7 +335,7 @@ function PointEditor({ project, point, onChange, server, deployed, notify }: {
   const generated = (t: Record<string, Settings>) => interceptorFiles(point.id, t, wf);
   // The code was changed by hand when it is not what its current templates generate.
   const edited = ic?.code !== undefined && files["handler.py"] !== undefined
-    && files["handler.py"] !== generated(templates)["handler.py"];
+    && !isGenerated(point.id, templates, files["handler.py"]);
 
   const setTemplates = (next: Record<string, Settings>) => {
     const nic: Interceptor = { ...ic!, templates: next };

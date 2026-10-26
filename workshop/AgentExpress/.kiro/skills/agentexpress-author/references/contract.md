@@ -115,6 +115,22 @@ runs code it wrote in the AgentCore Code Interpreter) and `browser` (open a publ
 AgentCore Browser; optional `allowDomains`). Each has a fixed execution role, which is right for
 that function and wrong for a connector needing VPC config or a secret.
 
+<!-- begin Track B docgen -->
+`docgen` is the Document generator: PDF, PPTX and DOCX files from JSON data, into a template in
+S3 or a built-in layout. Keys: `formats` (required; any of `pdf`, `pptx`, `docx`),
+`templateS3Uri` (optional; one `.pptx`/`.docx` object, or a folder ending in `/`; PDF always uses
+the built-in layout), `outputPrefix` (optional; `s3://<bucket>/<prefix>/`). Both S3 keys also take
+`${storage}/...`. It publishes one tool, `generate_document` (`format`, `data`, optional
+`template`, `fileName`; `runId` and `agent`, which the schema must declare as optional
+strings, are set by the runtime on every call but a harness agent's), with `"call":
+"generate_document"` and `"arg": "data"`. A harness agent cannot use it: no run is set on
+its calls. Each file is saved with the run, so the build needs
+`orchestrator.files`. Template fields are `{{name}}`; a list repeats the table rows, DOCX
+paragraphs and PPTX slides that use `{{list.field}}`. The full shape is in
+`orchestrator/docs/WORKFLOW_REFERENCE.md` (`source: "docgen"`). When a brief needs generated
+files, use this tool rather than a Lambda you write.
+<!-- end Track B docgen -->
+
 So for a customer's own Lambda tool:
 
 ```json
@@ -210,8 +226,20 @@ contain underscores.
 
 `runtime` is `main` (in-process), `dedicated` (its own AgentCore Runtime), `a2a` (an agent you
 do not operate), `task` (a step with no model: `task: {"kind": "tool" | "code" | "extract" |
-"output", ...}`) or `harness` (an AgentCore Harness: `instructions`, optional `harness` settings,
+"output" | "deliver", ...}`) or `harness` (an AgentCore Harness: `instructions`, optional `harness` settings,
 or `harness.arn` for an existing one). Only `main` and `dedicated` get a folder.
+
+<!-- begin v139 Track C deliver -->
+A deliver step sends the files the run's steps saved (needs `orchestrator.files`):
+`"task": {"kind": "deliver", "targets": [...]}`, 1-10 targets, each `type` `s3` (`uri`
+`s3://<bucket>/<prefix>/` or `${storage}/<prefix>/`), `email` (`identityArn` of a verified SES
+identity, `fromAddress` at it, `to`: 1-50 addresses the author writes; optional `subject`, `body`,
+`attach`, `recipientsFrom` = one `{{outputs.<step>.<field>}}`, the only way a step's output adds
+recipients) or `webhook` (`url` https; optional `secret`: the NAME of a `deliverSecrets` build
+secret). Any target may narrow with `files` (name patterns), `producedBy` (earlier step ids) and
+`when` (`{"field": "outputs.<step>.<field>", "equals": ...}`, `branch.when`'s operators). To
+deliver only after a check or a person's approval, place the step after the gate or branch.
+<!-- end v139 Track C deliver -->
 
 Other agent keys an author uses:
 
@@ -283,6 +311,15 @@ Defined once, used by name:
 - `orchestrator.export`: send each run to Langfuse, Datadog, Grafana Cloud, Honeycomb or any OTLP backend
   (`destination`, `region`, `endpoint`, `secret` = the name of an `exportHeaders` build secret or an ARN, never
   the key; `send.content` off by default). Set it on the Builder's Settings → Export.
+<!-- begin Track E storage -->
+- `orchestrator.storage`: `{"create": true}` makes the deploy create the build's own private, versioned,
+  encrypted bucket, `<build name>-storage-<account>`; `"retain": true` keeps it (S3-managed keys) when the
+  build is destroyed, otherwise it is emptied and deleted. Tools name it with the token `${storage}`
+  (`s3://<the bucket>`), at the start of the value: a code tool's or interceptor's `code.grants.s3Prefix`
+  (`"${storage}/templates/"`), a `kb` tool's `s3Uri` (`"${storage}/kb/"`), a Document generator's
+  `templateS3Uri` and `outputPrefix`, and a deliver step's `s3` target `uri`, and nowhere else. Use it when
+  a tool needs S3 and no bucket was given. Set it on the Builder's Settings → Storage.
+<!-- end Track E storage -->
 - An entry that is `{"library": "<id>"}` is a shared item from the console's library: keep it
   as it is.
 
@@ -306,6 +343,21 @@ Three shapes, and a gate follows the shape it is attached to:
 - `parallel` and `sequence` stages **MUST** have `gateId` and `gateName`.
 - `hitl` may be an object: `{"mode": "always" | "threshold" | "auto", "when": [rules without goto],
   "approval": "console" | "event", "timeout": {"after": "24h", "action": "approve" | "deny"}}`.
+<!-- begin v139 Track D (decide) -->
+- `hitl.options` (2–6 labels, e.g. `["Override", "Abort"]`): the person chooses one instead of
+  approve / revise / deny; the choice is the run field `decision` that the step's own
+  `branch.when` routes on (`{"field": "decision", "equals": "Abort", "goto": "END"}`).
+  Single-agent and `sequence` steps only; not with `approval: "event"`.
+- `agents.<id>.askPerson.options` (2–6 labels): the agent may call `request_decision(question)`
+  mid-step; the run waits for a person's choice, which the model reads and which is the run
+  field `decision` for a branch on that agent's step.
+- With no choice made (a gate that approves itself, a `threshold` with no match) the branch takes
+  its `default`. "Deliver if the check passes, otherwise ask to override or abort" is
+  `"hitl": {"mode": "threshold", "when": [{"field": "passed", "equals": false}], "options":
+  ["Override", "Abort"]}` with `"branch": {"when": [{"field": "decision", "equals": "Abort",
+  "goto": "END"}], "default": "<deliver step>"}`. A deliver target's `when` cannot read `decision`.
+<!-- end v139 Track D (decide) -->
+
 - `branch.when` rules are tried in order, first match wins; operators are `equals`,
   `notEquals`, `in`, `contains`, `exists`, `gt`, `gte`, `lt`, `lte`. `goto` takes an agent
   id, a `gateId`, or `END`.

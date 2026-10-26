@@ -46,8 +46,12 @@ import { validateKbIngestion } from "./kb-ingestion";
 import { validateKbVectorStore } from "./kb-vector-store";
 import { validateKbConnector } from "./kb-data-source";
 import { taskStatements } from "./tasks";
+import { deliverSecretEnv, deliverStatements, validateDeliver } from "./deliver";
 import { harnessAgents } from "./harness";
 import { DEFAULT_DOCS_URL } from "./docs-default";
+// --- begin Track E storage ---
+import { addBuildStorage, resolveStorage, storageEnv, storageOf } from "./storage";
+// --- end Track E storage ---
 
 /** Regions where the managed AgentCore Web Search connector is available. */
 /**
@@ -312,7 +316,7 @@ export function validateTools(
             `(orchestrator/app/tools/<source>/). It is not a general ` +
             `"deploy any directory" option: each shipped function has an execution role ` +
             `written for it (read-only on the PUBLIC AWS price list; one Code Interpreter ` +
-            `sandbox; the AWS-managed AgentCore Browser), which is wrong for a connector that needs VPC config or a secret. To use a function of ` +
+            `sandbox; the AWS-managed AgentCore Browser; the Document generator's templates and outputs), which is wrong for a connector that needs VPC config or a secret. To use a function of ` +
             `your own, deploy it yourself and set "lambdaArn" instead — the framework then ` +
             `registers it as a Gateway target and touches neither its code nor its role.`
         );
@@ -1379,6 +1383,9 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   /** orchestrator.export's headers (a JSON object), by secret name, from $EXPORT_HEADERS.
    *  Never a context key. See lib/export.ts. */
   exportHeaders?: Record<string, string>;
+  /** v139 Track C deliver: a deliver step's webhook signing secrets, by name, from
+   *  $DELIVER_SECRETS. Never a context key. See lib/deliver.ts. */
+  deliverSecrets?: Record<string, string>;
   /**
    * Bearer tokens for `runtime: "a2a"` agents, keyed by the workflow.json agent id.
    * From $A2A_TOKENS, never a context key (cdk.json is committed). These are
@@ -1554,6 +1561,14 @@ export class OrchestratorStack extends cdk.Stack {
     const workflow =
       props.workflow ??
       JSON.parse(fs.readFileSync(path.join(ORCH_ROOT, "app", "workflow.json"), "utf8"));
+    // --- begin Track E storage ---
+    // orchestrator.storage (lib/storage.ts): the build's own bucket, null when not set. The
+    // ${storage} token is resolved only where it is read (storageWorkflow, for the tools,
+    // interceptors and deliver targets); a workflow that does not use it is the same object,
+    // untouched.
+    const storage = workflowPlane ? storageOf(workflow, agentName, cdk.Stack.of(this).account) : null;
+    const storageWorkflow = resolveStorage(workflow, storage);
+    // --- end Track E storage ---
     const agents: Record<string, any> = workflow.agents;
     // The deployment's default model: an explicit `-c modelId`, else this workflow's
     // `orchestrator.defaultModel`, else the framework default from app/defaults.json — in
@@ -2292,6 +2307,10 @@ export class OrchestratorStack extends cdk.Stack {
       if (assetsBucket && keepDays !== null) {
         assetsBucket.addLifecycleRule({ id: "expire-run-files", prefix: "runs/", expiration: cdk.Duration.days(keepDays) });
       }
+      // --- begin Track E storage ---
+      // The build's own bucket (orchestrator.storage, lib/storage.ts), only when set.
+      const storageBucket = storage ? addBuildStorage(this, storage, dataKey) : undefined;
+      // --- end Track E storage ---
       const featureEnv = {
         ...observabilityEnv,
         ...litellm.env,
@@ -2386,7 +2405,7 @@ export class OrchestratorStack extends cdk.Stack {
 
       // Every tool the agents may call is declared in workflow.json — the same
       // block Terraform reads. Validated before use so a typo fails at synth.
-      const inherited = inheritIdentities(workflow.tools ?? {}, workflow.identities ?? {},
+      const inherited = inheritIdentities(storageWorkflow.tools ?? {}, workflow.identities ?? {},
         props.identitySecrets ?? {}, props.toolApiKeys);
       const declaredTools: Record<string, ToolSpec> = validateTools(
         inherited.tools,
@@ -2420,8 +2439,15 @@ export class OrchestratorStack extends cdk.Stack {
             policyEnabled,
             policyMode,
             customPolicies: policyEnabled ? customPoliciesOf(workflow) : [],
-            interceptors: interceptorsOf(workflow, ORCH_ROOT),
+            interceptors: interceptorsOf(storageWorkflow, ORCH_ROOT),
             orchRoot: ORCH_ROOT,
+            // --- begin Track E storage ---
+            ...(storageBucket ? { storage: { bucketName: storage!.bucketName,
+              ...(storage!.retain ? {} : { keyArn: dataKey.keyArn }) } } : {}),
+            // --- end Track E storage ---
+            // Track B docgen: the run files, for the Document generator.
+            ...(assetsBucket && keepDays !== null
+              ? { runFiles: { bucketName: assetsBucket.bucketName, bucketArn: assetsBucket.bucketArn } } : {}),
           })
         : undefined;
 
@@ -2899,6 +2925,9 @@ export class OrchestratorStack extends cdk.Stack {
               // orchestrator.gatewayIdentity "perAgent": each in-process agent's own client.
               GATEWAY_AGENT_CLIENTS: agentClients,
               A2A_TOKENS: a2aTokenEnv(agents, props.a2aTokens),
+              // v139 Track C deliver: only when a webhook target signs (lib/deliver.ts).
+              ...(deliverSecretEnv(workflow, props.deliverSecrets ?? {})
+                ? { DELIVER_SECRETS: deliverSecretEnv(workflow, props.deliverSecrets ?? {}) } : {}),
             }, runtimeRole),
             A2A_ENDPOINTS: JSON.stringify(a2aEndpoints),
             // agent id -> harness ARN, only when a harness agent exists (harness.ts).
@@ -2906,6 +2935,9 @@ export class OrchestratorStack extends cdk.Stack {
             ...featureEnv,
             ...gatewayEnv,
             ...runExportEnv,
+            // --- begin Track E storage ---
+            ...storageEnv(storage),
+            // --- end Track E storage ---
           },
         },
       });
@@ -2921,6 +2953,12 @@ export class OrchestratorStack extends cdk.Stack {
       // Task steps (runtime "task"): the sandbox and Textract, only when a step uses them.
       // Mirrors aws_iam_role_policy.runtime_tasks in terraform/tasks.tf.
       taskStatements(workflow, this.region).forEach((s) => runtimeRole.addToPolicy(s));
+      // v139 Track C deliver: run files read, target prefixes put, SES identities send, only
+      // with a deliver step. Mirrors aws_iam_role_policy.runtime_deliver in terraform/deliver.tf.
+      // storageWorkflow: an s3 target's `${storage}/...` uri is granted on the build's bucket
+      // (the runtime resolves the same uri from STORAGE_BUCKET, app/common/storage.py).
+      validateDeliver(storageWorkflow, Boolean(assetsBucket), props.deliverSecrets ?? {});
+      if (assetsBucket) deliverStatements(storageWorkflow, assetsBucket.bucketArn).forEach((s) => runtimeRole.addToPolicy(s));
       // Harness agents: InvokeHarness on theirs only. Mirrors aws_iam_role_policy.runtime_harness.
       harnessPlane.invoke.forEach((s) => runtimeRole.addToPolicy(s));
       const orchestratorArn = orchestrator.getAtt("AgentRuntimeArn").toString();

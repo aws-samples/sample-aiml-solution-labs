@@ -64,6 +64,10 @@
     "gatewayIdentity": "shared",
     "files": {
       "retentionDays": 90
+    },
+    "storage": {
+      "create": false,
+      "retain": false
     }
   },
   "guardrail": {

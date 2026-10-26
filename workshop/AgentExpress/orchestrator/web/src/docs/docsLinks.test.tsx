@@ -243,7 +243,8 @@ describe("with a documentation URL", () => {
     await openAndCheck("policies.engine");
     await clickTab("Settings");
     await openAndCheck("tab.settings");
-    for (const f of ["settings.ui", "settings.orchestrator", "settings.authorization", "settings.export", "settings.network"] as const) {
+    for (const f of ["settings.ui", "settings.orchestrator", "settings.authorization", "settings.export", "settings.network",
+      "settings.storage"] as const) {
       await openAndCheck(f);
     }
     await clickTab("workflow.json");

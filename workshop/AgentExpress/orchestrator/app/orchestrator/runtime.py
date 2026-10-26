@@ -12,7 +12,8 @@ Invoke contract:
                             "subject_id": "..."(optional, scopes long-term memory)}
   {"action": "resume",      "session_id": "...", "decision": "approve"|"deny"|"revise",
                             "comment": "..."(feedback, used on revise),
-                            "decisions": {...}(per-agent map, parallel-group gates)}
+                            "decisions": {...}(per-agent map, parallel-group gates),
+                            "option": "..."(optional: a named option, v139 Track D)}
   {"action": "rerun_from",  "session_id": "...", "agent_id": "..."|"agents": [...],
                             "comment": "..."}
   {"action": "evaluate",    "session_id": "...", "agent_id": "...", "prompt": "..."(optional)}
@@ -404,7 +405,9 @@ async def invoke(payload, context=None):
         if not decisions and decision not in ("approve", "deny", "revise"):
             return {"error": "decision must be 'approve', 'deny' or 'revise'"}
         resume = {"decision": decision, "comment": payload.get("comment", ""),
-                  "decisions": decisions}
+                  "decisions": decisions,
+                  # v139 Track D: the named option a person chose (hitl.options / request_decision).
+                  **({"option": str(payload["option"])} if payload.get("option") else {})}
         _spawn(_run(session_id, resume=resume, user=payload.get("user", "")),
                session_id=session_id)
         return {"session_id": session_id, "status": "resuming"}

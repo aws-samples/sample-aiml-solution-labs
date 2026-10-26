@@ -105,3 +105,25 @@ python3 scripts/check_docs_links.py --target wiki --base-url https://wiki.exampl
 Exit `0`: every anchor found. `1`: an anchor or a page is missing (each is listed). `2`: it could not run
 (bad arguments, a base URL of the other target's shape, no guide directory, no Playwright, the popovers
 could not be read, or a page landed on a sign-in page).
+
+## `assistant_regression.py`: the AgentExpress Assistant against a deployed console
+
+Sends the Assistant on a deployed Control Plane console one prompt (or a short conversation) per check,
+each in a fresh build, waits for each reply, and asserts on the build's workflow.json and the reply. The
+checks: `parallel`, `tools`, `files`, `scope`, `no-request`, `versions`, `storage`, and `replay` (a whole
+brief: parallel document tools, a decision gate, a delivery step and created storage, built in the first
+reply). The builds are named `v139 regression <check>`, never deployed, and deleted afterwards unless
+`--keep`. Sign-in, redaction and the HTTP client are `e2e_smoke.py`'s (same `AX_ID_TOKEN`, or
+`--pool-id`/`--client-id`/`--username` with `AX_PASSWORD`).
+
+```bash
+export AX_ID_TOKEN='eyJ...'
+python3 scripts/assistant_regression.py --url https://dxxxx.cloudfront.net
+python3 scripts/assistant_regression.py --url https://dxxxx.cloudfront.net --only parallel,versions --keep
+python3 scripts/assistant_regression.py --url https://dxxxx.cloudfront.net --dry-run
+```
+
+`--timeout` is the wait per reply (default 900 s); `--review off|auto|always` sets Review changes for every
+message (default `auto`). It prints a Markdown table `| check | result | evidence |` with PASS, FAIL or
+NOT-TESTABLE (a console call failed). Exit `0`: no check failed. `1`: a check failed. `2`: it could not run.
+The model's answers vary, so a FAIL is worth one re-run before it is treated as a regression.

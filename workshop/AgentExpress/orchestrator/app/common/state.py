@@ -23,6 +23,9 @@ class State(TypedDict, total=False):
     feedback: Annotated[dict, merge_dict]    # agent_id -> reviewer feedback for a re-run
     group_rerun: Annotated[dict, merge_dict]  # group_id -> [agent ids to re-run this cycle]
     branch: Annotated[dict, merge_dict]      # branch step name -> step name chosen from the agent's output
+    # v139 Track D: gate key / agent id -> {"option", "comment"}, the named option a person
+    # chose (hitl.options, askPerson.options). Read by the branch node as the run field `decision`.
+    choices: Annotated[dict, merge_dict]
     history: Annotated[dict, merge_dict]     # agent_id -> [{version, at, comment, output}] per re-run
     # The live config version the run started with (app/common/liveconfig.py): set once, in
     # the initial state, and checkpointed with it, so a resume on any container uses it.

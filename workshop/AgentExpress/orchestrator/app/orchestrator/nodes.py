@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.errors import GraphBubbleUp
 from langgraph.types import interrupt
 
-from app.common import branching, clock, gates, grounding
+from app.common import asks, branching, clock, gates, grounding
 from app.common.base import Agent
 from app.common.config import AGENTS
 from app.common.context import AgentContext
@@ -239,7 +239,7 @@ def make_agent_node(agent: Agent):
                                     "log": f"{agent.name} complete (v{version})"})
         await _check_grounding(ctx, agent, state, out)
         return {"status": {agent.id: "done"}, "outputs": {agent.id: out},
-                "history": {agent.id: history}}
+                "history": {agent.id: history}, **asks.choice_update(ctx)}  # v139 Track D
 
     return node
 
@@ -266,7 +266,8 @@ def make_branch_node(branch_id: str, spec: dict, decider: str, bypassed):
         sid = config["configurable"]["thread_id"]
         if is_cancelled(sid):
             raise WorkflowCancelled(sid)
-        target, reason = branching.choose(spec, (state.get("outputs") or {}).get(decider, ""))
+        target, reason = branching.choose(spec, (state.get("outputs") or {}).get(decider, ""),
+                                          _decision_fields(state, branch_id, decider))
         where = target or "the next step"
         skipped = bypassed(target) if target else []
         note = f" · skipping {', '.join(skipped)}" if skipped else ""
@@ -277,6 +278,32 @@ def make_branch_node(branch_id: str, spec: dict, decider: str, bypassed):
         return {"branch": {branch_id: target}} if target else {}
 
     return branch
+
+
+# --- begin v139 Track D (decide): named options -------------------------------------------
+
+def _decision_fields(state: dict, step_name: str, decider: str) -> dict | None:
+    """The run field `decision` for a branch on this step: the option a person chose at the
+    step's gate (hitl.options, stored under the gate's node id), else the one its deciding
+    agent asked for mid-step (askPerson.options, under the agent's id). None when neither
+    chose one, so the branch reads the agent's output exactly as before."""
+    choices = state.get("choices") or {}
+    for c in (choices.get(f"{step_name}_gate"), choices.get(decider)):
+        if isinstance(c, dict) and c.get("option"):
+            return {gates.DECISION_FIELD: c["option"]}
+    return None
+
+
+def _gate_choice(spec: dict, gate_node: str, decision: str, resumed, comment: str) -> tuple[dict, str]:
+    """(state update, what the timeline calls the decision) for a gate. A gate with options
+    records the option chosen ("" for a self-approval or a timeout); any other gate records
+    nothing, so its update and its timeline line are what they always were."""
+    if not spec.get("options") or decision != "approve":
+        return {}, decision
+    option = gates.chosen(spec["options"], resumed)
+    return ({"choices": {gate_node: {"option": option, "comment": comment}}},
+            option or "approve (no option chosen)")
+# --- end v139 Track D (decide) -----------------------------------------------------------
 
 
 def _decision_of(resumed) -> tuple[str, str]:
@@ -339,15 +366,16 @@ def make_gate_node(agent_id: str, agent_name: str, hitl=True):
                                       {"node": agent_id, "question": question},
                                       f"Awaiting human review after {agent_id}")
         decision, comment = _decision_of(resumed)
+        chose, said = _gate_choice(spec, f"{agent_id}_gate", decision, resumed, comment)  # v139 Track D
 
         who = "Automatic" if isinstance(resumed, dict) and resumed.get("auto") else "Human"
         await emit(sid, {"type": "hitl_resolved", "node": agent_id,
-                         "log": _with_note(f"{who} decision ({agent_id}): {decision}", comment)})
+                         "log": _with_note(f"{who} decision ({agent_id}): {said}", comment)})
 
         if decision == "approve":
             await emit(sid, {"type": "node_status", "node": agent_id, "status": "done",
                              "log": f"{agent_id} approved; continuing"})
-            return {"decisions": {agent_id: "approve"}}
+            return {"decisions": {agent_id: "approve"}, **chose}
 
         if decision == "revise":
             # Loop back (router -> agent_id) to re-run the agent with this feedback.
@@ -385,9 +413,10 @@ def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str, hitl=T
                                       {"node": gate_id, "sequence": seq_ids, "question": question},
                                       f"Awaiting human review after {label}")
         decision, comment = _decision_of(resumed)
+        chose, said = _gate_choice(spec, f"{gate_id}_gate", decision, resumed, comment)  # v139 Track D
 
         await emit(sid, {"type": "hitl_resolved", "node": gate_id,
-                         "log": _with_note(f"{label} review: {decision}", comment)})
+                         "log": _with_note(f"{label} review: {said}", comment)})
 
         if decision == "revise":
             # Loop back to the first agent; the whole sequence re-runs. Feedback is
@@ -404,7 +433,7 @@ def make_sequence_gate_node(gate_id: str, seq_ids: list[str], label: str, hitl=T
                                  "log": f"{label} denied; halting workflow"})
             return {"decisions": {gate_id: "deny"}, "status": {a: "denied" for a in seq_ids}}
 
-        return {"decisions": {gate_id: "approve"}}
+        return {"decisions": {gate_id: "approve"}, **chose}
 
     return gate
 

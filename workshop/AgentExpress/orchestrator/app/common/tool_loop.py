@@ -209,6 +209,9 @@ async def gather(ctx, query: str, *, tools: list[str],
     if ask and asks.TOOL_NAME not in routes:
         specs.append(asks.tool_spec(ask))
         routes[asks.TOOL_NAME] = ("ask", None, None)
+    if ask and ask.get("options") and asks.DECIDE_TOOL not in routes:  # v139 Track D
+        specs.append(asks.decide_tool_spec(ask))
+        routes[asks.DECIDE_TOOL] = ("decide", None, None)
     journal = asks.journaling(ctx)
     opens = 0
     messages: list = [HumanMessage(content=_task(ctx, query))]
@@ -217,6 +220,8 @@ async def gather(ctx, query: str, *, tools: list[str],
                               for k in hidden]
     calls = 0
     budget = max(1, int(getattr(ctx, "max_tool_calls", 6) or 6))
+    called: set[str] = set()        # the bound tools (by key) that were called at least once
+    over: dict[str, str] = {}       # calls the model asked for past the limit: name -> arguments
     # Each question takes a model turn of its own, so it does not eat the tool budget.
     for _turn in range(budget + 1 + (ask["maxQuestions"] if ask else 0)):
         if is_cancelled(ctx.session_id):
@@ -270,12 +275,17 @@ async def gather(ctx, query: str, *, tools: list[str],
                 # A question for a person (asks.py): the run waits for the answer. Not a
                 # tool call, so not counted against maxToolCalls; capped on its own.
                 text = await asks.ask(ctx, args.get("question"))
+            elif route[0] == "decide":
+                # v139 Track D: a person chooses one of askPerson.options; capped with questions.
+                text = await asks.request_decision(ctx, args.get("question"))
             elif calls >= budget:
                 text = (f"Not called: this agent may make at most {budget} tool calls, and has. "
                         f"Answer with what you have.")
+                over.setdefault(name, json.dumps(args, ensure_ascii=False, default=str)[:300])
             else:
                 calls += 1
                 _kind, key, _tool = route
+                called.add(key)
                 shown = json.dumps(args, ensure_ascii=False, default=str)[:300]
                 # A tool with `approval` waits for a person, who sees the arguments the
                 # Gateway will be sent (the tool's fixed `args` win, as in invoke_chosen).
@@ -343,4 +353,15 @@ async def gather(ctx, query: str, *, tools: list[str],
         limitations.append("The model called none of this agent's tools for this request.")
     elif calls >= budget:
         await ctx.log(f"Tool calls: reached this agent's limit of {budget} (maxToolCalls).")
+        # Said as limitations, so the answer cannot report a result of a call that never
+        # ran: seen live, an agent out of calls before its publishing tool wrote "published
+        # successfully" with a made-up link.
+        limitations.extend(f"'{name}' was not called for {shown}: this agent reached its limit of {budget} "
+                           "tool calls (maxToolCalls), so there is no result from it. Do not report one."
+                           for name, shown in over.items())
+        bound = dict.fromkeys(k for kind, k, _t in routes.values() if kind in ("kb", "web", "gateway"))
+        limitations.extend(f"'{key}' was not called: this agent reached its limit of {budget} tool calls "
+                           "(maxToolCalls) first, so there is no result from it. Do not report one."
+                           for key in bound
+                           if key not in called and not any(n.startswith(f"{key}___") or n == key for n in over))
     return "\n\n".join(parts), limitations

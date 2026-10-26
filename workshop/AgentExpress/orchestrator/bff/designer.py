@@ -10,13 +10,14 @@ How a turn runs:
 * `start()` (POST /api/builds/{id}/design) stores the user's message and a pending
   reply, and hands the turn to a background invocation of this function (the model can
   take longer than API Gateway's 30 seconds). The page polls `conversation()`.
-* `run_turn()` asks the model, which changes the build only through two tools:
+* `run_turn()` asks the model, which changes the build only through three tools:
   `apply_changes` (targeted edits: set or update one agent, tool, block, or the steps;
-  an interceptor; an item imported from the organization's Agent Registry) and
-  `undo_last_change`. A third, `search_registry`, only reads the registry; a fourth,
-  `fetch_url`, reads a public web page the user linked (bff/webfetch.py). An edit is
-  applied to the LATEST draft, re-read at that moment, so a manual edit made while the
-  model was thinking is kept. The result is checked by validate_build — the Build
+  an interceptor; an item imported from the organization's Agent Registry),
+  `undo_last_change`, and `restore_version` (back to a named version such as "v1:
+  multi-agent draft"; each saved change makes one). Another, `search_registry`, only
+  reads the registry; and `fetch_url` reads a public web page the user linked
+  (bff/webfetch.py). An edit is applied to the LATEST draft, re-read at that moment,
+  so a manual edit made while the model was thinking is kept. The result is checked by validate_build — the Build
   view's own rules — and errors go back to the model to fix, up to MAX_FIX_ROUNDS. An
   error on a value only the user can give (an endpoint, an ARN, a key) is reported as
   "needs your input" instead, and the draft is saved with it: the deploy route refuses
@@ -30,6 +31,9 @@ How a turn runs:
 Stored next to the draft, private to the build's owner like the build itself:
     builds/<id>/design.json          the conversation, as the page shows it
     builds/<id>/design-rev/<n>.json  the draft as it was before change n (for undo)
+    builds/<id>/design-rev/v<n>.json named version vN ("v1: multi-agent draft"): the
+                                     draft as the change that made it left it; v0 is the
+                                     build before the first change. For "go back to v1"
 """
 
 from __future__ import annotations
@@ -190,6 +194,29 @@ def revision_key(build_id: str, n: int) -> str:
     return f"builds/{build_id}/design-rev/{int(n)}.json"
 
 
+def version_key(build_id: str, n: int) -> str:
+    """Named version vN: the draft as the change that made it left it."""
+    return f"builds/{build_id}/design-rev/v{int(n)}.json"
+
+
+#: What v0 is called: the build as it was before the Assistant's first saved change.
+V0_NAME = "before the Assistant's first change"
+VERSION_NAME_MAX = 60
+#: Versions the model is told about at once (and v0); the page lists them all.
+VERSIONS_IN_NOTES = 20
+
+
+def version_label(doc: dict, n) -> str:
+    """ "v1: multi-agent draft" for version n of this conversation, "" when unknown."""
+    if n is None:
+        return ""
+    n = int(n)
+    if n == 0:
+        return f"v0: {V0_NAME}" if doc.get("versions") else ""
+    v = next((x for x in doc.get("versions") or [] if int(x.get("v") or -1) == n), None)
+    return f"v{n}: {v.get('name')}" if v else ""
+
+
 # --- the system prompt: generated from the framework's own spec -----------------------
 
 def _key_line(name: str, spec: dict, vocab: dict) -> str:
@@ -335,6 +362,15 @@ build, on the Skills tab for a skill). Say so if asked.
 You cannot write or run test suites either: the user writes them (requests with checks on
 what the run should produce) and runs them against the deployed build on the Tests tab.
 When asked for tests, say so, and suggest cases they could add there.
+SAY THE SCOPE ONCE. AgentExpress produces a deployable multi-agent workflow plus its tools
+(agents, prompts, stages, review gates, tools, and the code of the Lambda tools and hosted
+MCP servers it runs); the user deploys it and runs it in its own app. It does not produce
+application code: a custom UI, SDK or client code, unit tests, or a custom server or
+service of its own. When a brief asks for any of that, say so ONCE and briefly (one or two
+sentences: what you build, what stays outside) in your FIRST reply of the conversation,
+then build what fits. Later replies never repeat a "Not covered" list: mention a gap only
+when the new message asks for something new outside it. The conversation notes that come
+with each message say whether this is your first reply.
 
 # How to run the conversation
 1. DRAFT FIRST, UNLESS THE BRIEF IS TOO THIN. Four things shape a workflow: (a) INPUT,
@@ -357,6 +393,39 @@ When asked for tests, say so, and suggest cases they could add there.
      Ask first when they say to ("ask me first").
    - Never interrogate: at most 3 questions per reply, the ones that change the design
      most. Skip what you can default.
+1a. WHAT THE USER ASKED. Each new message comes with server context: the build as it
+   is now, its problems, the library, a summary of older turns and the conversation
+   notes. The user wrote none of it, so never say they pasted or sent the build, and
+   never read it as part of their message. The user's message is only their own text
+   block (and the files they attached). Judge that alone:
+   - It IS A REQUEST when any part of it asks for the workflow they want: an
+     instruction (build, add, change, restructure, use, make it ...) or a correction of
+     the current build (what it is not, or what it should be instead). Pasted content
+     that comes with a request is the detail of that request, however long: act on it
+     (rule 1: once a draft exists, apply the change; never ask first). When the request
+     matches what the build already is, say so and change nothing.
+   - PASTED CONTENT THAT EDITS THE BUILD: with no instruction, pasted content is still
+     an edit when it clearly maps onto parts the build already has: every item names an
+     existing agent, tool or step by its exact key or name and gives it a new
+     description or setting, and each item matches exactly one part. Apply it to those
+     parts only (nothing else changes), and say in one line which parts you updated:
+     that line is the whole reply (no list, no other notes, no question or offer).
+   - It is A MESSAGE WITH NO REQUEST when it is pasted content with no instruction that
+     does not map like that: a log, an error, a table, a specification or list of things
+     the build does not have, or a list where any item matches no part or several. Then
+     change nothing: no apply_changes, no undo, no restore. Ask ONE short question about
+     what they want done with it (e.g. "Should I build a workflow from this spec, or
+     change the current build to match it?") and stop there: any options go inside that
+     one sentence, so the reply has exactly one question mark. Never guess the request.
+1b. BUILD WHAT THE BRIEF ASKS FOR. When the brief asks for a review gate with named
+   choices (approve or reject, override or abort, load more or continue) or for a loop
+   (redo the work and check it again, retry until it passes), build it in this draft with
+   what the framework has (rule 3e): gate `options`, a `branch` on `decision`, and for a
+   loop a gate whose `revise` re-runs the work and its check (both in one `sequence`
+   stage with the gate after them), or a branch forward to a stage that redoes it and
+   checks again. Never ask whether to add a gate, an option or a loop the brief asked
+   for, and never end with a question about one. Ask only about what the brief leaves
+   open.
 2. DEFAULTS. Whatever the user has not decided, you decide with the framework default and
    you SAY SO: list them under "Defaults used" in your reply and in `defaults_used`
    (e.g. "model: Claude Haiku 4.5 (orchestrator.defaultModel)", "temperature 0",
@@ -381,6 +450,73 @@ When asked for tests, say so, and suggest cases they could add there.
    - Auth: `auth` "apikey", "sigv4" (AWS-hosted, signed with the Gateway's role),
      "oauth2" (client credentials: `oauth` with clientId, scopes and tokenUrl or
      discoveryUrl — mcp and openapi only) or "none".
+3a. PARALLEL STAGES EXIST. A `parallel` stage runs its agents at the same time, then
+   joins. When the user says to run things in parallel (at the same time, concurrently,
+   side by side), give each its own agent and put those agents in ONE `parallel` stage.
+   Never say that steps cannot run in parallel. A parallel stage cannot branch and its
+   peers do not see each other's output: put the check, the gate or the branch on the
+   stage after it.
+3b. ONE TOOL PER LISTED TOOL. When the user lists N tools or capabilities (a parser, a
+   PDF generator, a deck generator, a checker...), create N tools, each with its own key,
+   description and schema, bound to the agents that use them. Never collapse them into
+   one catch-all tool (one function with a "mode" or "action" argument). If two must be
+   one (one API or one existing function serves both), say exactly why in your reply.
+   A capability the user lists as a tool is its own tool even when an agent's model could
+   do that work itself: `attachments: true` lets an agent read the run's files, but a
+   listed parser, extractor or checker still becomes a tool bound to that agent, which
+   passes it what it read. Count them before you reply: every tool the user listed has a
+   key in `tools`, or the reply says which one is missing and why.
+3c. FILE OUTPUTS. When the work must produce files: a PDF, PPTX or DOCX document is the
+   built-in Document generator, a tool {"type": "lambda", "source": "docgen", "formats":
+   [...], "templateS3Uri"?: ..., "outputPrefix"?: ...}, one per document the user names,
+   bound to the agent that fills it in with JSON data through its one tool,
+   generate_document ("call": "generate_document", "arg": "data", and that one tool in
+   `toolSchema` with a string `format`, an object `data`, and optional strings `runId` and
+   `agent`, which the workflow sets on every call so the file is saved with its run; never
+   on a harness agent). A template is a .pptx or .docx (or a folder of them); without
+   one, and for a PDF, it uses a simple built-in layout. It saves each file with its run,
+   so set orchestrator.files ({} is enough). An image is an agent with `output: "image"`.
+   Any other file (a CSV, a chart, a format docgen does not render) is a Lambda tool you
+   write (5b) with its libraries pinned in requirements.txt. Never tell the user the
+   framework has no rendering or file tool: use docgen or write the tool.
+3d. STORAGE. When a tool needs S3 (templates, generated files, delivered files, a code
+   tool's s3Prefix) and the user named no bucket, do not stop to ask for one: set
+   orchestrator.storage {"create": true} (the deploy creates a private, encrypted bucket
+   for this build) and point the paths at the "${storage}" token, e.g.
+   "${storage}/templates/report.docx" or "${storage}/outputs/". List it under "Defaults
+   used" and say they can name their own bucket instead, as a statement there: never a
+   question and never a `needs_input` item (a file they must upload, such as a template,
+   is one: say where, e.g. "${storage}/templates/"). Ask for a bucket only when the
+   user says their files are already in one.
+3e. DELIVERY AND DECISIONS. To send a run's files somewhere, add a delivery step: an
+   agent with runtime "task" and a task of kind "deliver" with its `targets`, e.g.
+   {"kind": "deliver", "targets": [{"type": "s3", "uri": "${storage}/delivered/"}]}
+   (also "email" through Amazon SES: identityArn, fromAddress, to; and "webhook": an
+   https url). It sends the files the run saved, so it also needs orchestrator.files.
+   Each target can take only some of those files: `files` (name patterns such as
+   ["*.pdf"]) and/or `producedBy` (the ids of the earlier steps that saved them). So
+   "send each document to its own destination" is ONE deliver step with one target per
+   destination, each filtered to its own files, e.g. [{"type": "s3", "uri":
+   "${storage}/delivered/<destination>/", "producedBy": ["<step id>"]}, ...]. When the
+   user names destinations but not how to reach them, give each one an s3 target under
+   the build's storage like that and list it under "Defaults used". Never say the
+   deliver step cannot route particular files to particular targets or filter by step
+   or file, and never ask whether to add routing the user already asked for.
+   Never ask whether to add a kind of target the user did not mention (an email when
+   they said S3).
+   "Deliver only if the check passed or a person approved" means the delivery stage comes
+   AFTER that branch or gate. Email recipients are what the user
+   configures, never the model's output. When a person must choose between named options
+   mid-run (override or abort, continue or load more), give that stage's gate options:
+   `hitl` {"options": ["Override", "Abort"]} (2 to 6 labels; on a single-agent or sequence
+   stage). The choice becomes the run field `decision`, and the same stage's `branch`
+   routes on it. With no choice made (the gate did not stop) the branch takes `default`,
+   so "deliver only if the check passes, otherwise ask to override or abort" is a threshold
+   gate on the failed check, `hitl` {"mode": "threshold", "when": [{"field": "<pass
+   field>", "equals": false}], "options": ["Override", "Abort"]}, with `branch` {"when":
+   [{"field": "decision", "equals": "Abort", "goto": "END"}], "default": "<the deliver
+   stage>"}: a pass or Override delivers, Abort ends. An agent that must ask for such a
+   choice while it works gets `askPerson` {"options": [...]}.
 4. SECRETS NEVER GO THROUGH THE CHAT. API keys, OAuth client secrets and bearer tokens
    are entered in a secure field the page shows, never typed to you. When a tool, a remote
    agent or a named identity (`identities`, by its name) needs one, list it in
@@ -438,10 +574,23 @@ When asked for tests, say so, and suggest cases they could add there.
    {denyPatterns: [regex], maxArgumentChars}, injectContext {arguments: {<arg>: session|
    agent|user}}, custom {}. response (after each answer): audit {}, redactPii {types:
    [email, phone, ssn, card], mask}, hideTools {tools}, capResult {maxChars}, custom {}.
-   The server writes the code from the templates checked; for "custom", fill in its
-   function afterwards with set_tool_code on interceptor-<point> (read the generated
-   handler.py in the build first, and keep the rest of it). A user's own deployed function
-   is `lambdaArn`. Interceptors need the build to have at least one tool.
+   The server writes the code from the templates checked. To make an interceptor do
+   something no other template does (mask a pattern, rewrite a value, refuse a call),
+   write its custom() function with set_interceptor_custom {point, code}: `code` is the
+   whole `def custom(...)` with the signature it has now (the server context shows each
+   interceptor's current custom() and the build's toolCode its whole handler.py). It
+   checks the custom template for you, in the same change, and keeps the rest of the
+   handler as generated; never ask the user to paste handler.py. A user's own deployed
+   function is `lambdaArn`. Interceptors need the build to have at least one tool.
+   A response interceptor sees EVERY MCP answer (initialize, tools/list, tools/call), and
+   only a tool's result is the tool's data. Mask, cut or rewrite only what a tools/call
+   answer returns in `result` (its content); never a JSON-RPC or MCP protocol field
+   (jsonrpc, id, method, protocolVersion, capabilities, serverInfo, tool names and
+   schemas in tools/list): a pattern that matches a date or version there breaks every
+   run. The generated response handler enforces this (its lambda_handler and
+   _keep_protocol keep those fields as sent), so never write a whole response handler
+   of your own: change only its step functions, and the server refuses code that drops
+   or alters those two.
 5e. THE ORGANIZATION'S AGENT REGISTRY. When the user asks for something "from the
    registry", or for a tool, agent or skill their organization may already have approved,
    call search_registry first, then add the one they mean with import_from_registry and
@@ -462,8 +611,15 @@ When asked for tests, say so, and suggest cases they could add there.
    call, then the steps, then the rest, so no single reply runs out of room. Make the
    smallest edit that does the job:
    `update_agent` to change a few fields, `set_agent` only for a new agent or a rewrite.
-   An agent or tool you do not touch keeps whatever the user set by hand. When the user
-   asks to undo your last change, call `undo_last_change`.
+   An agent or tool you do not touch keeps whatever the user set by hand.
+6a. VERSIONS. Every change you save is a named version (v1, v2, ...; v0 is the build
+   before your first change): give apply_changes a short `version_name` (2 to 5 words,
+   e.g. "multi-agent draft", "single agent"). The conversation notes list the versions,
+   the current one, and the one undo would put back. Before you undo or go back, say in
+   one line which version it restores ("This goes back to v1: multi-agent draft."), then
+   call `undo_last_change` (your last change) or `restore_version` (any listed version,
+   for "go back to v1"). When it is unclear which version the user means, list the
+   versions and ask which.
 7. After a change, reply briefly in Markdown: what you built or changed (a short list),
    "Defaults used", then any questions. When asked to explain the build, walk through the
    stages in order, name each agent's job and tools, and list what still needs input.
@@ -534,7 +690,8 @@ When asked for tests, say so, and suggest cases they could add there.
   files (up to 5), and its model receives them with its text. If the files live in S3,
   list the bucket or bucket/folder in `orchestrator.attachments.s3` so a request may
   name them as s3:// paths. Not on an a2a agent. Its model must read documents (Claude,
-  Amazon Nova).
+  Amazon Nova). It does not replace a tool the user listed to parse or check those files
+  (rule 3b): give the agent both.
 - `framework` (plain, strands, langgraph...) only changes how the agent's code is
   written; leave it at the default unless the user asks.
 - Use only the keys below, only where they apply. A key that does not apply is rejected.
@@ -585,6 +742,10 @@ _OPS_DOC = (
     "settings}) the server writes its code from them, as the Interceptors tab does; with "
     "`lambdaArn` it runs the user's own function instead. Code the user edited by hand is "
     "kept unless `regenerate` is true. `code` is its grants and limits (default {}).\n"
+    "- set_interceptor_custom {point, code}: write the custom() function of the generated "
+    "interceptor at `point` (it checks the custom template if it is not checked yet). `code` is "
+    "the whole `def custom(...)` function, with the signature shown for it now (standard library "
+    "only; json and re are imported); the rest of handler.py stays as generated.\n"
     "- remove_interceptor {point}: turn it off, and drop its code.\n"
     "- import_from_registry {recordId, registry?, key?, sync?}: add an approved record from "
     "the organization's AWS Agent Registry, found with `search_registry`: an MCP server "
@@ -608,6 +769,10 @@ TOOLS = {"tools": [
             "properties": {
                 "summary": {"type": "string",
                             "description": "One line, for the user: what this change does."},
+                "version_name": {"type": "string",
+                                 "description": "2 to 5 words naming the version this change "
+                                                "makes, e.g. \"multi-agent draft\"; it is listed "
+                                                "as vN: <name>."},
                 "ops": {"type": "array", "items": {"type": "object"}, "description": _OPS_DOC},
                 "defaults_used": {"type": "array", "items": {"type": "string"},
                                   "description": "Each default you chose for the user."},
@@ -636,8 +801,19 @@ TOOLS = {"tools": [
             "required": ["summary", "ops"]}}}},
     {"toolSpec": {
         "name": "undo_last_change",
-        "description": "Put the build back the way it was before your last applied change.",
+        "description": "Put the build back the way it was before your last applied change. "
+                       "The answer names the version it restored.",
         "inputSchema": {"json": {"type": "object", "properties": {}}}}},
+    {"toolSpec": {
+        "name": "restore_version",
+        "description": "Put the build back to one of its named versions (the conversation "
+                       "notes list them; v0 is the build before your first change). It is "
+                       "saved as a change, so undo_last_change takes it back.",
+        "inputSchema": {"json": {
+            "type": "object",
+            "properties": {"version": {"type": "integer",
+                                       "description": "The version number: 1 for v1."}},
+            "required": ["version"]}}}},
     {"toolSpec": {
         "name": "search_registry",
         "description": "Find what the organization approved in its AWS Agent Registry: MCP servers "
@@ -919,8 +1095,8 @@ def _set_interceptor(wf: dict, code: dict, op: dict) -> str:
         files = dict(code.get(key) or {})
         # The code was changed by hand when it is not what its templates generate: kept, as
         # the tab keeps it, until the user asks to generate it again.
-        edited = ("code" in cur and files.get("handler.py") is not None and files["handler.py"]
-                  != interceptor_code.files(point, cur.get("templates") or {}, wf)["handler.py"])
+        edited = ("code" in cur and files.get("handler.py") is not None
+                  and not interceptor_code.is_generated(point, cur.get("templates") or {}, files["handler.py"]))
         if edited and not op.get("regenerate"):
             note = (f"{key} handler.py was edited by hand, so it was kept: its templates are saved "
                     "but do not change it. Pass regenerate: true to write it again from them.")
@@ -928,6 +1104,38 @@ def _set_interceptor(wf: dict, code: dict, op: dict) -> str:
             code[key] = {**files, **interceptor_code.files(point, templates, wf)}
     ics[point] = ic
     _set_interceptors(wf, ics)
+    return note
+
+
+def _set_interceptor_custom(wf: dict, code: dict, op: dict) -> str:
+    """Write only the custom() function of a template-generated interceptor, checking the
+    custom template first when it is not. A response handler must still keep its protocol
+    guard (interceptor_code.guard_problem). A note for the model, else ""."""
+    import interceptor_code
+    point = str(op.get("point") or "")
+    if point not in interceptor_code.POINTS:
+        raise OpError("`point`: request or response")
+    key = f"interceptor-{point}"
+    cur = _interceptors(wf).get(point)
+    if isinstance(cur, dict) and cur.get("lambdaArn"):
+        raise OpError(f"the {point} interceptor runs the user's own function ({cur['lambdaArn']}): "
+                      "it has no generated custom() to write")
+    templates = (cur or {}).get("templates") if isinstance(cur, dict) else None
+    templates = dict(templates) if isinstance(templates, dict) else {}
+    note = ""
+    if not cur or "custom" not in templates:
+        note = _set_interceptor(wf, code, {"point": point, "templates": {**templates, "custom": {}}})
+        templates = {**templates, "custom": {}}
+    handler = str((code.get(key) or {}).get("handler.py") or "")
+    try:
+        new = interceptor_code.with_custom(handler, op.get("code"),
+                                           interceptor_code.files(point, templates, wf)["handler.py"])
+    except ValueError as e:
+        raise OpError(f"{key}: {e}") from None
+    why = interceptor_code.guard_problem(point, new, templates)
+    if why:
+        raise OpError(f"{key}: {why}")
+    code[key] = {**(code.get(key) or {}), "handler.py": new}
     return note
 
 
@@ -1061,6 +1269,17 @@ def apply_ops(project: dict, ops: list, attached=None) -> tuple[dict, dict]:
                         raise OpError(f"files[{name!r}] must be text")
                     else:
                         files[str(name)] = body
+                if key.startswith("interceptor-") and "handler.py" in given:
+                    # The Assistant fills in an interceptor's functions; it never replaces
+                    # the generated handler that keeps MCP protocol fields as sent.
+                    import interceptor_code
+                    point = key.removeprefix("interceptor-")
+                    templates = (_interceptors(wf).get(point) or {}).get("templates") or {}
+                    why = interceptor_code.guard_problem(point, str(files.get("handler.py") or ""), templates)
+                    if why:
+                        raise OpError(f"{key}: {why}. Write only its custom() function with "
+                                      "set_interceptor_custom, and keep the rest; or pass "
+                                      "set_interceptor regenerate: true to start again from the templates")
                 code[key] = files
                 touch("tools", key)
             elif kind == "set_steps":
@@ -1084,6 +1303,12 @@ def apply_ops(project: dict, ops: list, attached=None) -> tuple[dict, dict]:
                 if note:
                     changed.setdefault("notes", []).append(note)
                 touch("blocks", "orchestrator")
+            elif kind == "set_interceptor_custom":
+                note = _set_interceptor_custom(wf, code, op)
+                if note:
+                    changed.setdefault("notes", []).append(note)
+                touch("blocks", "orchestrator")
+                touch("tools", f"interceptor-{op.get('point')}")
             elif kind == "remove_interceptor":
                 point = str(op.get("point") or "")
                 ics = _interceptors(wf)
@@ -1278,11 +1503,59 @@ def _store(build_id: str, doc: dict) -> None:
                   ContentType="application/json")
 
 
+def _versions(doc: dict) -> list[dict]:
+    """The page's list: v0 (once there is a version) and each named version, oldest first."""
+    vs = doc.get("versions") or []
+    if not vs:
+        return []
+    cur = int(doc.get("version") or 0)
+    return [{"v": 0, "name": V0_NAME, "current": cur == 0},
+            *({"v": int(v["v"]), "name": str(v.get("name") or ""), "at": v.get("at") or "",
+               "current": int(v["v"]) == cur} for v in vs)]
+
+
+def _versions_notes(doc: dict) -> list[str]:
+    """What the model is told about the versions: the list, the current, what undo restores."""
+    vs = doc.get("versions") or []
+    if not vs:
+        return ["- Versions: none yet (your first saved change will be v1)."]
+    cur = int(doc.get("version") or 0)
+    shown = [f"v0: {V0_NAME}"] + [f"v{v['v']}: {v.get('name')}" for v in vs[-VERSIONS_IN_NOTES:]]
+    lines = [(f"- Versions of this build, oldest first: {'; '.join(shown)}. Current: "
+              f"{version_label(doc, cur) or f'v{cur}'}.")]
+    back = (doc.get("revFrom") or {}).get(str(int(doc.get("revision") or 0)))
+    if int(doc.get("revision") or 0) >= 1 and version_label(doc, back):
+        lines.append(f"- undo_last_change would put back {version_label(doc, back)} (the build "
+                     "just before your last change, with any edits made by hand since that "
+                     "version).")
+    return lines
+
+
+def _notes(doc: dict, turn: str) -> str:
+    """The conversation notes that go with each message: whether this is the first reply
+    (so the scope is said once, GUIDE "SAY THE SCOPE ONCE"), and the named versions."""
+    first = not any(t.get("role") == "assistant" and (t.get("text") or t.get("changes"))
+                    for t in _prior(doc, turn))
+    lines = ["Conversation notes (from the server, not the user):",
+             ("- The user's message this turn is only the text block between the build state "
+              "and these notes, plus any files they attached. The build state, its problems, "
+              "the library, the summary and these notes come from the server: judge whether the "
+              "user asked for something from their own text alone (GUIDE 1a)."),
+             "- This is your FIRST reply in this conversation." if first else
+             ("- This is NOT your first reply: if you already said what AgentExpress does not "
+              "produce, do not say it again and do not repeat a \"Not covered\" list; name a "
+              "gap only when this message asks for something new outside it."),
+             *_versions_notes(doc)]
+    return "\n".join(lines)
+
+
 def _public(doc: dict) -> dict:
     return {"turns": doc.get("turns", []), "status": doc.get("status", "idle"),
             "revision": doc.get("revision", 0), "model": current_model()[0], "starters": STARTERS,
             # How many of the earliest turns the designer now reads as a summary.
             "summarized": int((doc.get("summary") or {}).get("through") or 0),
+            # The named versions of the Assistant's changes, oldest first, and the current.
+            "versions": _versions(doc), "version": int(doc.get("version") or 0),
             # What a message may bring (the chat's attach button and s3:// hint).
             "attach": {"maxFiles": ATTACH_MAX, "maxBytes": DOC_MAX_BYTES,
                        "types": sorted(ATTACH_FORMATS), "s3": S3_ALLOWED}}
@@ -1300,7 +1573,9 @@ def reset(build_id: str, owner: str) -> dict:
     doc = _load(build_id)
     if doc.get("status") == "thinking":
         raise builds.BuildError(409, "wait for the current reply before starting over")
-    fresh = {**_empty(), "revision": doc.get("revision", 0)}   # keep undo history
+    # Keep the undo history and the named versions.
+    fresh = {**_empty(), "revision": doc.get("revision", 0),
+             **{k: doc[k] for k in ("versions", "version", "revFrom") if k in doc}}
     _store(build_id, fresh)
     return _public(fresh)
 
@@ -1671,13 +1946,27 @@ def _context(project: dict, who=None, build_owner: str = "") -> str:
             for k, e in ((project.get("workflow") or {}).get(m) or {}).items()
             if isinstance(e, dict) and isinstance(e.get("library"), str)}
     lines = [
-        ("The build as it is right now (the user may have changed it by hand since your "
-         "last reply — this is the truth):"),
+        # Server context, said so: in the same user message as the user's text, a model
+        # otherwise reads this JSON as something the user pasted, and a real request as
+        # "pasted content, no request" (GUIDE 1a).
+        ("From the server, not the user (the user did not write, paste or send any of this "
+         "context). The build as it is right now (the user may have changed it by hand since "
+         "your last reply — this is the truth):"),
         "```json", json.dumps(view, ensure_ascii=False, indent=1), "```",
         "Problems the Build view shows for it right now: "
         + (json.dumps([{"severity": i["severity"], "path": i["path"], "message": i["message"]}
                        for i in problems[:40]], ensure_ascii=False) if problems else "none"),
     ]
+    import interceptor_code
+    for point, ic in _interceptors(project.get("workflow") or {}).items():
+        if not isinstance(ic, dict) or ic.get("lambdaArn"):
+            continue
+        handler = str(((project.get("toolCode") or {}).get(f"interceptor-{point}") or {}).get("handler.py") or "")
+        fn = interceptor_code.custom_function(handler) if handler else None
+        lines.append(f"The {point} interceptor's custom() function as it is now (change it only with "
+                     "set_interceptor_custom; the rest of its handler.py is generated and stays): "
+                     + (f"\n```python\n{fn}```" if fn else
+                        "none yet (set_interceptor_custom checks the custom template and writes it)."))
     if used:
         shown = {f"{m}.{k}": (resolved.get(m) or {}).get(k) for m, k in used.values()}
         lines.append("The shared library items above, as they are now (the build keeps each as "
@@ -1695,6 +1984,8 @@ def _context(project: dict, who=None, build_owner: str = "") -> str:
     ids = _model_ids()
     if ids:
         lines.append("Models this account can use: " + ", ".join(ids))
+    lines.append("End of the server's context. The user's own message is the next text block, "
+                 "and only that block (with any files they attached).")
     return "\n".join(lines)
 
 
@@ -1887,7 +2178,9 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
                   ContentType="application/json")
     _save_draft(build_id, owner, email, new)
     doc["revision"] = revision
+    version, version_name = _new_version(build_id, doc, current, new, revision, args)
     record = {"summary": unescape(str(args.get("summary") or ""))[:300], "revision": revision,
+              "version": version, "versionName": version_name,
               "changed": changed,
               "defaultsUsed": [str(d)[:200] for d in _as_list(args.get("defaults_used")) if str(d).strip()][:30],
               "needsInput": [{"path": str(n.get("path"))[:120],
@@ -1895,6 +2188,7 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
               "secretsNeeded": _secrets_needed(_as_list(args.get("secrets_needed")), new["workflow"]),
               "problems": [{"path": e["path"], "message": e["message"]} for e in errors[:20]]}
     return {"status": "applied", "revision": revision,
+            "version": version_label(doc, version),
             # What THIS call changed, so the reply describes what was saved and not what
             # was meant. Observed live: a rejected call carried the writer's memory, the
             # resent one only the editor's vision, and the reply said both were done.
@@ -1906,6 +2200,29 @@ def _apply(build_id: str, owner: str, email: str, doc: dict, args: dict,
             "agents": sorted(new["workflow"].get("agents", {})),
             "stages": len(new["workflow"].get("steps", [])),
             "remaining_problems": record["problems"]}, record
+
+
+def _put_json(key: str, body: dict) -> None:
+    _b, s3, bucket = _clients()
+    s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(body, ensure_ascii=False).encode(),
+                  ContentType="application/json")
+
+
+def _new_version(build_id: str, doc: dict, before: dict, after: dict, revision: int,
+                 args: dict) -> tuple[int, str]:
+    """Name the draft a saved change made as the next version, vN, and keep its snapshot
+    beside the undo files. The first one also keeps v0, the build before it. (n, name)."""
+    versions = doc.setdefault("versions", [])
+    if not versions:
+        _put_json(version_key(build_id, 0), before)
+    n = max([int(v.get("v") or 0) for v in versions] + [0]) + 1
+    name = " ".join(unescape(str(args.get("version_name") or args.get("summary") or "")).split())
+    name = name[:VERSION_NAME_MAX] or f"change {revision}"
+    _put_json(version_key(build_id, n), after)
+    doc.setdefault("revFrom", {})[str(revision)] = int(doc.get("version") or 0)
+    versions.append({"v": n, "name": name, "at": buildstore.now()})
+    doc["version"] = n
+    return n, name
 
 
 def _undo(build_id: str, owner: str, email: str, doc: dict) -> tuple[dict, dict | None]:
@@ -1920,9 +2237,46 @@ def _undo(build_id: str, owner: str, email: str, doc: dict) -> tuple[dict, dict 
         return {"status": "error", "error": "that change can no longer be undone"}, None
     _save_draft(build_id, owner, email, before)
     doc["revision"] = revision - 1
-    return {"status": "undone", "revision": revision - 1}, {
-        "summary": "Undid the last change", "revision": revision - 1, "undo": True,
+    # Which version that is: the one the undone change was made from (older conversations
+    # kept no record of it, and say only that the change was undone).
+    back = (doc.get("revFrom") or {}).pop(str(revision), None)
+    restored = version_label(doc, back)
+    if restored:
+        doc["version"] = int(back)
+    return {"status": "undone", "revision": revision - 1,
+            **({"restored": restored} if restored else {})}, {
+        "summary": f"Undid the last change: back to {restored}" if restored else "Undid the last change",
+        "revision": revision - 1, "undo": True,
+        **({"version": int(back)} if restored else {}),
         "changed": {"agents": sorted((before.get("workflow") or {}).get("agents", {})),
+                    "tools": [], "steps": True, "blocks": [], "removed": []}}
+
+
+def _restore(build_id: str, owner: str, email: str, doc: dict, args: dict) -> tuple[dict, dict | None]:
+    """restore_version: put a named version back, saved as a change undo takes back."""
+    _b, s3, bucket = _clients()
+    raw = str((args or {}).get("version", "")).strip().lower().removeprefix("v")
+    known = [v["v"] for v in _versions(doc)]
+    if not raw.isdigit() or int(raw) not in known:
+        return {"status": "error", "error": "no such version"
+                + (f"; there are: {', '.join(version_label(doc, v) for v in known)}" if known
+                   else ": you have saved no change yet")}, None
+    n = int(raw)
+    try:
+        snap = json.loads(s3.get_object(Bucket=bucket, Key=version_key(build_id, n))["Body"].read())
+    except s3.exceptions.NoSuchKey:
+        return {"status": "error", "error": f"{version_label(doc, n)} can no longer be restored"}, None
+    builds, *_ = _clients()
+    current = builds._draft(build_id)
+    revision = int(doc.get("revision") or 0) + 1
+    _put_json(revision_key(build_id, revision), current)
+    _save_draft(build_id, owner, email, snap)
+    doc.setdefault("revFrom", {})[str(revision)] = int(doc.get("version") or 0)
+    doc["revision"], doc["version"] = revision, n
+    label = version_label(doc, n)
+    return {"status": "restored", "revision": revision, "restored": label}, {
+        "summary": f"Went back to {label}", "revision": revision, "undo": True, "version": n,
+        "changed": {"agents": sorted((snap.get("workflow") or {}).get("agents", {})),
                     "tools": [], "steps": True, "blocks": [], "removed": []}}
 
 
@@ -1931,6 +2285,25 @@ def _continue(event: dict) -> None:
     boto3.client("lambda", region_name=REGION).invoke(
         FunctionName=os.environ["AWS_LAMBDA_FUNCTION_NAME"], InvocationType="Event",
         Payload=json.dumps(event).encode())
+
+
+def _out_of_steps(changes: list[dict]) -> str:
+    """The reply's ending when the turn used every model call (MAX_CALLS) before the model
+    wrote its reply: what was saved, the defaults it used and what is still needed, from
+    the change records themselves, so a long first draft that landed is still described."""
+    saved = [c for c in changes if c.get("summary")]
+    if not saved:
+        return "I ran out of steps before I changed anything. Tell me what to do next."
+    lines = ["I ran out of steps before I could finish this reply. What I saved:"]
+    lines += [f"- {c['summary']}" + (f" ({c['versionName']})" if c.get("versionName") else "") for c in saved]
+    defaults = list(dict.fromkeys(d for c in saved for d in c.get("defaultsUsed") or []))
+    if defaults:
+        lines += ["", "Defaults used:", *[f"- {d}" for d in defaults]]
+    needs = list(dict.fromkeys(f"{n['path']}: {n['question']}" for c in saved for n in c.get("needsInput") or []))
+    if needs:
+        lines += ["", "Still needed from you:", *[f"- {n}" for n in needs]]
+    lines += ["", 'Say "continue" and I will finish what is left, or tell me what to change.']
+    return "\n".join(lines)
 
 
 def run_turn(event: dict) -> dict:
@@ -1976,6 +2349,7 @@ def run_turn(event: dict) -> dict:
                     "repeated):\n" + earlier}] if earlier else []),
         {"text": _context(builds._draft(build_id), owner, str(meta.get("owner") or ""))},
         {"text": user_text},
+        {"text": _notes(doc, turn)},
         # A continuation: this same turn ran out of one invocation's time. The draft above
         # already has what it applied, so say what that was and ask for the rest.
         *([{"text": "You are continuing YOUR OWN reply to the message above: the previous "
@@ -2103,6 +2477,8 @@ def run_turn(event: dict) -> dict:
                                             fix_rounds, user_turn.get("attachments"), review=rv)
                 elif use.get("name") == "undo_last_change":
                     result, record = _undo(build_id, owner, email, doc)
+                elif use.get("name") == "restore_version":
+                    result, record = _restore(build_id, owner, email, doc, use.get("input") or {})
                 elif use.get("name") == "search_registry":
                     live.phase("checking")
                     result, record = search_registry(use.get("input") or {}), None
@@ -2129,7 +2505,7 @@ def run_turn(event: dict) -> dict:
             messages.append({"role": "user", "content": results})
             live.phase("thinking")
         else:
-            note = "I made several changes but ran out of steps. Tell me what to do next."
+            note = _out_of_steps(changes)
         settle_review()
         text = live.text() or note
         if note and live.text():

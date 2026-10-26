@@ -29,6 +29,7 @@ import { checkKbIngestion } from "./kbIngestion";
 import { checkKbVectorStore } from "./kbVectorStore";
 import { checkKbDataSource } from "./kbDataSource";
 import { checkBrowserTool } from "./browserTool";
+import { checkDocgenTool } from "./docgenTool"; // Track B docgen
 import { checkTasks } from "./taskCheck";
 import { codeSourceProblems } from "./codeSource";
 import { checkHarness } from "./harnessCheck";
@@ -37,6 +38,9 @@ import { checkPromptCache } from "./promptCacheCheck";
 import { checkExport } from "./exportCheck";
 import { checkNetwork } from "./networkCheck";
 import { checkHostedMcp } from "./hostedMcpCheck";
+// --- begin Track E storage ---
+import { asChecked, checkStorage } from "./storageCheck";
+// --- end Track E storage ---
 import { stepAgents, stepName, type Entry, type StepSpec, type Workflow } from "./model";
 
 export type Where =
@@ -118,9 +122,12 @@ function checkCode(key: string, code: unknown, path: string, where: Where, add: 
   } else if ("table" in grants && FRAMEWORK_TABLE_RE.test(String(grants.table))) {
     add("error", where, `${p}.grants.table`, "is named like one of the framework's own tables, which no tool may reach");
   }
-  if ("s3Prefix" in grants && !str(grants.s3Prefix, S3_PREFIX_RE)) {
+  // --- begin Track E storage --- the ${storage} token stands for the build's bucket (storageCheck.ts).
+  const s3Prefix = asChecked(grants.s3Prefix);
+  // --- end Track E storage ---
+  if ("s3Prefix" in grants && !str(s3Prefix, S3_PREFIX_RE)) {
     add("error", where, `${p}.grants.s3Prefix`, "must be s3://<bucket>/ or s3://<bucket>/<prefix>/, ending in /");
-  } else if ("s3Prefix" in grants && FRAMEWORK_BUCKET_RE.test(String(grants.s3Prefix))) {
+  } else if ("s3Prefix" in grants && FRAMEWORK_BUCKET_RE.test(String(s3Prefix))) {
     add("error", where, `${p}.grants.s3Prefix`, "is one of the framework's own buckets, which no tool may reach");
   }
   const access = vocab("codeGrantAccess");
@@ -1107,7 +1114,7 @@ function checkEntry(name: BlockName, entry: unknown, path: string, where: Where,
 /** The branch grammar. Mirrors app/common/branching.validate_spec and the placement
  *  rules in graph_builder.validate_branches. */
 const AFTER_RE = /^([1-9][0-9]*)(m|h|d)$/;
-const GATE_KEYS = ["mode", "when", "approval", "timeout"];
+const GATE_KEYS = ["mode", "when", "approval", "timeout", "options"]; // options: v139 Track D
 
 /** steps[].hitl as an object: how its gate decides (app/common/gates.py). true and
  *  false need nothing. Mirrors _check_hitl in bff/validate_build.py. */
@@ -1175,6 +1182,74 @@ function checkHitl(step: Record<string, unknown>, i: number, add: Add): void {
   if (mode === "auto") add("warning", where, `${p}.mode`, "this gate approves itself: no one reviews this stage");
 }
 
+// --- begin v139 Track D (decide): named options ------------------------------------------
+
+/** A list of named options (vocabulary decisionOptions). Mirrors _check_option_list. */
+function checkOptionList(opts: unknown, where: Where, p: string, add: Add): void {
+  const lo = Number(vocabExtra<number>("decisionOptions", "minOptions") ?? 2);
+  const hi = Number(vocabExtra<number>("decisionOptions", "maxOptions") ?? 6);
+  const chars = Number(vocabExtra<number>("decisionOptions", "labelChars") ?? 60);
+  if (!Array.isArray(opts) || opts.length < lo || opts.length > hi
+      || !opts.every((o) => typeof o === "string" && o.trim() !== "")) {
+    add("error", where, p, `must be a list of ${lo} to ${hi} option labels, e.g. ["Override", "Abort"]`);
+    return;
+  }
+  (opts as string[]).forEach((o, k) => {
+    if (o.trim().length > chars) add("error", where, `${p}[${k}]`, `is at most ${chars} characters`);
+  });
+  if (new Set((opts as string[]).map((o) => o.trim().toLowerCase())).size !== opts.length) {
+    add("error", where, p, "the options must differ (ignoring case)");
+  }
+}
+
+const labels = (opts: unknown): string[] =>
+  Array.isArray(opts) ? opts.filter((o): o is string => typeof o === "string" && o.trim() !== "").map((o) => o.trim()) : [];
+
+/** steps[].hitl.options, and the branch rules that read the run field `decision`
+ *  (app/common/gates.py, nodes._decision_fields). Mirrors _check_decisions. */
+function checkDecisions(step: Record<string, unknown>, i: number, agents: Record<string, unknown>, add: Add): void {
+  const where: Where = { kind: "step", index: i };
+  const p = `steps[${i}].hitl.options`;
+  const h = step.hitl;
+  const gate = isObj(h) && "options" in h;
+  if (gate) {
+    checkOptionList(h.options, where, p, add);
+    if (step.parallel) {
+      add("error", where, p, "a parallel stage's gate decides each agent, and a parallel stage cannot "
+        + "branch: put named options on a single-agent or sequence stage");
+    }
+    if (h.approval === "event") {
+      add("error", where, p, 'named options are chosen on the run page; an event cannot choose one, '
+        + 'so they do not go with approval "event"');
+    }
+  }
+  const seq = step.sequence;
+  const decider = (step.agent as string | undefined) || (Array.isArray(seq) && seq.length ? seq[seq.length - 1] as string : undefined);
+  const agent = typeof decider === "string" && isObj(agents[decider]) ? agents[decider] as Record<string, unknown> : undefined;
+  const ask = agent?.askPerson;
+  const known = [...labels(gate ? (h as Record<string, unknown>).options : undefined), ...labels(isObj(ask) ? ask.options : undefined)];
+  if (!known.length) return;
+  const field = vocab("decisionOptions")[0] ?? "decision";
+  const b = step.branch;
+  const when = isObj(b) && Array.isArray(b.when) ? b.when as unknown[] : [];
+  const rules = when.map((rule, r) => [r, rule] as const)
+    .filter(([, rule]) => isObj(rule) && (rule as Record<string, unknown>).field === field) as [number, Record<string, unknown>][];
+  if (gate && !rules.length) {
+    add("warning", where, p, `no \`branch\` rule on this stage reads \`${field}\`, so every option continues to the next stage`);
+  }
+  const lower = new Set(known.map((k) => k.toLowerCase()));
+  for (const [r, rule] of rules) {
+    const vals = [...("equals" in rule ? [rule.equals] : []), ...(Array.isArray(rule.in) ? rule.in as unknown[] : [])];
+    for (const v of vals) {
+      if (typeof v === "string" && !lower.has(v.trim().toLowerCase())) {
+        add("warning", where, `steps[${i}].branch.when[${r}]`,
+          `\`${field}\` is one of: ${known.join(", ")}; "${v}" is not one, so this rule never matches`);
+      }
+    }
+  }
+}
+// --- end v139 Track D (decide) -----------------------------------------------------------
+
 /** `after` as a gate's timeout reads it: <n>m, <n>h or <n>d, at most 30 days. Mirrors _check_after. */
 function checkAfter(t: unknown, where: Where, p: string, add: Add): void {
   const m = typeof t === "string" ? AFTER_RE.exec(t) : null;
@@ -1199,6 +1274,8 @@ function checkAsks(agents: Record<string, unknown>, tools: Record<string, unknow
         const n = ask.maxQuestions;
         if (typeof n === "number" && Number.isInteger(n) && (n < 1 || n > 10)) add("error", where, `${path}.askPerson.maxQuestions`, "must be from 1 to 10");
         if ("timeout" in ask) checkAfter(ask.timeout, where, `${path}.askPerson.timeout`, add);
+        // v139 Track D (its type: the generic check)
+        if (Array.isArray(ask.options)) checkOptionList(ask.options, where, `${path}.askPerson.options`, add);
       }
     }
     if (variantOf("agent", a as Entry) === "dedicated") {
@@ -1325,6 +1402,9 @@ export function validate(wf: Workflow): Issue[] {
   checkPromptCache(wf.orchestrator, agents as Record<string, unknown>, add);
   checkExport(wf.orchestrator, add);
   checkNetwork(wf.orchestrator, agents as Record<string, unknown>, add, tools as Record<string, unknown>);
+  // --- begin Track E storage ---
+  checkStorage(wf as unknown as Record<string, unknown>, add);
+  // --- end Track E storage ---
   checkSignIn(wf.authorization, add);
   checkNamed(wf, add, out);
 
@@ -1364,7 +1444,8 @@ export function validate(wf: Workflow): Issue[] {
       if (typeof kbId === "string" && !KB_ID_RE.test(kbId)) {
         add("error", where, `${path}.knowledgeBaseId`, "must be a Knowledge Base id: 10 capital letters and digits");
       }
-      if (typeof s3Uri === "string" && !S3_LOCATION_RE.test(s3Uri)) {
+      // Track E storage: the ${storage} token stands for the build's bucket (storageCheck.ts).
+      if (typeof s3Uri === "string" && !S3_LOCATION_RE.test(String(asChecked(s3Uri)))) {
         add("error", where, `${path}.s3Uri`, "must be s3://<bucket> or s3://<bucket>/<prefix>/");
       }
       if (typeof kms === "string" && !KMS_KEY_ARN_RE.test(kms)) {
@@ -1525,6 +1606,10 @@ export function validate(wf: Workflow): Issue[] {
           + "Set `arg` to the property the agent's query goes into.");
       }
       checkBrowserTool(tool, path, where, add);
+      // --- begin Track B docgen
+      checkDocgenTool(tool, path, where, add, isObj(wf.orchestrator) && (wf.orchestrator as Record<string, unknown>).files !== undefined
+        && (wf.orchestrator as Record<string, unknown>).files !== null);
+      // --- end Track B docgen
     }
   }
   for (const t of ["kb", "websearch"]) {
@@ -1641,6 +1726,7 @@ export function validate(wf: Workflow): Issue[] {
     if (step.gateId && step.gateId in agents) add("error", where, `${path}.gateId`, `"${step.gateId}" is also an agent id — pick a different gate id`);
     checkBranch(steps, i, out);
     checkHitl(step as Record<string, unknown>, i, add);
+    checkDecisions(step as Record<string, unknown>, i, agents as Record<string, unknown>, add); // v139 Track D
     // graph_builder.rerun_plan cannot rewind across an ungated parallel stage.
     const prev = steps[i - 1];
     if (prev?.parallel && !prev.hitl && step.hitl) {

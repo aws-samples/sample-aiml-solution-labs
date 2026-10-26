@@ -42,7 +42,7 @@ describe("task steps", () => {
     expect(taskKindsOf(shipped)).toEqual([]);
     expect(taskKindsOf(withTasks({ ...CODE, ...EXTRACT }))).toEqual(["code", "extract"]);
     expect(() => validateTasks(withTasks({ x: { name: "X", runtime: "task", task: { kind: "lambda" } } })))
-      .toThrow(/task step\(s\) x: task\.kind must be one of tool, code, extract, output/);
+      .toThrow(/task step\(s\) x: task\.kind must be one of tool, code, extract, output, deliver/);
     expect(taskStatements(withTasks({ t: { name: "T", runtime: "task", task: { kind: "tool", tool: "kb" } } }), "us-east-1")).toEqual([]);
   });
   it("gives the shipped workflow nothing new", () => {

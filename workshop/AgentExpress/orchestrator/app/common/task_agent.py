@@ -2,7 +2,7 @@
 
 A task sits in `steps` like any agent (alone, in a parallel group or a sequence, gated or
 not, re-run from a gate), runs in the orchestrator's own runtime, and returns JSON that a
-later agent reads with ctx.input(<id>). It never calls a model. Four kinds:
+later agent reads with ctx.input(<id>). It never calls a model. Five kinds:
 
   tool     call one of the build's tools through the Gateway, with `arguments` built from
            the run (app/common/task_template.py). The Cedar policy, interceptors and a
@@ -19,6 +19,8 @@ later agent reads with ctx.input(<id>). It never calls a model. Four kinds:
            (https://docs.aws.amazon.com/textract/latest/dg/limits-document.html).
   output   write a csv, json, markdown or txt file from earlier outputs (needs
            orchestrator.files, which keeps it).
+  deliver  send the run's files to S3, by email (Amazon SES) or to a webhook
+           (app/common/deliver.py; needs orchestrator.files).
 
 The node wrapper (app/orchestrator/nodes.py) still emits the step's status, versions and
 timeline lines and applies a guardrail the step asks for; memory is never recalled or
@@ -50,7 +52,9 @@ FEATURES = vocabulary.values("taskExtractFeatures")
 #: A code step's `codeSource` (git or S3) is read by the deployer, which deploys the script
 #: as `code` in its place (deployer/code_fetch.py read_script, runner.materialise_code_sources).
 KEYS_OF = {"tool": ("kind", "tool", "arguments"), "code": ("kind", "language", "code", "codeSource"),
-           "extract": ("kind", "file", "features"), "output": ("kind", "format", "name", "from")}
+           "extract": ("kind", "file", "features"), "output": ("kind", "format", "name", "from"),
+           # v139 Track C deliver
+           "deliver": ("kind", "targets")}
 
 # --- code -------------------------------------------------------------------------------
 #: The AWS-managed interpreter every account has; the runtime role may use only this one.
@@ -149,6 +153,9 @@ def problem(agent_id: str, spec: dict, tools: dict) -> str:
         return f"agent {agent_id!r}: task.features may name {', '.join(FEATURES)}"
     if kind == "output" and task.get("format") not in FORMATS:
         return f"agent {agent_id!r}: an output step needs task.format, one of {', '.join(FORMATS)}"
+    if kind == "deliver":  # v139 Track C deliver
+        from app.common import deliver
+        return deliver.problem(agent_id, task)
     return ""
 
 
@@ -187,7 +194,7 @@ class TaskAgent(Agent):
         task = dict(self.task or {})
         kind = task.get("kind")
         runner = {"tool": _run_tool, "code": _run_code, "extract": _run_extract,
-                  "output": _run_output}.get(kind)
+                  "output": _run_output, "deliver": _run_deliver}.get(kind)
         if runner is None:
             raise TaskFailed(f"{self.id}: task.kind {kind!r} is not one of {', '.join(KINDS)}")
         result = await runner(self, ctx, task)
@@ -579,3 +586,12 @@ async def _run_output(agent: TaskAgent, ctx, task: dict) -> dict:
         raise TaskFailed(f"{agent.name}: {e}") from e
     return {"file": {"name": key.rsplit("/", 1)[-1], "key": key, "format": fmt,
                      "bytes": len(text.encode("utf-8"))}, "from": refs}
+
+
+# --- begin v139 Track C deliver -----------------------------------------------------------
+
+async def _run_deliver(agent: TaskAgent, ctx, task: dict) -> dict:
+    """Send the run's files to the task's targets (app/common/deliver.py)."""
+    from app.common import deliver
+    return await deliver.run(agent, ctx, task, _data(ctx))
+# --- end v139 Track C deliver -------------------------------------------------------------

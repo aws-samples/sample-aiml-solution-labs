@@ -53,6 +53,9 @@ const LABELS: Record<string, [string, StatusIndicatorProps.Type]> = {
   "run.completed": ["Run completed", "success"],
   "run.failed": ["Run failed", "error"],
   "run.denied": ["Run ended (denied)", "stopped"],
+  // v139 Track C deliver: what a deliver step sent (app/common/deliver.py).
+  "run.delivered": ["Files delivered", "success"],
+  "run.delivery_failed": ["Delivery failed", "error"],
   "run.decided": ["Gate decided", "success"],
   "run.answered": ["Question answered", "success"],
   "run.tool_decided": ["Tool call decided", "success"],

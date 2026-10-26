@@ -6,7 +6,7 @@ Would you rather say what you want than click through settings? Tell the AgentEx
 - It edits the same draft as the canvas. Everything here can also be done by hand under **Build manually**.
 - Each change is checked with the deploy's own rules, and the Assistant fixes what it broke before it replies.
 - It never invents an endpoint, ARN, bucket or ID. It asks under **Needs your input**, and **Deploy** waits for the answer.
-- To take a change back, click **Undo** in the build's header, or say "undo that".
+- To take a change back, click **Undo** in the build's header, or say "undo that". Each change it saves is a named version, and "go back to v1" returns to one.
 - How to start a chat and what the cards mean: [The AgentExpress Assistant](AgentExpress_Assistant.md).
 
 # Start a build
@@ -17,6 +17,7 @@ It drafts a whole workflow from a short brief, lists every default it chose unde
 - "Just build it with your defaults"
 - "Rename this build to Claims triage"
 - "Explain this build, and list what still needs my input"
+- "List the versions, then go back to v1"
 
 It cannot click a starting point, **Start over**, or make a new build: use the starting points under the message box, **Start over** in the Assistant panel, and **Project → New build**.
 
@@ -64,6 +65,7 @@ It orders the stages, groups agents to run in parallel or in sequence, and route
 - "Run the policy checker and the fraud checker in parallel after intake"
 - "If the decision is reject, skip the letter writer and end the run"
 - "Move the summary agent to the last stage"
+- "Generate the PDF report, the PPTX deck and the DOCX summary in parallel, then check them against the CSV"
 
 ## Review gates and approvals
 
@@ -73,15 +75,19 @@ It sets a review gate on a stage: always, only when rules match, or automatic. I
 - "If nobody answers the gate in 4 hours, deny it"
 - "Let the intake agent ask a person for a missing policy number"
 - "Require approval before the refunds tool is called"
+- "If the check fails, ask the operator to override or abort; Abort ends the run"
+- "Let the research agent ask a person to choose Load images or Continue"
 
 ## Steps that are not agents
 
-It adds steps that call a tool, run code (written in the build or kept in Git or S3), extract text with Textract, or write a file (CSV, JSON, Markdown or text).
+It adds steps that call a tool, run code (written in the build or kept in Git or S3), extract text with Textract, write a file (CSV, JSON, Markdown or text), or deliver the run's files to S3, by email with Amazon SES, or to a webhook.
 
 - "Add a step that writes the final report as a Markdown file"
 - "Add a step that extracts the text of the uploaded claim form with Textract"
+- "After the check, deliver the PDF and PPTX files to the build's storage under delivered/"
+- "Email the report files to team@example.com from reports@example.com with my SES identity for example.com"
 
-Approving, revising or denying a gate, and answering an agent's question, happen on the run page in the execution plane.
+Approving, revising or denying a gate, choosing a named option, and answering an agent's question, happen on the run page in the execution plane.
 
 See [Stages and steps](Stages_and_Steps.md) and [Human in the loop](Human_in_the_Loop.md).
 
@@ -155,6 +161,16 @@ It writes a tool's code (handler.py, requirements.txt, test events), takes code 
 - "Give the researcher a browser that may only visit our documentation domain"
 - "Add a code interpreter so the analyst can run Python on the data"
 - "Add the AWS pricing tool"
+
+## Document generator
+
+It adds a Document generator for PDF, PPTX and DOCX files, with its formats, a template file or folder, and an output folder. It turns on run files, which the tool needs. For any other file it writes a Lambda tool with pinned libraries.
+
+- "Add a Document generator that writes the report as a PDF and the deck as a PPTX"
+- "Use the templates in \${storage}/templates/ and also save each file under \${storage}/outputs/"
+- "Add three document tools, one each for the PDF report, the PPTX deck and the DOCX summary"
+
+**Test run with sample data** is in the tool's panel.
 
 ## Connectors
 
@@ -300,6 +316,16 @@ It cannot write or run test suites: use the **Tests** tab. To score one run on d
 
 See [Evaluations](Evaluations.md), [Test suites](Test_Suites.md) and [Refine and redeploy](Refine_and_Redeploy.md).
 
+# Build storage
+
+It turns on the build's own S3 bucket, keeps it when the build is destroyed, and points tools at it with `${storage}`. When a tool needs S3 and you named no bucket, it does this instead of stopping to ask, and lists it under **Defaults used**.
+
+- "Create storage for this build and keep the templates under \${storage}/templates/"
+- "Keep the build's storage when the build is destroyed"
+- "Use my bucket s3://&lt;bucket>/reports/ instead of the build's storage"
+
+Uploading files to the bucket is done in Amazon S3. See [Settings](Settings.md).
+
 # Observability export
 
 It sends every run to Langfuse, Datadog, Grafana Cloud, Honeycomb or an OTLP backend, with the region, endpoint, whether prompt and output text go too, or a secret ARN you already have. It also sets how far back Insights look.
@@ -381,12 +407,12 @@ The review only advises. Its notes go back to the Assistant once, and a failed o
 
 - **Deploy or redeploy**: **Deploy** on the Deployment panel.
 - **Destroy**: **Destroy** on the Deployment panel.
-- **Run, resume, re-run or cancel a run, or answer a gate**: the run page in the execution plane.
+- **Run, resume, re-run or cancel a run, answer a gate, or choose a named option**: the run page in the execution plane.
 - **Create, delete, import or export a build**: **Project → New build**, **Project → Delete this build**, **Project → Import a file…**, and the **Export** menu.
 - **Share a build or a run**: **Share** in the build's header, or **Share** on the run page.
 - **Teams**: **Project → Move to team…**, and the **Teams** page.
 - **Connect AWS accounts**: the **AWS accounts** page.
-- **Enter secret values**: the **Secrets** card, the tool's **How it connects**, the **Identity** tab, and the **Export** section of **Settings**. It only names them.
+- **Enter secret values**: the **Secrets** card, the tool's **How it connects**, the **Identity** tab, the **Export** section of **Settings**, and a Deliver files step's **Signing secret**. It only names them.
 - **Add a connector from the catalog**: **Add a connector** on the **Tools** tab.
 - **Upload knowledge base documents or an openapi.json**: the tool's panel.
 - **Check and run code, or test a deployed tool or interceptor**: the tool's panel, and the **Interceptors** tab.

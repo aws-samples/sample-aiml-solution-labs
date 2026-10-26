@@ -5,6 +5,7 @@
  *  shapes CreateHarness accepts. Mirrors bff/harness_check.py word for word (both run
  *  tests/fixtures/validation_cases.json). */
 import type { Issue, Where } from "./validate";
+import { DOCGEN_SOURCE } from "./docgenTool";
 
 type Add = (severity: Issue["severity"], where: Where, path: string, message: string) => void;
 type Obj = Record<string, unknown>;
@@ -162,6 +163,11 @@ export function checkHarness(agents: Record<string, unknown>, add: Add, wf: Obj 
       if (isObj(t) && PERSON_AUTH.includes(String(t.auth ?? "").toLowerCase())) {
         add("error", where, `${path}.tool`, `"${String(key)}" acts as the person who runs it, and a harness `
           + "calls the Gateway as this build's machine client — pick a tool that does not");
+      }
+      if (isObj(t) && t.source === DOCGEN_SOURCE) {
+        add("error", where, `${path}.tool`, `"${String(key)}" is the Document generator, which saves each file `
+          + "with the run the workflow sets on every call, and a harness calls the Gateway itself, "
+          + "so no run is set — bind it to an agent that is not a harness");
       }
       if (typeof key === "string" && `@gateway/${key}___*`.length > 64) {
         add("error", where, `${path}.tool`, `"${key}" is too long for a harness: at most 51 characters`);

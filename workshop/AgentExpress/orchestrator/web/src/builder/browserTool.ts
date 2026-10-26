@@ -8,6 +8,7 @@
 import { addTool, type Entry, type Project } from "./model";
 import type { Issue, Where } from "./validate";
 import type { FieldOverride } from "./EntryForm";
+import { DOCGEN_KEYS, DOCGEN_PRESET, DOCGEN_SOURCE } from "./docgenTool";
 type Add = (severity: Issue["severity"], where: Where, path: string, message: string) => void;
 
 export const BROWSER_TOOL = "open_page";
@@ -43,6 +44,9 @@ const PRESETS: Record<string, { label: string; detail: string; entry: Entry }> =
       }],
     },
   },
+  // --- begin Track B docgen
+  [DOCGEN_SOURCE]: DOCGEN_PRESET,
+  // --- end Track B docgen
 };
 
 /** The choices "Add a tool" lists after the tool types, by the value it passes back. */
@@ -69,6 +73,8 @@ export function builtinLabel(tool: Entry): string | undefined {
  *  tool, since nothing else reads it. */
 export function builtinOverrides(tool: Entry): Record<string, FieldOverride> {
   const hide: Record<string, FieldOverride> = tool.source === "browser" ? {} : { allowDomains: { hidden: true } };
+  // Track B docgen: the Document generator's settings, on it only.
+  if (tool.source !== DOCGEN_SOURCE) for (const k of DOCGEN_KEYS) hide[k] = { hidden: true };
   if (!builtinLabel(tool)) return hide;
   for (const k of ["lambdaArn", "source", "code", "toolSchema", "call", "arg", "args", "rowPath", "rowFields"]) hide[k] = { hidden: true };
   return hide;

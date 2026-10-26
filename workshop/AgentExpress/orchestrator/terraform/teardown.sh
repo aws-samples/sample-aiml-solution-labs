@@ -66,6 +66,17 @@ if [[ ! -f backend.hcl ]]; then
   echo "NOTE: backend.hcl not found — running ./bootstrap-state.sh first to wire the backend."
   ./bootstrap-state.sh
 fi
+# --- begin Track E storage ---
+# orchestrator.storage {create: true, retain: true}: the build's storage leaves the state
+# first, so the destroy keeps the bucket and its contents (storage.tf). Mirrors
+# keep_retained_storage in ../deployer/runner.py.
+if python3 -c 'import json, sys; o = json.load(open("../app/workflow.json")).get("orchestrator") or {}; s = o.get("storage") if isinstance(o.get("storage"), dict) else {}; sys.exit(0 if s.get("create") is True and s.get("retain") is True else 1)' 2>/dev/null; then
+  for a in $(terraform state list 2>/dev/null | grep -E '^aws_s3_bucket(_[a-z_]+)?\.storage(_tls)?\[0\]$' || true); do
+    echo "==> keeping ${a} (orchestrator.storage.retain)"
+    terraform state rm "$a" >/dev/null
+  done
+fi
+# --- end Track E storage ---
 echo "==> terraform destroy"
 terraform destroy -auto-approve
 

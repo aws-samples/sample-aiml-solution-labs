@@ -22,6 +22,7 @@ import { kbIngestion, type KbChunking, type KbParsing } from "./kb-ingestion";
 import { kbVectorStore, kbVectorStoreName, validateKbVectorStore, type KbVectorStore } from "./kb-vector-store";
 import { kbConnector, validateKbConnector, type KbConnector } from "./kb-data-source";
 import { BROWSER_SOURCE, browserToolFunction } from "./browser-tool";
+import { DOCGEN_SOURCE, docgenToolFunction, withDocgenArgs } from "./docgen-tool"; // Track B docgen
 import { HOSTED_MCP_METADATA, hostedMcpRuntime, type HostedMcp } from "./hosted-mcp";
 
 /** The tool types the framework knows how to provision. */
@@ -122,11 +123,19 @@ export const CODE_BOUNDARY_DENY = [
 export const CODE_GRANTABLE_TAG = "agentexpress:code-tools";
 const CODE_GRANTABLE = { StringEquals: { [`aws:ResourceTag/${CODE_GRANTABLE_TAG}`]: "true" } };
 
+/** The build's storage (lib/storage.ts), as a code tool's grant sees it: its bucket, and the
+ *  KMS key it is encrypted with (absent when it uses S3-managed keys). */
+export interface CodeStorage {
+  bucketName: string;
+  keyArn?: string;
+}
+
 /** The grants of a code tool, as IAM statements: logs on its own log group, then only
  *  what `grants` names. The same list is its inline policy AND its permissions boundary,
  *  so nothing attached to the role later can reach further. Mirrors
  *  local.code_tool_statements in terraform/tools.tf. */
-export function codeToolStatements(fnName: string, code: CodeSpec, region: string, account: string): any[] {
+export function codeToolStatements(fnName: string, code: CodeSpec, region: string, account: string,
+  storage?: CodeStorage): any[] {
   const g = code.grants ?? {};
   const out: any[] = [{
     sid: "OwnLogs", actions: ["logs:CreateLogStream", "logs:PutLogEvents"],
@@ -152,6 +161,14 @@ export function codeToolStatements(fnName: string, code: CodeSpec, region: strin
       resources: [`arn:aws:s3:::${bucket}/${prefix}*`], conditions: CODE_GRANTABLE });
     out.push({ sid: "ListItsPrefix", actions: ["s3:ListBucket"], resources: [`arn:aws:s3:::${bucket}`],
       conditions: { ...CODE_GRANTABLE, StringLike: { "s3:prefix": [`${prefix}*`] } } });
+    // The build's storage is encrypted with the build's key: reading needs kms:Decrypt and
+    // writing kms:GenerateDataKey (https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingKMSEncryption.html),
+    // on that key only and only through S3.
+    if (storage?.keyArn && bucket === storage.bucketName) {
+      out.push({ sid: "UseStorageKey",
+        actions: g.s3Access === "readwrite" ? ["kms:Decrypt", "kms:GenerateDataKey"] : ["kms:Decrypt"],
+        resources: [storage.keyArn], conditions: { StringEquals: { "kms:ViaService": `s3.${region}.amazonaws.com` } } });
+    }
   }
   if (g.vpc) {
     // What Lambda needs to attach the function to your subnets (AWSLambdaVPCAccessExecutionRole).
@@ -331,6 +348,14 @@ export interface ToolSpec {
   domains?: { include?: string[]; exclude?: string[] };
   /** source=browser: the domains the Browser tool may open, as its ALLOW_DOMAINS (browser-tool.ts). */
   allowDomains?: string[];
+  // --- begin Track B docgen
+  /** source=docgen: the formats the Document generator writes, as its FORMATS (docgen-tool.ts). */
+  formats?: string[];
+  /** source=docgen: one template object or a folder of them, the only S3 it may read. */
+  templateS3Uri?: string;
+  /** source=docgen: an S3 folder it also writes each file to. */
+  outputPrefix?: string;
+  // --- end Track B docgen
   /** type=websearch: pin the connector version, e.g. "1.2.0". */
   connectorVersion?: string;
   /** type=websearch: request-level published-date bounds (ISO-8601 UTC). */
@@ -417,6 +442,12 @@ export interface ToolPlaneProps {
    */
   statusTable?: dynamodb.ITable;
   telemetryTable?: dynamodb.ITable;
+  /** The build's storage (orchestrator.storage, lib/storage.ts), when it creates one: a code
+   *  tool granted a prefix in it also gets its KMS key. */
+  storage?: CodeStorage;
+  /** Track B docgen. The assets bucket, when the deployment keeps run files
+   *  (orchestrator.files): where the Document generator saves each file with its run. */
+  runFiles?: { bucketName: string; bucketArn: string };
 }
 
 /**
@@ -446,9 +477,12 @@ export class ToolPlane extends Construct {
   public readonly policyModeEnv: string;
   /** Empty when no tool declares type=kb. */
   public readonly knowledgeBaseId: string;
+  /** The build's storage, for the code functions' grants (ToolPlaneProps.storage). */
+  private readonly storage?: CodeStorage;
 
   constructor(scope: Construct, id: string, props: ToolPlaneProps) {
     super(scope, id);
+    this.storage = props.storage;
 
     const stack = cdk.Stack.of(this);
     const { region, account } = stack;
@@ -1191,6 +1225,13 @@ export class ToolPlane extends Construct {
             props.orchRoot, LOG_RETENTION).functionArn;
           continue;
         }
+        // --- begin Track B docgen: `source: "docgen"`, its own function and role (docgen-tool.ts).
+        if (spec.source === DOCGEN_SOURCE) {
+          this.builtinLambdaArns[name] = docgenToolFunction(this, name, spec, agentName, props.orchRoot,
+            LOG_RETENTION, props.runFiles).functionArn;
+          continue;
+        }
+        // --- end Track B docgen
         // `source: "codeInterpreter"` runs model-written code in the AWS-managed
         // sandbox, so it gets the narrowest role of any function here (below) rather
         // than the default one. Mirrors tool_lambda_code_interpreter in terraform/tools.tf.
@@ -1560,7 +1601,7 @@ export class ToolPlane extends Construct {
       sid: s.sid, effect: s.effect === "Deny" ? iam.Effect.DENY : iam.Effect.ALLOW,
       actions: s.actions, resources: s.resources, ...(s.conditions ? { conditions: s.conditions } : {}),
     });
-    const grants = codeToolStatements(fnName, code, region, account);
+    const grants = codeToolStatements(fnName, code, region, account, this.storage);
     const boundary = new iam.ManagedPolicy(this, `ToolCodeBoundary-${name}`, {
       managedPolicyName: `${fnName}-boundary`,
       description: `The most ${fnName} may ever do: its grants in workflow.json, and never the framework's own data.`,
@@ -1741,7 +1782,9 @@ export class ToolPlane extends Construct {
         return {
           lambda: {
             lambdaArn,
-            toolSchema: { inlinePayload: inlineTools(spec.toolSchema) },
+            // Track B docgen: the Document generator also gets the arguments the runtime
+            // sets that the config need not declare (docgen-tool.ts DOCGEN_PUBLISHED_ARGS).
+            toolSchema: { inlinePayload: inlineTools(spec.source === DOCGEN_SOURCE ? withDocgenArgs(spec.toolSchema) : spec.toolSchema) },
           },
         };
       }

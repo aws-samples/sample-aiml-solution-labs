@@ -60,7 +60,7 @@ export const FORM_LAYOUT: Partial<Record<BlockName, FormLayout>> = {
     ],
   },
   tool: {
-    main: ["type", "description", "corpora", "endpoint", "lambdaArn", "source", "allowDomains", "code", "schemaS3Uri", "schema",
+    main: ["type", "description", "corpora", "endpoint", "lambdaArn", "source", "allowDomains", "formats", "templateS3Uri", "outputPrefix", "code", "schemaS3Uri", "schema",
       "restApiId", "stage", "knowledgeBaseId", "s3Uri", "toolSchema"],
     advanced: [
       { title: "Calling", keys: ["call", "arg", "args", "rowPath", "rowFields", "toolFilters", "toolOverrides", "listingMode", "connectorVersion"], docs: "tool.calling" },

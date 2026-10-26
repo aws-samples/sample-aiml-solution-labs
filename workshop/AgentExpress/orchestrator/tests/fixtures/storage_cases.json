@@ -1,0 +1,540 @@
+{
+ "$comment": "Build storage cases (orchestrator.storage and the ${storage} token), run by both validators on the base of validation_cases.json: web/src/builder/storage.parity.test.ts and tests/test_storage.py. Regenerate expect with AX_WRITE_STORAGE_CASES=1 npx vitest run storage.parity",
+ "cases": [
+  {
+   "name": "storage created: a code tool, the kb tool and an interceptor reach it through the token",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "renderer"
+     ],
+     {
+      "type": "lambda",
+      "description": "Renders files, in code written here.",
+      "toolSchema": [
+       {
+        "name": "render",
+        "description": "Render a file.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What to render."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "s3Prefix": "${storage}/templates/",
+        "s3Access": "readwrite"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb"
+     ],
+     {
+      "type": "kb",
+      "description": "Bedrock Knowledge Base over kb_docs/, on S3 Vectors, via a Gateway Lambda target. Each top-level folder under kb_docs/ is a corpus (doc_type) an agent can be scoped to.",
+      "corpora": [
+       "reference"
+      ],
+      "maxResults": 5,
+      "policy": {
+       "tool": "retrieve",
+       "restrictTo": {
+        "filter": [
+         "reference"
+        ]
+       }
+      },
+      "s3Uri": "${storage}/kb/"
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "interceptors"
+     ],
+     {
+      "request": {
+       "code": {
+        "grants": {
+         "s3Prefix": "${storage}/"
+        }
+       }
+      }
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "storage created and kept: the whole bucket as a kb tool's documents",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true,
+      "retain": true
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb"
+     ],
+     {
+      "type": "kb",
+      "description": "Bedrock Knowledge Base over kb_docs/, on S3 Vectors, via a Gateway Lambda target. Each top-level folder under kb_docs/ is a corpus (doc_type) an agent can be scoped to.",
+      "corpora": [
+       "reference"
+      ],
+      "maxResults": 5,
+      "policy": {
+       "tool": "retrieve",
+       "restrictTo": {
+        "filter": [
+         "reference"
+        ]
+       }
+      },
+      "s3Uri": "${storage}"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "the token with no storage is refused",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "renderer"
+     ],
+     {
+      "type": "lambda",
+      "description": "Renders files, in code written here.",
+      "toolSchema": [
+       {
+        "name": "render",
+        "description": "Render a file.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What to render."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "s3Prefix": "${storage}/templates/",
+        "s3Access": "readwrite"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "renderer"
+     },
+     "path": "tools.renderer.code.grants.s3Prefix",
+     "message": "uses ${storage}, but this build creates no storage: set orchestrator.storage.create to true"
+    }
+   ]
+  },
+  {
+   "name": "the token with storage create false is refused",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": false
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb"
+     ],
+     {
+      "type": "kb",
+      "description": "Bedrock Knowledge Base over kb_docs/, on S3 Vectors, via a Gateway Lambda target. Each top-level folder under kb_docs/ is a corpus (doc_type) an agent can be scoped to.",
+      "corpora": [
+       "reference"
+      ],
+      "maxResults": 5,
+      "policy": {
+       "tool": "retrieve",
+       "restrictTo": {
+        "filter": [
+         "reference"
+        ]
+       }
+      },
+      "s3Uri": "${storage}/kb/"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.s3Uri",
+     "message": "uses ${storage}, but this build creates no storage: set orchestrator.storage.create to true"
+    }
+   ]
+  },
+  {
+   "name": "the token is read only in the fields that resolve it",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "renderer"
+     ],
+     {
+      "type": "lambda",
+      "description": "Writes to ${storage}/out/",
+      "toolSchema": [
+       {
+        "name": "render",
+        "description": "Render a file.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What to render."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "s3Prefix": "${storage}/templates/",
+        "s3Access": "readwrite"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "attachments"
+     ],
+     {
+      "s3": [
+       "${storage}/inputs"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.attachments.s3[0]",
+     "message": "must be a bucket, or bucket/folder, without s3:// — e.g. \"my-docs/contracts\""
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.attachments.s3",
+     "message": "no agent reads a run's files: set `attachments` on the agents that should"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "renderer"
+     },
+     "path": "tools.renderer.description",
+     "message": "${storage} is read only in: tools.*.code.grants.s3Prefix, tools.*.s3Uri, orchestrator.interceptors.*.code.grants.s3Prefix, tools.*.templateS3Uri, tools.*.outputPrefix, agents.*.task.targets.*.uri"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.attachments.s3[0]",
+     "message": "${storage} is read only in: tools.*.code.grants.s3Prefix, tools.*.s3Uri, orchestrator.interceptors.*.code.grants.s3Prefix, tools.*.templateS3Uri, tools.*.outputPrefix, agents.*.task.targets.*.uri"
+    }
+   ]
+  },
+  {
+   "name": "the token must start the value, once",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "renderer"
+     ],
+     {
+      "type": "lambda",
+      "description": "Renders files, in code written here.",
+      "toolSchema": [
+       {
+        "name": "render",
+        "description": "Render a file.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What to render."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "s3Prefix": "s3://amzn-s3-demo-bucket/${storage}/",
+        "s3Access": "readwrite"
+       }
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "kb"
+     ],
+     {
+      "type": "kb",
+      "description": "Bedrock Knowledge Base over kb_docs/, on S3 Vectors, via a Gateway Lambda target. Each top-level folder under kb_docs/ is a corpus (doc_type) an agent can be scoped to.",
+      "corpora": [
+       "reference"
+      ],
+      "maxResults": 5,
+      "policy": {
+       "tool": "retrieve",
+       "restrictTo": {
+        "filter": [
+         "reference"
+        ]
+       }
+      },
+      "s3Uri": "${storage}x/kb/"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "kb"
+     },
+     "path": "tools.kb.s3Uri",
+     "message": "must start with ${storage}/ (it stands for s3://<the build's bucket>), once"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "renderer"
+     },
+     "path": "tools.renderer.code.grants.s3Prefix",
+     "message": "must start with ${storage}/ (it stands for s3://<the build's bucket>), once"
+    }
+   ]
+  },
+  {
+   "name": "the token in place of the bucket still needs a prefix ending in /",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true
+     }
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "renderer"
+     ],
+     {
+      "type": "lambda",
+      "description": "Renders files, in code written here.",
+      "toolSchema": [
+       {
+        "name": "render",
+        "description": "Render a file.",
+        "properties": {
+         "query": {
+          "type": "string",
+          "required": true,
+          "description": "What to render."
+         }
+        }
+       }
+      ],
+      "code": {
+       "grants": {
+        "s3Prefix": "${storage}/templates",
+        "s3Access": "readwrite"
+       }
+      }
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "renderer"
+     },
+     "path": "tools.renderer.code.grants.s3Prefix",
+     "message": "must be s3://<bucket>/ or s3://<bucket>/<prefix>/, ending in /"
+    }
+   ]
+  },
+  {
+   "name": "retain without create keeps nothing",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "retain": true
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.storage.retain",
+     "message": "keeps nothing: the build creates no storage unless orchestrator.storage.create is true"
+    }
+   ]
+  },
+  {
+   "name": "storage takes create and retain, true or false",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": "yes",
+      "retain": 1,
+      "name": "mine"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.storage.create",
+     "message": "must be a boolean"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.storage.retain",
+     "message": "must be a boolean"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "block",
+      "name": "orchestrator"
+     },
+     "path": "orchestrator.storage.name",
+     "message": "unknown key; allowed: create, retain"
+    }
+   ]
+  }
+ ]
+}

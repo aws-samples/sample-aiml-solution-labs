@@ -24,6 +24,7 @@ import {
 import { issuesFor, upstreamIds, type Issue } from "./validate";
 import type { CodeSource } from "./codeSource";
 import { CodeSourceField } from "./CodeSourceField";
+import { DeliverTargets } from "./DeliverTargets";
 import { useDocsBase } from "../docs/docsLinks";
 import { infoSlot } from "../docs/InfoLink";
 
@@ -95,7 +96,7 @@ export function TaskPanel({ project, id, issues, onChange, onSelect, server }: {
   return (
     <SpaceBetween size="l">
       <Header variant="h2" description={`${taskLabel(kind)} — a step with no model, run in this deployment`}
-        info={infoSlot(docs, "task")}
+        info={kind === "deliver" ? infoSlot(docs, "task.deliver") : infoSlot(docs, "task")}
         actions={
           <SpaceBetween direction="horizontal" size="xs">
             {stage >= 0 ? <Button onClick={() => setWf(unplace(wf, id))}>Remove from canvas</Button> : null}
@@ -215,6 +216,23 @@ export function TaskPanel({ project, id, issues, onChange, onSelect, server }: {
           {!(files && typeof files === "object") ? (
             <Alert type="warning" action={<Button onClick={() => setWf({ ...wf, orchestrator: { ...((wf.orchestrator ?? {}) as Entry), files: {} } })}>Keep run files</Button>}>
               The file is kept with the run only when the build keeps run files (orchestrator.files).
+            </Alert>
+          ) : null}
+        </SpaceBetween>
+      ) : null}
+
+      {/* v139 Track C deliver */}
+      {kind === "deliver" ? (
+        <SpaceBetween size="m">
+          <Box variant="small" color="text-body-secondary">
+            Sends the files this run's steps saved. Every delivery, skip and failure is on the run's timeline and in the activity log. {help}
+          </Box>
+          <DeliverTargets targets={(Array.isArray(task.targets) ? task.targets : []) as Entry[]} before={before}
+            errorAt={errorAt} buildId={server ? project.id : undefined}
+            onChange={(targets) => setTask({ targets: targets as unknown as Json })} />
+          {!(files && typeof files === "object") ? (
+            <Alert type="warning" action={<Button onClick={() => setWf({ ...wf, orchestrator: { ...((wf.orchestrator ?? {}) as Entry), files: {} } })}>Keep run files</Button>}>
+              A deliver step sends the files the run keeps, so the build must keep run files (orchestrator.files).
             </Alert>
           ) : null}
         </SpaceBetween>

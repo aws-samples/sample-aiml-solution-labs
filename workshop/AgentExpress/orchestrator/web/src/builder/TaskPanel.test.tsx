@@ -58,7 +58,7 @@ describe("task steps", () => {
     await act(async () => { fireEvent.keyDown(item, { key: "Enter" }); });
     expect(screen.getAllByText("Task · step").length).toBeGreaterThan(0);
     // No kind yet: the panel says so, and there is no script to edit.
-    expect(screen.getAllByText(/say what this step does: one of tool, code, extract, output/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/say what this step does: one of tool, code, extract, output, deliver/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("textbox", { name: "Script" })).toBeNull();
     const field = createWrapper(document.body).findAllFormFields()
       .find((f) => f.findLabel()?.getElement().textContent === "What it does")!;
@@ -80,7 +80,7 @@ describe("task steps", () => {
     r.project.workflow.steps.push({ agent: r.id });
     expect(r.project.workflow.agents[r.id]).toMatchObject({ name: "New step", runtime: "task", task: {} });
     expect(errorsOf(r.project, r.id).map((i) => i.message))
-      .toEqual(["say what this step does: one of tool, code, extract, output"]);
+      .toEqual(["say what this step does: one of tool, code, extract, output, deliver"]);
   });
 
   it("edits the task block, switches kind, and offers what an output step needs", async () => {

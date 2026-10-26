@@ -424,3 +424,15 @@ variable "export_headers" {
   default     = {}
   sensitive   = true
 }
+
+# --- begin v139 Track C deliver ---
+# A deliver step's webhook signing secrets, keyed by the name a webhook target's `secret`
+# gives: the Builder's deliverSecrets build secrets. Never in workflow.json:
+#   export TF_VAR_deliver_secrets='{"hook":"..."}'
+variable "deliver_secrets" {
+  description = "Map of secret name -> webhook signing secret, for workflow.json deliver targets whose `secret` names one (deliver.tf). Mirrors CDK DELIVER_SECRETS."
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+}
+# --- end v139 Track C deliver ---

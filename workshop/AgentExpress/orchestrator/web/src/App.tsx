@@ -403,11 +403,12 @@ export default function App() {
     }
   }
 
-  async function decide(d: Decision, comment: string) {
+  async function decide(d: Decision, comment: string, option?: string) {
     if (!openRun) return;
     try {
-      await api.post(`/api/sessions/${openRun}/decision`, { decision: d, comment });
-      notify("success", `Recorded: ${d}.`);
+      // v139 Track D: a named option is sent as {option, comment} (bff/asks.py).
+      await api.post(`/api/sessions/${openRun}/decision`, option ? { option, comment } : { decision: d, comment });
+      notify("success", `Recorded: ${option ?? d}.`);
     } catch (e) {
       fail(e, "Could not submit the decision");
     }

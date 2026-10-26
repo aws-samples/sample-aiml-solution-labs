@@ -320,6 +320,11 @@ INVENTORY = {
         "addresses only), every redirect re-checked (at most 5), no proxy or cookie handler, "
         "no credential sent, a wall-clock watchdog shutting its sockets at TIMEOUT_S. "
         "tests/test_webfetch.py.",
+    # v139 Track C deliver
+    ("app/common/deliver.py", "send_webhook"):
+        "netguard.urlopen: a deliver step's webhook target (workflow.json task.targets[].url, "
+        "https-checked by the validators and by check_url before the POST); carries the run's "
+        "file links, signed with a deliverSecrets secret when one is named.",
     ("bff/litellm_models.py", "_fetch"):
         "netguard.urlopen: the LiteLLM proxy's /v1/models (deployment config LITELLM_BASE_URL); "
         "carries the virtual key.",

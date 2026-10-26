@@ -82,6 +82,7 @@ A failed or interrupted deploy or destroy can leave resources the state no longe
 - It only reports. It deletes nothing.
 - Exit code `10` means something was found; `1` means it could not look.
 - It sees only taggable resource types, and a resource deleted moments ago can be listed for a few minutes. The stack's KMS key waits 7 days for deletion and is listed apart.
+- A build's storage kept with **Keep it when the build is destroyed** stays on purpose. Delete it, or import it, before you deploy the same build again. See [Settings](Settings.md#create-storage-for-the-build).
 
 `teardown.sh` runs it for you. Run it yourself after `cdk destroy`. For a build deployed from the control plane, the agent name is the build's `ax_` id shown on the Deployment panel.
 

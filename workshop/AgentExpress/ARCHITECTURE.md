@@ -101,7 +101,12 @@ The branch on `intake` can end the run or skip to the A2A step. Both IaC paths (
 | `{"sequence": [...]}` | chain, one gate after the last | the first agent |
 
 - Gates (`app/orchestrator/nodes.py`) always call `interrupt()`. `approve` continues,
-  `revise` stores the comment as feedback and loops, `deny` ends the run.
+  `revise` stores the comment as feedback and loops, `deny` ends the run. A gate with
+  `hitl.options` (`app/common/gates.py`) takes one of its named options instead, recorded with
+  its comment in the `choices` state channel under `<step>_gate`; an agent with
+  `askPerson.options` records the option it requested (`request_decision`, `app/common/asks.py`)
+  there too. The branch node reads it as the run field `decision`, gate choice first, and with no
+  choice reads the output as before, so a gate without options is unchanged.
 - `branch` (`app/common/branching.py`) adds a node that evaluates rules over a dot path
   into the agent's output JSON, records the target in the `branch` state channel (which
   the router only reads) and marks bypassed agents `skipped`. Targets are later steps or
@@ -125,7 +130,7 @@ gated parallel step by seeding its gate to `revise` with that subset.
 | `main` (default) | in the orchestrator runtime | LangGraph node |
 | `dedicated` | its own AgentCore Runtime, same image, `AGENT_ID` picks the agent (`app/subagent_runtime.py`) | `AgentCoreRuntimeAgent` → `InvokeAgentRuntime`, trace context propagated |
 | `a2a` | an agent you do not operate | `app/common/a2a_agent.py`: Agent Card at `/.well-known/agent-card.json`, JSON-RPC `message/send`, `tasks/get` polling |
-| `task` | in the orchestrator runtime, no model | `app/common/task_agent.py`: a Gateway tool call, a Code Interpreter script, Textract, or an output file |
+| `task` | in the orchestrator runtime, no model | `app/common/task_agent.py`: a Gateway tool call, a Code Interpreter script, Textract, an output file, or a delivery of the run's files (`app/common/deliver.py`: S3 `CopyObject`, SES v2 `SendEmail`, an HTTPS POST through `netguard`) |
 | `harness` | an AgentCore Harness the deploy creates, or yours by `harness.arn` | `app/common/harness_agent.py` → `InvokeHarness` (no trace header is passed: ADOT rewrites it after signing) |
 
 Each dedicated agent gets its own execution role, derived from its `agentcore` block. Every
@@ -181,7 +186,7 @@ what an agent's `tool` names.
 | `mcp` | remote MCP server over Streamable HTTP (sample: AWS Knowledge MCP Server), or a hosted one (`hosted`) on its own AgentCore Runtime |
 | `openapi` | REST API from an OpenAPI schema in S3 (`schemaS3Uri`, or `source` under `app/tools/`) |
 | `apigateway` | an API Gateway REST API stage in the same account and region |
-| `lambda` | your function (`lambdaArn`), code written in the build (`code`), or a shipped `source`: `pricing`, `codeInterpreter` (AgentCore Code Interpreter), `browser` (AgentCore Browser) |
+| `lambda` | your function (`lambdaArn`), code written in the build (`code`), or a shipped `source`: `pricing`, `codeInterpreter` (AgentCore Code Interpreter), `browser` (AgentCore Browser), `docgen` (the Document generator, `app/tools/docgen/`: PDF, PPTX and DOCX from JSON data and an optional S3 template; `client._invoke` sets `runId` and `agent` on each call, so the file is saved with the run) |
 | `smithy` | an AWS service API from its Smithy model, signed by the Gateway role with exactly the tool's `allow` |
 
 - `toolMode: "direct"` (default) queries every bound tool once before the model reasons.
@@ -307,7 +312,7 @@ groups do not permit are withheld. Configured by `orchestrator.chatbot`.
 **AgentExpress Assistant** (`bff/designer.py`, `web/src/builder/DesignChat.tsx`): the
 Builder's designer. `POST /api/builds/{id}/design` stores the message and hands the turn
 to a background self-invocation; the page polls. The model changes the latest draft only
-through `apply_changes` and `undo_last_change`, each result checked by
+through `apply_changes`, `undo_last_change` and `restore_version`, each result checked by
 `bff/validate_build.py`, with the build's library items resolved as the deploy resolves them,
 and up to 3 fix rounds. Its context lists the caller's library (`library.list_items`), so it
 reuses an item by id rather than writing a new one, and never edits one the build uses. Its edits reach what the tabs reach:
@@ -322,6 +327,18 @@ the conversation file the page polls: the text as it is written, each edit of a 
 is written ("Adding agent x"), and the canvas reloads as each change is saved. A turn that
 passes 180 s in one invocation carries on in a fresh one (up to 3 more) from the saved
 draft instead of stopping. It has no deploy or publish tool.
+
+- **Versions:** each saved change is a named version (`apply_changes` `version_name`; v0 is the
+  draft before the first change). `design.json` keeps `versions` `[{v, name, at}]`, the current
+  `version` and `revFrom` (the version each change was made from), and each version's draft is
+  `design-rev/v<n>.json` beside the undo files. `restore_version` puts one back as a new change, so
+  undo takes it back. `GET /api/builds/{id}/design` returns the list for the page's **Versions** card.
+- **Conversation notes:** each message reaches the model with a short notes block: whether this is
+  its first reply (so it states what AgentExpress does not build once), the versions, the current
+  one and what an undo would put back. Its guide also covers parallel stages, one tool per listed
+  tool, the Document generator for files, `orchestrator.storage` instead of asking for a bucket,
+  deliver steps and named gate options, and asking one question when a message holds no request.
+  `scripts/assistant_regression.py` checks these against a deployed console.
 
 - **`fetch_url`** (`bff/webfetch.py`): reads a public page a message links, with the
   `bff/netguard.py` address rules (widened to `http://`) on the connection and every redirect,
@@ -365,9 +382,10 @@ ship in `bff/botocore_data/` as a fallback search path.
 **Activity log.** Three best-effort writers share one item layout
 (`bff/buildstore.audit_items`) in the table named by `AUDIT_TABLE`: the BFF
 (`bff/audit.py`) writes request events (run start, decisions, cancels, re-runs, deletes,
-sign-outs, build, library, sharing, account and policy changes); the runtime writes
-`run.completed`, `run.failed` and `run.denied` (`app/common/audit.py`, called from
-`app/common/sink.py`); the Cognito post-auth trigger (`signup_lambda/`) writes sign-ins.
+sign-outs, build, library, sharing, account and policy changes; `run.decided` carries a named
+option when one was chosen); the runtime writes `run.completed`, `run.failed` and `run.denied`
+(`app/common/audit.py`, called from `app/common/sink.py`), and `run.delivered` and
+`run.delivery_failed` for each target of a deliver step (`audit.run_event`); the Cognito post-auth trigger (`signup_lambda/`) writes sign-ins.
 A user reads their own log; everyone's needs `audit`.
 
 ## 8. Data stores
@@ -398,14 +416,19 @@ Table names are `<agentName>_<suffix>`; a build's `agentName` is `ax_` + 8 hex.
 | `TEAMS` / `TEAM#<id>` | `<team id>` / `BUILD#<bid>` | Teams and their members; a build in a team's workspace |
 
 - Builds bucket (versioned): `builds/<id>/draft.json`, `versions/<n>.json` (immutable),
-  `kb/<corpus>/…`, `design.json`, `design-rev/<n>.json`; `connect/<externalId>.json`;
+  `kb/<corpus>/…`, `design.json`, `design-rev/<n>.json` (undo) and `design-rev/v<n>.json` (named
+  versions); `connect/<externalId>.json`;
   `tfstate/<owner>/<id>/…`. Secrets Manager holds a build's tool keys, A2A tokens and
   `-login` secret.
 - Assets bucket: `runs/<session>/<agent>/<n>.<ext>` (images); a run's files under
   `runs/<session>/attachments/` (copied in by `bff/runfiles.py` when it starts, read by agents
-  with `attachments`); with `orchestrator.files`, `runs/<session>/outputs/` and `code/`, expired
-  after `retentionDays`; uploads under `uploads/<owner digest>/`, expired after a day. Also UI,
-  KB documents and tool schema buckets.
+  with `attachments`); with `orchestrator.files`, `runs/<session>/outputs/` (agents' files and the
+  Document generator's, each with `x-amz-meta-agent`, which a deliver target's `producedBy` reads)
+  and `code/`, expired after `retentionDays`; uploads under `uploads/<owner digest>/`, expired after
+  a day. Also UI, KB documents and tool schema buckets.
+- Build storage (`orchestrator.storage.create`): `<agent name with _ as ->-storage-<account>`,
+  private, versioned, encrypted with the build's key (S3-managed with `retain`); its layout is
+  whatever the tools name with `${storage}/<folder>/`.
 
 ## 9. Builder deploy pipeline
 
@@ -502,7 +525,16 @@ app/keys.json + app/vocabulary.json ─▶ build_schema.py ─┬─▶ app/work
   cannot edit its own role or policies. A code tool's grants reach only resources tagged
   `agentexpress:code-tools=true`, under a boundary that denies the framework's own data.
 - Credentials: each runtime reads its Gateway client secret(s) and A2A tokens from its own
-  Secrets Manager secret (`RUNTIME_SECRET_ARN`, `app/common/runtime_secret.py`).
+  Secrets Manager secret (`RUNTIME_SECRET_ARN`, `app/common/runtime_secret.py`), and, with a
+  signed webhook target, the deliver signing secrets it names (`DELIVER_SECRETS`).
+- Delivery (`app/common/deliver.py`): email goes only from the configured SES identity
+  (`ses:SendEmail` on its ARN, `ses:FromAddress` pinned) to recipients the author wrote; a step's
+  output adds recipients only through the explicit `recipientsFrom` opt-in. Webhooks go through the
+  same SSRF guard as every outbound call. S3 targets get `s3:PutObject` on their prefix only, and the
+  framework's own buckets are refused.
+- The Document generator's role reads only its template object or folder and writes only run outputs
+  and its output prefix; `runId` is set by the runtime, never the model, so a call cannot write into
+  another run's folder. Build storage is reachable only by the tools that name it, each on its folder.
 - Baseline: PITR on every table, TLS-only encrypted buckets, API access logs and a throttle,
   CloudFront security headers, Cognito 12+ character passwords with optional TOTP MFA,
   pinned dependencies (`requirements.lock`) and base image, an immutable ECR repository.

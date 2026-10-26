@@ -302,6 +302,22 @@ cdk destroy
 Transaction Search is deliberately **left enabled** — it is account-wide, and other stacks
 may depend on it.
 
+**If `cdk destroy` ends `DELETE_FAILED` on `UiLogsBucket`** ("bucket … not empty"), CloudFront
+delivered an access log after the stack emptied the bucket. Look up the bucket's name in the
+stack's resources, empty it, and run the destroy again:
+
+```bash
+STACK=<agent-name>-stack                 # agentName with _ as -
+BUCKET=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+  --query "StackResources[?ResourceType=='AWS::S3::Bucket' && starts_with(LogicalResourceId, 'UiLogsBucket')].PhysicalResourceId" \
+  --output text)
+aws s3 rm "s3://$BUCKET" --recursive
+cdk destroy                              # with the same -c flags you deployed with
+```
+
+The other failures a destroy can hit, and their fixes, are in
+[Tear down](../../DEPLOYMENT.md#a-late-cloudfront-log-stops-cdk-destroy).
+
 ## CDK and Terraform files
 
 Both paths deploy the same resources. The feature modules pair one to one (kebab-case here,
@@ -312,6 +328,7 @@ is the counterpart of most of Terraform's root files.
 |---|---|
 | `lib/a2a-server.ts` | `a2a_server.tf` |
 | `lib/browser-tool.ts` | `browser_tool.tf` |
+| `lib/docgen-tool.ts` | `docgen_tool.tf` |
 | `lib/export.ts` | `export.tf` |
 | `lib/hardening.ts` | `hardening.tf` |
 | `lib/harness.ts` | `harness.tf` |

@@ -146,7 +146,9 @@ AUDIT_ACTIONS = ("login", "logout",
                  "policy.deleted", "lambda.code.updated", "tool.tested",
                  "build.shared", "library.created", "library.updated", "library.deleted",
                  "library.shared", "group.saved", "group.deleted",
-                 "team.created", "team.updated", "team.deleted", "build.moved")
+                 "team.created", "team.updated", "team.deleted", "build.moved",
+                 # v139 Track C deliver: what a deliver step sent (app/common/deliver.py)
+                 "run.delivered", "run.delivery_failed")
 
 
 def audit_items(owner: str, email: str, action: str, detail: dict,

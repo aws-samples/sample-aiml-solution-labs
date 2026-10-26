@@ -69,7 +69,7 @@ The AgentExpress Assistant can set any of these networks from the chat.
 
 # Task steps
 
-A `task` step does one fixed thing with no model call: call a tool, run code, read a document with Amazon Textract, or write a file. In the control plane it is a **generic step**, added with **+ New generic step**. Its four kinds and their fields are on [Stages and steps](Stages_and_Steps.md). On a run's graph it shows as "Task · Code", "Task · Tool", "Task · Extract" or "Task · Output".
+A `task` step does one fixed thing with no model call: call a tool, run code, read a document with Amazon Textract, write a file, or deliver the run's files. In the control plane it is a **generic step**, added with **+ New generic step**. Its five kinds and their fields are on [Stages and steps](Stages_and_Steps.md). On a run's graph it shows as "Task · Code", "Task · Tool", "Task · Extract", "Task · Output" or "Task · Deliver".
 
 # AgentCore Harness
 

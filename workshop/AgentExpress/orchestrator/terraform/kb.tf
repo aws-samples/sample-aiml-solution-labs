@@ -29,7 +29,7 @@ locals {
   #   existing - `knowledgeBaseId`: YOUR Knowledge Base; only the retrieval function
   #              is made, and nothing here can delete it.
   kb_existing_id = try(local.kb_spec.knowledgeBaseId, "")
-  kb_s3_uri      = try(local.kb_spec.s3Uri, "")
+  kb_s3_uri      = replace(try(local.kb_spec.s3Uri, ""), local.storage_token, local.storage_uri) # ${storage} resolved: storage.tf (Track E)
   kb_kms_key     = try(local.kb_spec.kmsKeyArn, "")
   #   connector - `dataSource`: a web crawl or a SaaS site (kb_data_source.tf); no bucket.
   kb_source    = local.kb_existing_id != "" ? "existing" : (local.kb_s3_uri != "" ? "s3" : (local.kb_ds != null ? "connector" : "upload"))

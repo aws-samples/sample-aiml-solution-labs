@@ -4,13 +4,15 @@ The AgentExpress Assistant is a chat on the build page that writes the workflow 
 
 # What the Assistant does
 
-A build opens on the **AgentExpress Assistant** tab. The left column is the conversation. The right column is the build: a **Workflow** preview with its validation status, and cards for **Secrets**, **Needs your input** and **Defaults used** when there is something to show.
+A build opens on the **AgentExpress Assistant** tab. The left column is the conversation. The right column is the build: a **Workflow** preview with its validation status, and cards for **Secrets**, **Needs your input**, **Defaults used** and **Versions** when there is something to show.
 
 By talking to it you can change:
 
 - agents and their prompts, models, frameworks and AgentCore features;
-- stages, parallel groups, review gates and branch rules;
+- stages, parallel groups, review gates with named options, and branch rules;
 - tools, including the code of a Lambda tool or a hosted MCP server it writes for you, and code fetched from Git or S3;
+- Document generator tools for PDF, PPTX and DOCX files, and generic steps that deliver a run's files;
+- the build's own storage, when a tool needs S3 and you named no bucket;
 - each agent's prompt caching;
 - where each AgentCore Runtime runs: Public or in your VPC;
 - skills, triggers and interceptors;
@@ -63,6 +65,7 @@ A finished first draft, with the conversation so far: the request and reply on t
 | **Defaults used** | What it chose where you did not say: model, temperature, token limits, guardrails, evaluations, tool mode, framework | Ask for something else, or change it on the canvas. |
 | **Needs your input** | Values only you can give, such as an endpoint, an ARN or a key | Reply in the chat, or fill it in under **Build manually**. **Deploy** waits for them. |
 | **Secrets** | API keys, OAuth client secrets or bearer tokens a tool or agent needs | Type them here, never in the chat. Each is stored encrypted with the build and never shown again. |
+| **Versions** | Each change the Assistant saved, as a named version, newest first, with the current one marked | Say "go back to v1" to return to one. |
 
 # Edit a build by chat
 
@@ -75,6 +78,33 @@ Once a draft exists, every message is a change request, and the Assistant applie
 - _Use the Cedar policy noBigRefunds from my library on the refunds tool._
 
 To take a change back, click **Undo** in the build's header. Each Assistant change is one undo step. You can also ask it to undo its last change.
+
+How it reads your requests:
+
+- **Parallel work.** "Run X, Y and Z in parallel" gives each its own agent in one parallel stage. A check, gate or branch goes on the stage after it.
+- **Listed tools.** When you list several tools, it makes one tool for each. If two must be one, for example because one API serves both, it says why.
+- **Files.** PDF, PPTX and DOCX files come from the Document generator. For any other file it writes a Lambda tool with pinned libraries.
+- **Storage.** When a tool needs S3 and you named no bucket, it turns on the build's storage and lists it under **Defaults used**, instead of stopping to ask.
+
+## Go back to a version
+
+Each change the Assistant saves is a named version, such as _v1: multi-agent draft_ or _v2: single agent_. v0 is the build before its first change. The **Versions** card lists them, newest first, and marks the current one.
+
+- Say "go back to v1" to return to a version. Before it does, it says which version it restores, for example _This goes back to v1: multi-agent draft._
+- "Undo that" takes back its last change, and it says which version that puts back.
+- Going back is saved as a change of its own, so **Undo** takes it back too.
+- When it is unclear which version you mean, it lists them and asks.
+
+Requests you can paste:
+
+- "List the versions"
+- "Go back to v1"
+- "Undo that, and tell me which version it restores"
+
+## When it asks instead of changing
+
+- **A message with no request.** If you paste only content, such as a spec, a list or a log, it changes nothing and asks one short question about what to do with it.
+- **What it builds.** In its first reply to a brief that also asks for application code, such as a custom UI, SDK code, unit tests or a server of your own, it says once what it builds and what stays outside. Later replies mention only new gaps.
 
 Requests you can paste for each feature, and what it cannot set, are on [Ask the Assistant](Ask_the_Assistant.md).
 
@@ -158,6 +188,7 @@ While it works, the progress list shows _Reviewing changes…_. Under the reply,
 - **It cannot deploy, run, delete or publish anything.** You click **Deploy** yourself.
 - **It does not take secrets in the chat.** Keys go in the **Secrets** card, the Identity tab, or the tool's settings.
 - **It does not invent tool types.** Every data source becomes a real tool type or a remote A2A agent.
+- **It does not write application code.** It builds a deployable workflow and its tools, not a custom UI, SDK code, unit tests or a server of your own.
 - **It does not edit library items a build uses.** Edit them in the library, or ask for a copy for this build.
 - **It stays on topic.** It discusses only the design of this workflow.
 

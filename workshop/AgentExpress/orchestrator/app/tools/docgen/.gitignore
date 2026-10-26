@@ -1,0 +1,6 @@
+# The libraries a deploy installs here (requirements.txt) are not source.
+*
+!.gitignore
+!handler.py
+!render.py
+!requirements.txt

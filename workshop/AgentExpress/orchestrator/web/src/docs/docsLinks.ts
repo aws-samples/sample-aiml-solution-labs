@@ -62,6 +62,8 @@ export const DOCS = {
     description: "Values only you can give, such as an endpoint, an ARN or a key. Reply in the chat, or fill them in under Build manually. Deploy waits for them." },
   "assistant.defaults": { page: "AgentExpress_Assistant", heading: "The cards on the right", title: "Defaults used",
     description: "What the Assistant chose where you did not say, such as temperature, token limits or tool mode. Ask for something else, or change it by hand." },
+  "assistant.versions": { page: "AgentExpress_Assistant", heading: "Go back to a version", title: "Versions",
+    description: "Each change the Assistant saved is a named version. Say \"go back to v1\" to return to one; it says which version it restores before it does." },
   "registry": { page: "Agent_Registry", heading: "Add records from the registry", title: "Add from registry",
     description: "Add agents, tools or skills published in an AWS Agent Registry, and optionally keep them in sync." },
   "registry.publish": { page: "Agent_Registry", heading: "Publish to the registry", title: "Publish to registry",
@@ -114,6 +116,10 @@ export const DOCS = {
     description: "One trace per run, sent when it ends. Traces always go; scores and metrics are on by default, prompts and answers are off." },
   "settings.network": { page: "Runtimes", heading: "Run agents in your VPC", title: "Network",
     description: "Where the shared runtime runs, with every main and task agent: public, or in your VPC." },
+  // --- begin Track E storage ---
+  "settings.storage": { page: "Settings", heading: "Create storage for the build", title: "Storage",
+    description: "A private S3 bucket the deploy creates for this build. Tools reach it as ${storage}, for example ${storage}/templates/." },
+  // --- end Track E storage ---
   "guardrails.deployment": { page: "Guardrails", heading: "Set the deployment guardrail", title: "Deployment guardrail",
     description: "Applied to an agent that turns guardrails on without naming one." },
 
@@ -249,8 +255,17 @@ export const DOCS = {
     description: "Pause after this stage for a person to approve, revise or deny." },
   "stage.branch": { page: "Human_in_the_Loop", heading: "Route with branch rules", title: "Branch",
     description: "Route on this stage's output: continue, jump to a later stage, or end the run." },
+  // --- begin v139 Track D (decide) ---
+  "stage.gateOptions": { page: "Human_in_the_Loop", heading: "Offer named options at a gate", title: "Named options",
+    description: "Let the person choose one of your options, such as Override or Abort, and route on the choice as the field decision." },
+  "agent.askPerson": { page: "Human_in_the_Loop", heading: "Let an agent request a decision", title: "Ask a person",
+    description: "Let this agent ask a person a question, or ask them to choose one of your options, in the middle of its step." },
+  // --- end v139 Track D (decide) ---
   "task": { page: "Stages_and_Steps", heading: "Add a generic step", title: "Generic step",
     description: "A step with no model that calls a tool, runs code, extracts fields or shapes the output." },
+  // v139 Track C deliver
+  "task.deliver": { page: "Stages_and_Steps", heading: "Deliver a run's files", title: "Deliver files",
+    description: "Send the files a run saved to S3, by email with Amazon SES, or to a webhook, only when a condition holds if you set one." },
   "component": { page: "Agents", heading: "Work with rows", title: "Agent card row",
     description: "Something attached to an agent. Configure it here, move it to another agent, or remove it." },
 
@@ -287,6 +302,9 @@ export const DOCS = {
     description: "Runs a short program in an AWS sandbox and returns what it printed." },
   "tool.browser": { page: "Tool_Types", heading: "Code Interpreter and Browser", title: "Browser",
     description: "Opens a web page in an AWS browser and returns its text and links." },
+  // Track B docgen
+  "tool.docgen": { page: "Tool_Types", heading: "Document generator", title: "Document generator",
+    description: "Writes a PDF, PPTX or DOCX from data, into a template from S3 or a simple layout, and saves it with the run." },
   // The tool form's Advanced sections (formLayout.ts), and the tool panel's other sections.
   "tool.calling": { page: "Tool_Types", heading: "Know the keys every tool shares", title: "Calling",
     description: "Which operation to invoke (call), the parameter the agent's query goes into (arg), and fixed arguments the agent cannot change (args)." },
@@ -370,6 +388,9 @@ export const DOCS = {
     description: "The run waits for a person: approve to continue, revise with a comment, or deny to stop it." },
   "run.ask": { page: "Human_in_the_Loop", heading: "When an agent asks a person", title: "Question",
     description: "An agent asked a person a question. The run continues when it is answered." },
+  // v139 Track D (decide)
+  "run.decision": { page: "Human_in_the_Loop", heading: "Choose an option", title: "Decision",
+    description: "The run waits for a person to choose one of the options. The choice is recorded and decides what runs next." },
   "run.share": { page: "Sharing_a_Run", heading: "Create a link", title: "Share a run",
     description: "Create a read-only link to this run for a colleague, and revoke it when it is no longer needed." },
   "run.shareLinks": { page: "Sharing_a_Run", heading: "Manage and revoke links", title: "Active links",

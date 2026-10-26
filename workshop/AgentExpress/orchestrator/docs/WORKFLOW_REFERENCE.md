@@ -168,6 +168,46 @@ You never write Cedar by hand — the rules are generated from the `tools` block
 Every tool you declare is permitted; anything not declared is refused by Cedar's
 default-deny, including a tool name a prompt-injected instruction invents.
 
+<!-- begin Track E storage -->
+### `orchestrator.storage` — a bucket created for the build
+
+OPTIONAL, off unless `create` is `true`. Set it on the Builder's **Settings → Storage**, or:
+
+```json
+"orchestrator": { "storage": { "create": true } },
+"tools": {
+  "renderer": { "type": "lambda", "...": "...",
+    "code": { "grants": { "s3Prefix": "${storage}/templates/", "s3Access": "readwrite" } } }
+}
+```
+
+| Key | Read by | Notes |
+|---|---|---|
+| `storage.create` | `storage.tf` / `cdk/lib/storage.ts`; `bff/storage_check.py`, `storageCheck.ts` | `true`: the deploy creates `<build name>-storage-<account>` (underscores as dashes). All four S3 Block Public Access settings on, a bucket policy refusing plain HTTP, versioned, encrypted by default with the build's own KMS key (with an S3 Bucket Key), tagged `agentexpress:code-tools=true` with ABAC on, so a code tool's grant (which needs that tag) reaches it. A lifecycle rule deletes a version 30 days after it is replaced, clears delete markers left with no versions, and aborts uploads unfinished after 7 days. Nothing is granted on it but what each tool that names it gets (below). Default `false`. Not set or `false`: nothing is created and the deploy is byte for byte what it was (`cdk/test/storage-identity.test.ts`, `tests/test_v139_identity.py`). |
+| `storage.retain` | `storage.tf` / `cdk/lib/storage.ts`; `deployer/runner.py`, `terraform/teardown.sh` | Default **`false`: destroying the build empties the bucket (every version) and deletes it**, like the build's other buckets. `true`: the destroy keeps the bucket and its contents (CDK `RemovalPolicy.RETAIN`; Terraform: the runner and `teardown.sh` take it out of the state before `terraform destroy`). A kept bucket is encrypted with S3-managed keys instead, because the build's KMS key is deleted with the build (after 7 days) and would leave what it keeps unreadable; objects written before you turned `retain` on keep the key they were written with. A later deploy of the same build finds the name taken: delete or import the kept bucket first. Without `create` it keeps nothing (a warning). |
+
+**The `${storage}` token** stands for `s3://<the bucket>` and must start the value, once:
+`${storage}/` is the whole bucket, `${storage}/templates/` a folder. It is read in exactly these
+fields (`app/vocabulary.json` `storageToken.fields`), where the IaC resolves it at synth or plan:
+
+- `tools.<key>.code.grants.s3Prefix` and `orchestrator.interceptors.<point>.code.grants.s3Prefix`:
+  the function gets its usual grant on that prefix (and `S3_PREFIX` resolved), plus
+  `kms:Decrypt` (and `kms:GenerateDataKey` with `s3Access: "readwrite"`) on the build's key,
+  through S3 only, while the bucket uses it.
+- `tools.<kb>.s3Uri`: the Knowledge Base reads its documents from that folder of the bucket.
+- `tools.<key>.templateS3Uri` and `tools.<key>.outputPrefix` (a Document generator): its role
+  reads the templates from, and writes the files to, those folders of the bucket. That role
+  has no permissions boundary of its own, so the build key's policy (any role in the account,
+  through S3 only) covers the KMS side.
+- `agents.<id>.task.targets[].uri` (a deliver step's `s3` target): the runtime role may put under
+  that folder of the bucket, and the runtime resolves the same uri from `STORAGE_BUCKET`.
+
+Anywhere else, or with no storage, the token is refused by both validators and by both IaC
+paths rather than deployed as text. The orchestrator runtime gets `STORAGE_BUCKET` (only when
+the build creates storage) for a step that resolves the token while it runs
+(`app/common/storage.py`).
+<!-- end Track E storage -->
+
 ## `ui`
 
 Every user-facing string in the shell, so re-branding is a config edit rather than a
@@ -194,7 +234,7 @@ the id becomes part of an AgentCore Runtime name.
 |---|---|---|
 | `name` | `registry.py`, UI | Display name. |
 | `runtime` | `registry.py`, `subagent_runtimes.tf` | `main` \| `dedicated` \| `a2a` \| `task` \| `harness`. See below — the first two are placements of *your* code, the third is an agent you don't operate, `task` is a step with no model ([task steps](#runtime-task--a-step-with-no-model)), and `harness` is an agent with no code, run by a managed AgentCore Harness ([harness agents](#runtime-harness--an-agent-run-by-agentcore-harness)). |
-| `task` | `registry.py` → `app/common/task_agent.py`; `bff/task_check.py`, `taskCheck.ts`; `tasks.tf` / `cdk/lib/tasks.ts` | **`runtime: "task"` only, and required there.** What the step does: `{"kind": "tool" \| "code" \| "extract" \| "output", ...}`. See [task steps](#runtime-task--a-step-with-no-model). |
+| `task` | `registry.py` → `app/common/task_agent.py`; `bff/task_check.py`, `taskCheck.ts`; `tasks.tf` / `cdk/lib/tasks.ts` | **`runtime: "task"` only, and required there.** What the step does: `{"kind": "tool" \| "code" \| "extract" \| "output" \| "deliver", ...}`. See [task steps](#runtime-task--a-step-with-no-model). |
 | `model` | `registry.py` | **Optional.** Omit to use `orchestrator.defaultModel`. No shipped agent sets it; the mechanism is there when you want a bigger model for one step. `litellm/<name>` (e.g. `litellm/gpt-4o`) is a non-Bedrock model served by the deployment's LiteLLM proxy (`litellm_base_url` / `-c litellmBaseUrl`; DEPLOYMENT.md "Using non-Bedrock models through LiteLLM"). Not for `orchestrator.defaultModel` or an evaluator's judge `model`. |
 | `models` | `app/common/model_routing.py` (from `ctx.llm` and the tool-calling turn); `bff/model_routing_check.py`, `modelRoutingCheck.ts` | **Optional; `main` and `dedicated` only.** `{"route": [...], "fallback": [...]}`. `route`: up to 10 rules, first match wins, else the agent's model: `{"model": m, "inputTokensOver": N}` (the call's system + user text, estimated at 4 characters per token, is over N, 1-1000000) or `{"model": m, "matches": "invoice\|refund"}` (a case-insensitive regular expression, 1-200 characters, searched in the run's request and its subject). `fallback`: up to 3 models tried in order when the call fails with Bedrock `ThrottlingException`, `ServiceUnavailableException` or `ModelNotReadyException` (or HTTP 429/503 from a LiteLLM proxy); never on any other error (validation, access, timeout, guardrail). A run with a model override uses neither. Each call's telemetry row records the model and `chosen_by` (`route N`, `fallback N`, `override`). No IAM change: the runtimes may already call any foundation model and any inference profile in this region and account. |
 | `promptCache` | `registry.py` → `app/common/prompt_cache.py` → `app/common/llm.py`; `bff/prompt_cache_check.py`, `promptCacheCheck.ts` | **Optional; `main` and `dedicated` only.** Bedrock prompt caching for this agent's model calls: `{"system": true, "tools": true, "messages": true, "ttl": "5m"}`. Off unless set. See [prompt caching](#promptcache-prompt-caching). |
@@ -438,6 +478,40 @@ is JSON that a later agent reads with `ctx.input("<id>")`. Only `name`, `kind`, 
 | `code` | `code` (≤ 50,000 bytes) or `codeSource` (git or S3, read at deploy: [code sources](#code-sources-git-s3-or-an-image)), `language` (`python` default, `javascript`, `typescript`) | Runs the script once in the AWS-managed AgentCore Code Interpreter (`aws.codeinterpreter.v1`), a fresh session that is always stopped. The script reads `in/request.txt`, `in/outputs.json` (earlier outputs, parsed when they are JSON) and, with `attachments`, the run's files as `in/<name>`. What it prints is the output (`output`, parsed when it is JSON); files it writes to `out/` are kept as run files (up to 20); the script and its log go to `runs/<session>/code/` when the deployment keeps files. A non-zero exit fails the step with the end of stderr. Up to 120 s. |
 | `extract` | `file`, `features` (`TABLES`, `FORMS`; default both) | Reads the run's PDF, PNG and JPEG files (or the one named `file`) with Amazon Textract: an image with `AnalyzeDocument`, a PDF with the asynchronous `StartDocumentAnalysis` (the synchronous call reads one page only), polled for up to 300 s. Output per file: `pages`, `text` (cut at 50,000 characters), `tables` (rows of cell text) and `forms` (`key`/`value`). Needs `attachments: true`. |
 | `output` | `format` (required: `csv`, `json`, `markdown`, `txt`), `name`, `from` | Writes a file from earlier outputs and keeps it with the run (`runs/<session>/outputs/`, on the run's Files tab). `from` lists step ids or `<step>.<field>` (default: every earlier output); a CSV takes the rows of a list of objects. Needs `orchestrator.files`. No Excel or PDF writer: that is a code step's job. |
+| `deliver` | `targets` (required, 1-10) | Sends the files the run's steps saved (`runs/<session>/outputs/`) to each target in order: see [deliver targets](#deliver-targets). Every delivery, skip and failure is a timeline line, and each delivery or failure an activity-log event (`run.delivered`, `run.delivery_failed`). A failed target fails the step after the others were tried. Output: `{"deliveries": [{"target", "type", "to", "status": "delivered" \| "skipped" \| "failed", "files", ...}]}`. Needs `orchestrator.files`. |
+
+<!-- begin v139 Track C deliver -->
+#### Deliver targets
+
+```json
+"send": {"name": "Send the reports", "runtime": "task",
+         "task": {"kind": "deliver", "targets": [
+           {"type": "s3", "uri": "s3://amzn-s3-demo-bucket/reports/", "files": ["*.pdf", "*.pptx"]},
+           {"type": "email", "identityArn": "arn:aws:ses:us-east-1:111122223333:identity/example.com",
+            "fromAddress": "reports@example.com", "to": ["team@example.com"],
+            "subject": "Report {{session}}", "when": {"field": "outputs.check.passed", "equals": true}},
+           {"type": "webhook", "url": "https://hooks.example.com/in", "secret": "hook"}]}}
+```
+
+| Key | Targets | Meaning |
+|---|---|---|
+| `type` | all | Required: `s3`, `email` or `webhook` (`deliverTargetTypes`). |
+| `files` | all | File-name patterns (`*`, `?`, case-insensitive), no folder. Default: every file the run saved. |
+| `producedBy` | all | Step ids, each earlier: only the files those steps saved (each file records its step). |
+| `when` | all | One condition: `field` (`request`, or `outputs.<step>.<field>`, the step earlier) and one or more of `branch.when`'s operators (`equals`, `notEquals`, `in`, `contains`, `exists`, `gt`, `gte`, `lt`, `lte`). When it does not hold the target is skipped, and the skip is on the timeline. |
+| `uri` | `s3` | Required: `s3://<bucket>/` or `s3://<bucket>/<prefix>/` (ending in `/`), or `${storage}/<prefix>/` for the build's storage (`orchestrator.storage`). Each file is copied (`CopyObject`) to `<prefix><session>/<name>`. Not one of the framework's own buckets. The runtime role gets `s3:PutObject` on `arn:aws:s3:::<bucket>/<prefix>*` only. A bucket encrypted with your own KMS key also needs that key to allow the runtime role. |
+| `identityArn` | `email` | Required: the SES identity, `arn:aws:ses:<region>:<account>:identity/<domain or address>`, verified in SES in that Region. The runtime role gets `ses:SendEmail` on it only, with `ses:FromAddress` pinned to the `fromAddress` values. |
+| `fromAddress` | `email` | Required: the identity's own address, or an address at its domain. |
+| `to` | `email` | Required: 1-50 addresses (SES takes 50 per message). Written by the author; a placeholder here is refused. |
+| `recipientsFrom` | `email` | Optional, the explicit opt-in to more recipients chosen by a step: one `{{outputs.<step>.<field>}}` (a list or a comma-separated text of addresses), added to `to`, still at most 50 together. |
+| `subject`, `body` | `email` | Optional text, with the placeholders of a task step. The files are listed under the body. |
+| `attach` | `email` | Default `true`: the files are attached while they are at most 25 MB together (SES v2 takes 40 MB per message after base64); above that, or with `false`, they go as links. |
+| `url` | `webhook` | Required: `https://`, no `user:password@`. Posted through the SSRF guard (`app/common/netguard.py`): private, loopback and link-local addresses are refused, each redirect is checked again. 10 s timeout; any answer but 2xx fails the target. The body: `{"event": "agentexpress.delivery", "app", "session", "step", "deliveredAt", "files": [{"name", "bytes", "contentType", "producedBy", "url", "expiresAt"}]}`. |
+| `secret` | `webhook` | Optional: the NAME of a build secret of kind `deliverSecrets`, never the secret. The body is signed as the app's own webhooks are: `X-AX-Timestamp` and `X-AX-Signature: sha256=<HMAC-SHA256 of "<timestamp>.<body>">`. The deploy fails when the build has no secret by that name. |
+| `linkExpiresMinutes` | `email`, `webhook` | How long a link lasts, 1-10080 (default 60). Links are presigned with the runtime role's credentials, so they end when those do, even sooner. |
+
+Good to know: the SES sandbox lets you send only to verified addresses (200 a day, 1 a second); SES's error is on the timeline as SES wrote it. The runtime also gets `s3:GetObject` on `runs/*/outputs/*` and `s3:ListBucket` for `runs/*/outputs/*` prefixes of the assets bucket, only with a deliver step. A workflow without one deploys exactly as before.
+<!-- end v139 Track C deliver -->
 
 **Placeholders** in `arguments` and an output's `name`: `{{request}}`, `{{session}}`,
 `{{outputs.<step>}}` and `{{outputs.<step>.<field>}}` (`.<n>` for a list item). A string that
@@ -498,7 +572,7 @@ A fuller one, with tools, skills, memory and an endpoint:
 | `harness.provider` | `"bedrock"` (default), `"openai"`, `"gemini"` or `"litellm"` (any LiteLLM provider; ids like `gemini/gemini-2.5-pro`, `anthropic/claude-sonnet-4-6`). Anything but Bedrock needs `model`. |
 | `harness.apiKey` | The provider's key for `openai` and `gemini` (optional for `litellm`): the name of an `identities` entry of type `apikey` (its key in the build's secrets; the deploy makes an AgentCore API key credential provider `bedrock-agentcore-<agent>-hk-<name>` from it) or the ARN of an API key credential provider you already have. Never the key. |
 | `harness.apiBase` | `litellm` only: an OpenAI-compatible endpoint (a proxy, a gateway), `https://` on a public host. The key is sent to it. |
-| `tool` | The build's tools (keys of `tools`) the harness may call through the Gateway. The harness gets one `agentcore_gateway` tool named `gateway`, signed in through an OAuth2 credential provider (`bedrock-agentcore-<agent>-hgw-<id>`) that holds the agent's Gateway machine client: the shared one, or its own with `orchestrator.gatewayIdentity: "perAgent"`. So Cedar policy and the interceptors apply to it as to every agent. Only the named tools are allowed (`@gateway/<tool>___*`). Needs the Gateway, signed in with Cognito's client-credentials token (the pool this deployment makes, or `idp: "cognito"` with your own); not tools with `auth` `"user"` or `"obo"`, which act as the person. Interceptors with `passRequestHeaders` see no `x-ax-*` headers from a harness. |
+| `tool` | The build's tools (keys of `tools`) the harness may call through the Gateway. The harness gets one `agentcore_gateway` tool named `gateway`, signed in through an OAuth2 credential provider (`bedrock-agentcore-<agent>-hgw-<id>`) that holds the agent's Gateway machine client: the shared one, or its own with `orchestrator.gatewayIdentity: "perAgent"`. So Cedar policy and the interceptors apply to it as to every agent. Only the named tools are allowed (`@gateway/<tool>___*`). Needs the Gateway, signed in with Cognito's client-credentials token (the pool this deployment makes, or `idp: "cognito"` with your own); not tools with `auth` `"user"` or `"obo"`, which act as the person, nor the Document generator (`source: "docgen"`), whose file is saved with the run the runtime sets on each call. Interceptors with `passRequestHeaders` see no `x-ax-*` headers from a harness. |
 | `harness.mcp` | Remote MCP servers, up to 10: `[{"name": "wiki", "url": "https://..."}]`, `https://` on a public host (not localhost, a private address, `.local` or `.internal`). No headers: nothing secret goes in workflow.json. |
 | `harness.browser`, `harness.codeInterpreter` | `true` for the managed AgentCore Browser / Code Interpreter, or a custom one's ARN. The role gets the session actions on exactly that resource. |
 | `harness.shell` | `true` lets the agent use the built-in `shell` and `file_operations` tools in its own isolated session, which can reach the internet. Without it, and with no other tool, `allowedTools` is set so that it can use no tool at all, on the harness and again on every call. With tools or an API key, shell commands run in the session that holds their credentials: the check warns. |
@@ -1255,6 +1329,123 @@ pages behind a sign-in. It reads pages: no clicking, typing, screenshots or down
 call is a fresh, billed AgentCore Browser session. It has run on a deployed CDK build and a
 deployed Terraform build.
 
+<!-- begin Track B docgen -->
+### `source: "docgen"` — the Document generator: PDF, PPTX and DOCX files
+
+An agent can write a PDF, PPTX or DOCX file from JSON data, into a template stored in S3
+(PPTX, DOCX) or a built-in simple layout. The framework deploys
+`orchestrator/app/tools/docgen/` as a Gateway Lambda target, so Cedar policy, the
+interceptors and `approval` apply to it like any other tool. Nothing is created unless a
+tool names this `source`, and the shipped `workflow.json` does not. In the Builder:
+**Add a tool → Type → Document generator**.
+
+```json
+"documents": {
+  "type": "lambda",
+  "description": "Write the report files.",
+  "source": "docgen",
+  "call": "generate_document",
+  "arg": "data",
+  "formats": ["pdf", "pptx", "docx"],
+  "templateS3Uri": "s3://amzn-s3-demo-bucket/templates/reports/",
+  "outputPrefix": "s3://amzn-s3-demo-bucket/outputs/reports/",
+  "toolSchema": [{
+    "name": "generate_document",
+    "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+    "properties": {
+      "format":   { "type": "string", "required": true, "description": "pdf, pptx or docx: one of this tool's formats." },
+      "data":     { "type": "object", "required": true, "description": "The content as JSON." },
+      "template": { "type": "string", "required": false, "description": "With a template folder: the template's file name in it." },
+      "fileName": { "type": "string", "required": false, "description": "The file's name. Defaults to the data's title." },
+      "runId":    { "type": "string", "required": false, "description": "Set by the workflow on every call; leave it out." },
+      "agent":    { "type": "string", "required": false, "description": "Set by the workflow on every call; leave it out." }
+    }
+  }]
+}
+```
+
+The function publishes one tool, `generate_document`, and the checks refuse any other name
+in `toolSchema`. It returns `fileName`, `format`, `bytes`, `s3Uri`, `url` (a presigned link),
+`expiresInSeconds` (3600), `runFile` (its key in the run's Files) and `template` (the one
+used, or `built-in layout`). A call that is refused comes back as an `error` result.
+`runId` and `agent` are set by the runtime on every call it makes through
+`app/features/gateway/client.py` (the calls of every agent but a harness), from the run it
+serves, whatever the model sent, so a model cannot write into another run's folder. The
+Gateway passes the function only the arguments the schema declares, so both checks refuse a
+`generate_document` that does not declare `runId` and `agent`. The runtime also sets
+`attempt`, this run of the step (a gate's revise, a `rerun_from` or a re-run of part of a
+stage is a new one); the deploy adds it to the published schema itself, so the config does
+not declare it. A harness agent calls the
+Gateway itself and no run is set on its calls, so both checks refuse a Document generator in
+a harness agent's `tool`.
+
+| Key | Notes |
+|---|---|
+| `formats` | Required. Any of `pdf`, `pptx`, `docx` (`docgenFormats` in `app/vocabulary.json`), each once. A call for another format is refused. |
+| `templateS3Uri` | Optional. One template, `s3://<bucket>/<key>.pptx` or `.docx` (used for that format; its type must be in `formats`), or a folder of them, `s3://<bucket>/<prefix>/`, from which a call picks one by name (`template`, e.g. `report.docx`; no `..`, `.` or empty part). Left out, and for PDF always: the built-in layout. Also `${storage}/...` (the build's storage). |
+| `outputPrefix` | Optional. `s3://<bucket>/<prefix>/`, ending in `/`. Each file is also written to `<prefix><run>/<name>`, and the link is to that copy. Left out: the run's Files only. Also `${storage}/.../`. |
+
+**Where each file goes.** Always with its run: `runs/<run>/outputs/<name>` in the
+deployment's assets bucket, on the run's **Files** tab, so a build with a Document generator
+must set `orchestrator.files` (the validators, the CDK synth and the Terraform plan say so).
+`<name>` is `fileName`, else the data's `title`, else the tool's key (else the agent's id),
+reduced like any run file and given the format's extension. A file never replaces another
+call's: each name is written with a conditional `PutObject` (`If-None-Match: *`), and when
+the name is taken in that run (by another step, or by an earlier or parallel call of the same
+attempt) the call takes `<stem>-2`, `<stem>-3` and so on. A step's new attempt replaces the
+file its earlier attempt wrote under the name (read with `HeadObject`, written with
+`If-Match`), so after a revise or a re-run the run keeps, and a deliver step sends, only the
+new document. The name it got is the `fileName` it returns.
+
+**Template rules.**
+
+- A field is `{{name}}`, or `{{a.b}}` for a value inside an object; spaces inside the braces
+  are allowed. Text is filled in as it is, a number or true/false as written, a list of plain
+  values joined with `, `, anything else as JSON. A field `data` does not have renders as
+  nothing.
+- A list repeats what uses it. `{{rows.name}}`, where `data.rows` is a list, makes one table
+  row (DOCX or PPTX) per item for a row that uses it, one paragraph per item for a DOCX
+  paragraph outside a table, and one slide per item for a PPTX slide whose text outside its
+  tables uses it. Each copy reads `{{rows.<field>}}` from its own item (a plain value is
+  `{{rows.value}}`). An empty list removes the row, paragraph or slide. One list per row,
+  paragraph or slide (the first it names), at most 1,000 items; a list inside an item is not
+  repeated again.
+- A paragraph is filled as a whole, so a field Word or PowerPoint split over several runs
+  still works; the filled text takes the formatting of the paragraph's first run. DOCX headers
+  and footers are filled too.
+- PDF has no template format: it always uses the built-in layout.
+
+**The built-in layout** (no template): `title` (and `subtitle`) as the heading, then each
+other top-level field as a section, in order: a plain value as a line, an object as
+`key: value` lines, a list of plain values as bullets, a list of objects as a table (the first
+8 keys as columns; on PPTX, 12 rows a slide).
+
+**What its role may do.** Read only the template object, or the objects under the template
+folder; write only run outputs in the assets bucket and objects under `outputPrefix`; read
+back only the copy it links to (a presigned link works only if its signer may read the
+object); write its own log group. No `s3:ListBucket`, no other bucket, table or secret. A
+template or output bucket encrypted with your own KMS key also needs that key's policy to
+allow the function's role. The framework's own buckets are refused.
+
+**Limits, held in the function's code** (`handler.py`): a 20 MB template, 1 MB of `data` as
+JSON, a 25 MB file, 60 seconds and 512 MB. The link works for an hour at most: a link signed
+with a role's temporary credentials stops working when they expire
+([presigned URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/using-presigned-url.html)).
+
+**Its libraries.** `app/tools/docgen/requirements.txt` pins `python-pptx` (MIT),
+`python-docx` (MIT), `reportlab` (BSD) and their dependencies `lxml` (BSD-3-Clause), `Pillow`
+(MIT-CMU), `XlsxWriter` (BSD-2-Clause), `typing_extensions` (PSF-2.0) and
+`charset-normalizer` (MIT). A console deploy installs them into the folder for Lambda's Python
+3.12 on x86_64 before the zip is made (about 16 MB zipped, 43 MB unpacked, inside the
+[Lambda .zip limits](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html),
+so no layer or container image). Deploying from a checkout, install them first:
+`python3 -m pip install -r app/tools/docgen/requirements.txt -t app/tools/docgen --platform manylinux2014_x86_64 --implementation cp --python-version 3.12 --only-binary=:all:`
+(the CDK synth and the Terraform plan refuse to deploy without them).
+
+**Test it.** The tool panel's **Test run with sample data** calls the deployed function once
+with an editable sample event, for a run named `console-test`, and shows the file's link.
+<!-- end Track B docgen -->
+
 ### `rowFields` — for an agent that computes rather than narrates
 
 Optional, and only meaningful on a tool whose results are structured. It maps the
@@ -1497,6 +1688,52 @@ Everything above is checked before anything deploys, because each of these mista
 is otherwise silent — a misspelled operator, a rule with no comparison and a target
 that names nothing all evaluate to "no match", so the run quietly takes the default
 on every request and the branch looks like it is working.
+
+<!-- begin v139 Track D (decide) -->
+### Named options — a person's choice decides what runs next
+
+A review gate can offer **named options** instead of approve / revise / deny, and an
+agent can **request a decision** in the middle of its step. Either way the chosen option
+becomes the run field `decision`, which the step's `branch.when` routes on.
+
+```json
+{ "agent": "check", "hitl": { "options": ["Override", "Abort"] },
+  "branch": { "when": [
+      { "field": "decision", "equals": "Override", "goto": "deliver" },
+      { "field": "decision", "equals": "Abort",    "goto": "END" } ],
+    "default": "deliver" } }
+```
+
+| Key | Read by | What it does |
+|---|---|---|
+| `steps[].hitl.options` | `app/common/gates.py`, `nodes.py` gate nodes; `bff/asks.py` | 2–6 labels (each at most 60 characters, unique ignoring case). The run page shows one button per option and an optional comment; the run then continues and the label is the run field `decision`. Single-agent and `sequence` steps only (a parallel stage cannot branch), and not with `approval: "event"` (an event cannot choose). |
+| `agents.<id>.askPerson.options` | `app/common/asks.py` `request_decision` → `tool_loop.py` | 2–6 labels. With `toolMode: "model"`, the agent's model is also offered `request_decision(question)`: the run waits, the run page shows the question with one button per option, and the model reads the choice as the tool's result. Counts against `maxQuestions`; `timeout` lets it lapse. The choice is the run field `decision` for a branch on the agent's step. |
+
+- `field: "decision"` reads the choice made at the step's gate first, then the one the
+  step's deciding agent requested (a sequence decides with its last agent). With no
+  choice it reads the agent's output as before, so a gate without `options` is unchanged.
+- Compared like every branch string: case- and space-insensitive. A rule whose
+  `equals` / `in` names no option is warned about, as is a gate with options and no rule
+  that reads `decision`.
+- No option is chosen when the gate approves itself (`mode` `auto`, a `threshold` with no
+  match, an unattended run) or times out with `"approve"`: the branch takes its `default`.
+  A timeout with `"deny"` stops the run. So "deliver if the check passes, otherwise ask to
+  override or abort" is a threshold gate on the failed check, whose `default` is the deliver step:
+
+  ```json
+  { "agent": "check",
+    "hitl": { "mode": "threshold", "when": [{ "field": "passed", "equals": false }],
+              "options": ["Override", "Abort"] },
+    "branch": { "when": [{ "field": "decision", "equals": "Abort", "goto": "END" }],
+                "default": "deliver" } }
+  ```
+- A deliver target's `when` does not read `decision` (its `field` is `request` or
+  `outputs.<step>.<field>`): route with the branch and put the deliver step after it.
+- Answered through the decision route: `POST /api/sessions/{id}/decision
+  {"option": "Override", "comment": "..."}`. The activity log records the option, who
+  chose it and when (`run.decided`), and the timeline shows the choice with its comment.
+- The Run Assistant does not choose an option: a person does, on the run page.
+<!-- end v139 Track D (decide) -->
 
 ## What is checked before anything deploys
 

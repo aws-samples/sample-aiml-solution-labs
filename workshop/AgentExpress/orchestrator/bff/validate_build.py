@@ -21,6 +21,7 @@ from pathlib import Path
 import browser_tool
 import cedar
 import code_source
+import docgen_tool  # Track B docgen
 import export_check
 import harness_check
 import hosted_mcp_check
@@ -31,6 +32,7 @@ import model_routing_check
 import network_check
 import prompt_cache_check
 import smithy_tool
+import storage_check  # Track E storage
 import task_check
 
 _HERE = Path(__file__).resolve().parent
@@ -498,9 +500,12 @@ def _check_code(key: str, code, path: str, where: dict, add) -> None:
     elif "table" in grants and FRAMEWORK_TABLE_RE.search(grants["table"]):
         add("error", where, f"{p}.grants.table",
             "is named like one of the framework's own tables, which no tool may reach")
-    if "s3Prefix" in grants and not (isinstance(grants["s3Prefix"], str) and S3_PREFIX_RE.match(grants["s3Prefix"])):
+    # --- begin Track E storage --- the ${storage} token stands for the build's bucket (storage_check.py).
+    s3_prefix = storage_check.as_checked(grants.get("s3Prefix"), vocab("storageToken")[0])
+    # --- end Track E storage ---
+    if "s3Prefix" in grants and not (isinstance(s3_prefix, str) and S3_PREFIX_RE.match(s3_prefix)):
         add("error", where, f"{p}.grants.s3Prefix", "must be s3://<bucket>/ or s3://<bucket>/<prefix>/, ending in /")
-    elif "s3Prefix" in grants and FRAMEWORK_BUCKET_RE.match(grants["s3Prefix"]):
+    elif "s3Prefix" in grants and FRAMEWORK_BUCKET_RE.match(s3_prefix):
         add("error", where, f"{p}.grants.s3Prefix", "is one of the framework's own buckets, which no tool may reach")
     access = vocab("codeGrantAccess")
     for k, needs in (("tableAccess", "table"), ("s3Access", "s3Prefix")):
@@ -542,7 +547,7 @@ ATTACH_S3_RE = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9](/[^\s/][^\s]*[^\s
 
 
 AFTER_RE = re.compile(r"^([1-9][0-9]*)(m|h|d)$")
-GATE_KEYS = ("mode", "when", "approval", "timeout")
+GATE_KEYS = ("mode", "when", "approval", "timeout", "options")  # options: v139 Track D
 
 
 def _check_hitl(step: dict, i: int, add) -> None:
@@ -609,6 +614,67 @@ def _check_hitl(step: dict, i: int, add) -> None:
         add("warning", where, f"{p}.mode", "this gate approves itself: no one reviews this stage")
 
 
+# --- begin v139 Track D (decide): named options -------------------------------------------
+
+def _check_option_list(opts, where: dict, p: str, add) -> None:
+    """A list of named options (vocabulary decisionOptions). Mirrors validate.ts checkOptionList."""
+    lo = int(vocab_extra("decisionOptions", "minOptions") or 2)
+    hi = int(vocab_extra("decisionOptions", "maxOptions") or 6)
+    chars = int(vocab_extra("decisionOptions", "labelChars") or 60)
+    if (not isinstance(opts, list) or not lo <= len(opts) <= hi
+            or not all(isinstance(o, str) and o.strip() for o in opts)):
+        add("error", where, p, f'must be a list of {lo} to {hi} option labels, e.g. ["Override", "Abort"]')
+        return
+    for k, o in enumerate(opts):
+        if len(o.strip()) > chars:
+            add("error", where, f"{p}[{k}]", f"is at most {chars} characters")
+    if len({o.strip().lower() for o in opts}) != len(opts):
+        add("error", where, p, "the options must differ (ignoring case)")
+
+
+def _labels(opts) -> list[str]:
+    return [o.strip() for o in opts if isinstance(o, str) and o.strip()] if isinstance(opts, list) else []
+
+
+def _check_decisions(step: dict, i: int, agents: dict, add) -> None:
+    """steps[].hitl.options, and the branch rules that read the run field `decision`
+    (app/common/gates.py, nodes._decision_fields). Mirrors validate.ts checkDecisions."""
+    where = {"kind": "step", "index": i}
+    p = f"steps[{i}].hitl.options"
+    h = step.get("hitl")
+    gate = _is_obj(h) and "options" in h
+    if gate:
+        _check_option_list(h["options"], where, p, add)
+        if _jst(step.get("parallel")):
+            add("error", where, p, "a parallel stage's gate decides each agent, and a parallel stage cannot "
+                "branch: put named options on a single-agent or sequence stage")
+        if h.get("approval") == "event":
+            add("error", where, p, 'named options are chosen on the run page; an event cannot choose one, '
+                'so they do not go with approval "event"')
+    seq = step.get("sequence")
+    decider = step.get("agent") or (seq[-1] if isinstance(seq, list) and seq else None)
+    agent = agents.get(decider) if isinstance(decider, str) else None
+    ask = agent.get("askPerson") if _is_obj(agent) else None
+    known = _labels(h.get("options") if gate else None) + _labels(ask.get("options") if _is_obj(ask) else None)
+    if not known:
+        return
+    field = (vocab("decisionOptions") or ["decision"])[0]
+    b = step.get("branch")
+    when = b.get("when") if _is_obj(b) and isinstance(b.get("when"), list) else []
+    rules = [(r, rule) for r, rule in enumerate(when) if _is_obj(rule) and rule.get("field") == field]
+    if gate and not rules:
+        add("warning", where, p, f"no `branch` rule on this stage reads `{field}`, so every option "
+            "continues to the next stage")
+    lower = {k.lower() for k in known}
+    for r, rule in rules:
+        vals = ([rule["equals"]] if "equals" in rule else []) + (rule["in"] if isinstance(rule.get("in"), list) else [])
+        for v in vals:
+            if isinstance(v, str) and v.strip().lower() not in lower:
+                add("warning", where, f"steps[{i}].branch.when[{r}]",
+                    f'`{field}` is one of: {", ".join(known)}; "{v}" is not one, so this rule never matches')
+# --- end v139 Track D (decide) -----------------------------------------------------------
+
+
 def _check_after(t, where: dict, p: str, add) -> None:
     """`after` as a gate's timeout reads it: <n>m, <n>h or <n>d, at most 30 days."""
     m = AFTER_RE.match(t) if isinstance(t, str) else None
@@ -636,6 +702,8 @@ def _check_asks(agents: dict, tools: dict, add) -> None:
                     add("error", where, f"{path}.askPerson.maxQuestions", "must be from 1 to 10")
                 if "timeout" in ask:
                     _check_after(ask["timeout"], where, f"{path}.askPerson.timeout", add)
+                if isinstance(ask.get("options"), list):  # v139 Track D (its type: the generic check)
+                    _check_option_list(ask["options"], where, f"{path}.askPerson.options", add)
         if variant_of("agent", a) == "dedicated":
             for key in tools_of(a.get("tool")):
                 t = tools.get(key)
@@ -1446,6 +1514,9 @@ def validate(wf: dict) -> list[dict]:
                              str(KEYS["orchestrator"]["keys"]["defaultModel"].get("default") or ""))
     export_check.check(wf.get("orchestrator"), add)
     network_check.check(wf.get("orchestrator"), agents, add, VOCAB.get, tools)
+    # --- begin Track E storage ---
+    storage_check.check(wf, add, vocab, vocab_extra)
+    # --- end Track E storage ---
     _check_sign_in(wf.get("authorization"), add)
     _check_named(wf, add, out)
 
@@ -1493,7 +1564,9 @@ def validate(wf: dict) -> list[dict]:
             if isinstance(kb_id, str) and not KB_ID_RE.match(kb_id):
                 add("error", where, f"{path}.knowledgeBaseId",
                     "must be a Knowledge Base id: 10 capital letters and digits")
-            if isinstance(s3_uri, str) and not S3_LOCATION_RE.match(s3_uri):
+            # Track E storage: the ${storage} token stands for the build's bucket (storage_check.py).
+            if isinstance(s3_uri, str) and not S3_LOCATION_RE.match(
+                    storage_check.as_checked(s3_uri, vocab("storageToken")[0])):
                 add("error", where, f"{path}.s3Uri", "must be s3://<bucket> or s3://<bucket>/<prefix>/")
             if isinstance(kms, str) and not KMS_KEY_ARN_RE.match(kms):
                 add("error", where, f"{path}.kmsKeyArn",
@@ -1645,6 +1718,10 @@ def validate(wf: dict) -> list[dict]:
                     f'"{arg}" is not a property of {called} ({", ".join(props_of[called])}). '
                     "Set `arg` to the property the agent's query goes into.")
             browser_tool.check(tool, path, where, add)
+            # --- begin Track B docgen
+            orch = wf.get("orchestrator")
+            docgen_tool.check(tool, path, where, add, _is_obj(orch) and orch.get("files") is not None)
+            # --- end Track B docgen
     for t in ("kb", "websearch"):
         if len(kinds.get(t, [])) > 1:
             for key in kinds[t]:
@@ -1780,6 +1857,7 @@ def validate(wf: dict) -> list[dict]:
                 f'"{step["gateId"]}" is also an agent id — pick a different gate id')
         _check_branch(steps, i, out)
         _check_hitl(step, i, add)
+        _check_decisions(step, i, agents, add)  # v139 Track D
         prev = steps[i - 1] if i > 0 else None
         if _is_obj(prev) and _jst(prev.get("parallel")) and not _jst(prev.get("hitl")) and _jst(step.get("hitl")):
             add("warning", where, path,

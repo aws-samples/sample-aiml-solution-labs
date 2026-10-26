@@ -337,6 +337,9 @@ def read_secrets(env: dict, bid: str) -> dict:
     idents = data.get("identitySecrets") or {}
     # orchestrator.export's headers, by name (terraform/export.tf, cdk/lib/export.ts).
     exports = data.get("exportHeaders") or {}
+    # A deliver step's webhook signing secrets, by name (v139 Track C deliver;
+    # terraform/deliver.tf, cdk/lib/deliver.ts).
+    delivers = data.get("deliverSecrets") or {}
     out = {}
     if keys:
         out["TOOL_API_KEYS"] = out["TF_VAR_tool_api_keys"] = json.dumps(keys)
@@ -346,8 +349,11 @@ def read_secrets(env: dict, bid: str) -> dict:
         out["IDENTITY_SECRETS"] = out["TF_VAR_identity_secrets"] = json.dumps(idents)
     if exports:
         out["EXPORT_HEADERS"] = out["TF_VAR_export_headers"] = json.dumps(exports)
+    if delivers:
+        out["DELIVER_SECRETS"] = out["TF_VAR_deliver_secrets"] = json.dumps(delivers)
     print(f"runner: using {len(keys)} tool API key(s), {len(tokens)} A2A token(s), "
-          f"{len(idents)} identity secret(s) and {len(exports)} export header set(s)")
+          f"{len(idents)} identity secret(s), {len(exports)} export header set(s) and "
+          f"{len(delivers)} delivery secret(s)")
     return out
 
 
@@ -463,6 +469,30 @@ def install_code_requirements(workflow: dict) -> list[str]:
     if done:
         print(f"runner: installed the requirements of {', '.join(done)}")
     return done
+
+
+# --- begin Track B docgen
+def install_builtin_requirements(workflow: dict) -> list[str]:
+    """pip install the pinned requirements.txt of each built-in function a tool names
+    (type "lambda" with `source`; today only "docgen" has one) into its folder,
+    app/tools/<source>/, which CDK and Terraform then zip as they are. Once per source,
+    with the same options as a code tool's (CODE_PIP), so its wheels are Lambda's."""
+    done = []
+    for t in (workflow.get("tools") or {}).values():
+        source = t.get("source") if isinstance(t, dict) and str(t.get("type") or "").lower() == "lambda" else None
+        if not isinstance(source, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", source) or source in done:
+            continue
+        folder = ROOT / "app" / "tools" / source
+        req = folder / "requirements.txt"
+        if not req.is_file():
+            continue
+        check_requirements(req.read_text(), source)
+        run([sys.executable, "-m", "pip", "install", "-r", str(req), "-t", str(folder), *CODE_PIP], ROOT)
+        done.append(source)
+    if done:
+        print(f"runner: installed the libraries of the built-in {', '.join(done)} function(s)")
+    return done
+# --- end Track B docgen
 
 
 def read_git_tokens(env: dict, bid: str) -> dict:
@@ -1041,6 +1071,38 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
     return {"stack": stack, **cdk_outputs(out, stack)}
 
 
+# --- begin Track E storage ---
+#: The Terraform addresses of a build's storage (terraform/storage.tf): the bucket and its
+#: settings, policy and ABAC status.
+STORAGE_ADDRESS = re.compile(r"^aws_s3_bucket(_[a-z_]+)?\.storage(_tls)?\[0\]$")
+
+
+def storage_retained(workflow: dict) -> bool:
+    """orchestrator.storage {create: true, retain: true}: a destroy keeps the bucket."""
+    orch = workflow.get("orchestrator") if isinstance(workflow.get("orchestrator"), dict) else {}
+    st = orch.get("storage") if isinstance(orch.get("storage"), dict) else {}
+    return st.get("create") is True and st.get("retain") is True
+
+
+def keep_retained_storage(tf: str, tf_dir: Path, sub_env: dict) -> list[str]:
+    """Before a `terraform destroy`: with orchestrator.storage.retain, take the storage out of
+    the state, so the destroy leaves the bucket and its contents. (The CDK path keeps it with
+    RemovalPolicy.RETAIN, cdk/lib/storage.ts.) The addresses removed, [] otherwise."""
+    wf_path = ROOT / "app" / "workflow.json"
+    if not wf_path.exists() or not storage_retained(json.loads(wf_path.read_text())):
+        return []
+    listed = subprocess.run([tf, "state", "list"], cwd=tf_dir,  # noqa: S603 - terraform argv list, no shell  # nosec B603  # nosemgrep
+                            capture_output=True, text=True, check=False,
+                            env={**os.environ, **sub_env}).stdout.split()
+    keep = [a for a in listed if STORAGE_ADDRESS.match(a)]
+    if keep:
+        run([tf, "state", "rm", *keep], tf_dir, sub_env)
+        print(f"runner: orchestrator.storage.retain: keeping the build's storage ({len(keep)} resource(s) "
+              "left out of the destroy)", flush=True)
+    return keep
+# --- end Track E storage ---
+
+
 def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
                      sub_env: dict | None = None, tags: dict | None = None,
                      target: Target | None = None, signin: dict | None = None,
@@ -1082,6 +1144,7 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
             build_ui.append("-replace=null_resource.ui_build")
     run(build_ui, tf_dir, sub_env)
     if action == "destroy":
+        keep_retained_storage(tf, tf_dir, sub_env)  # Track E storage
         destroy = [tf, "destroy", "-auto-approve", "-input=false", "-no-color"]
         for attempt in range(DESTROY_RETRIES + 1):
             if attempt:
@@ -1244,6 +1307,7 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
         # Hosted MCP servers' code (tools.<key>.hosted), for the image CDK / Terraform build.
         prepare_hosted_mcp(bundle.get("workflow") or {}, bid, env, target, action)
         install_code_requirements(bundle.get("workflow") or {})
+        install_builtin_requirements(bundle.get("workflow") or {})  # Track B docgen
         sync_documents(s3, bucket, bid)
         if action == "destroy":
             stand_in_corpora(bundle.get("workflow") or {})

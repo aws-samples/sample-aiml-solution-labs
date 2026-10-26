@@ -39,6 +39,9 @@ import { PaletteGroup, PRIMITIVE_TAB, PrimitivePalette } from "./Primitives";
 import { DesignChat } from "./DesignChat";
 import { ExportSettings, exportSummary } from "./ExportSettings";
 import { NetworkFields } from "./NetworkSettings";
+// --- begin Track E storage ---
+import { StorageSettings } from "./StorageSettings";
+// --- end Track E storage ---
 import { BuildPolicies, policyBlock } from "./Policies";
 import { BuildInterceptors, interceptorsOf } from "./Interceptors";
 import { BuildSuites } from "./Suites";
@@ -77,6 +80,7 @@ import { RegistryPublish } from "./RegistryPublish";
 import { MoveToTeam } from "./Teams";
 import { validate, type Issue } from "./validate";
 import { modelIssues, useModels } from "./models";
+import { interceptorIssues } from "./interceptorCode";
 import { DOCS, useDocsBase, type DocsFeature } from "../docs/docsLinks";
 import { InfoLink, infoSlot } from "../docs/InfoLink";
 import "./builder.css";
@@ -697,8 +701,9 @@ function Editor({
   useEffect(() => { setSelection(null); }, [project.id]);
 
   const models = useModels();
-  const issues = useMemo(() => [...validate(project.workflow), ...modelIssues(project.workflow, models.models, models.litellm)],
-    [project.workflow, models.models, models.litellm]);
+  const issues = useMemo(() => [...validate(project.workflow), ...modelIssues(project.workflow, models.models, models.litellm),
+    ...interceptorIssues(project.workflow, project.toolCode)],
+  [project.workflow, project.toolCode, models.models, models.litellm]);
   const errors = issues.filter((i) => i.severity === "error").length;
   const warnings = issues.length - errors;
 
@@ -1063,13 +1068,15 @@ function Editor({
                   <Container key={name} header={<Header variant="h2" description={block(name).$comment?.split(". ")[0]}
                     info={infoSlot(docs, settingsDocs[name])}>{name}</Header>}>
                     <EntryForm name={name} entry={(wf[name] ?? {}) as Entry} issues={issues} pathPrefix={name}
-                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true }, export: { hidden: true }, network: { hidden: true } }
+                      overrides={name === "orchestrator" ? { policy: { hidden: true }, interceptors: { hidden: true }, triggers: { hidden: true }, export: { hidden: true }, network: { hidden: true }, storage: { hidden: true } }
                         : name === "authorization" ? SIGN_IN_HIDDEN : undefined}
                       onChange={(e) => setProject(name === "ui" ? setUi(project, e as Record<string, Json>)
                         : { ...project, workflow: { ...wf, [name]: e } })} />
                   </Container>
                 ))}
                 <ExportSettings project={project} setProject={setProject} buildId={server ? build?.id : undefined} notify={notify} />
+                {/* Track E storage: the build's own bucket (orchestrator.storage). */}
+                <StorageSettings project={project} setProject={setProject} issues={issues} />
                 <Container header={<Header variant="h2"
                   description="Where the shared orchestrator AgentCore Runtime runs: every main and task agent runs in it. A dedicated agent sets its own network in its panel; a remote (a2a) agent runs outside this build."
                   info={infoSlot(docs, "settings.network")}>

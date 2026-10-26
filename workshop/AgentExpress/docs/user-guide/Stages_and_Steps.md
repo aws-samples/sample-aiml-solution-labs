@@ -1,6 +1,6 @@
 # Stages and steps
 
-A stage is one step of the workflow on the canvas. Stages run from top to bottom, and each holds one agent or several. Use this when you lay out the order of a workflow: pick a stage shape, add a review gate or a branch, and add generic steps, which are steps with no model.
+A stage is one step of the workflow on the canvas. Stages run from top to bottom, and each holds one agent or several. Use this when you lay out the order of a workflow: pick a stage shape, add a review gate or a branch, and add generic steps, which are steps with no model, such as one that delivers the run's files.
 
 # Pick a stage shape
 
@@ -70,7 +70,7 @@ A branch lets a stage's output pick what runs next, with no agent code. A triage
 
 # Add a generic step
 
-A generic step (`runtime: "task"`) is a step with no model. Use one for work that needs no reasoning: call a tool with fixed arguments, run a script, read a document, or write a file. It runs in the orchestrator and costs no model call.
+A generic step (`runtime: "task"`) is a step with no model. Use one for work that needs no reasoning: call a tool with fixed arguments, run a script, read a document, write a file, or deliver the run's files. It runs in the orchestrator and costs no model call.
 
 1. Drag **+ New generic step** from the palette onto the canvas, or click it to add it at the end.
 1. In its settings, pick **What it does**. Until you pick one, the step is an error and the build cannot deploy.
@@ -82,6 +82,7 @@ A generic step (`runtime: "task"`) is a step with no model. Use one for work tha
 | **Run code** | **Language**, **Script** | Python, JavaScript or TypeScript in the AgentCore Code Interpreter sandbox. Up to 50,000 bytes of code and 120 seconds. Each run is a billed session. |
 | **Read a document** | **File**, **Also read** | Reads text, tables and forms from the run's PDF, PNG and JPEG files with Amazon Textract. Billed per page; not in every Region. |
 | **Write a file** | **Format**, **File name**, **From** | Writes CSV, JSON, Markdown or text from earlier steps' output and keeps it with the run |
+| **Deliver files** | **Send to** and its fields, per target | Sends the files the run saved to Amazon S3, by email with Amazon SES, or to a webhook. See [Deliver a run's files](#deliver-a-runs-files). |
 
 Every kind also has **Name**, **Step id** (later steps read this step's output by it) and **Stage**.
 
@@ -93,14 +94,43 @@ A Run code script reads the request from `in/request.txt`, earlier outputs from 
 
 A Call a tool step's arguments and a Write a file step's file name can use the request, the run ID and earlier outputs as placeholders, each written in double curly braces, for example `outputs.intake.service` inside them. Each step a placeholder names must run earlier.
 
+# Deliver a run's files
+
+A **Deliver files** step sends the files the run's steps saved (the run's **Files** tab) to up to 10 targets. It needs the build to keep run files: its panel offers **Keep run files** when it does not.
+
+1. Add a generic step after the steps that make the files, and pick **Deliver files** in **What it does**.
+1. For each target, pick **Send to** and fill in its fields. **Add a target** adds another.
+1. Optionally narrow each target with **Files** (name patterns such as `*.pdf`), **Made by** (only files those steps saved) and **Only when** (a field of an earlier output, such as `outputs.check.passed` equals `true`).
+
+| Send to | Fields | Good to know |
+|---|---|---|
+| **Amazon S3** | **Bucket and prefix** | `s3://<bucket>/<prefix>/`, or `${storage}/<prefix>/` for the build's storage. Each file is copied to `<prefix><run id>/<name>`. The runtime may write only under the prefixes you give. |
+| **Email (Amazon SES)** | **SES identity ARN**, **From address**, **To**, **Subject**, **Message**, **Attach the files** | Sent with Amazon SES from an identity you verified in SES, to at most 50 addresses you write. The files are attached while they are 25 MB or less together, and sent as links otherwise. **Also send to addresses from a step's output** is off unless you set it. |
+| **Webhook** | **URL**, **Signing secret name** | An https POST of each file's name, size, the step that made it and a link. Private and internal addresses are refused. With a signing secret, the body is signed with the `X-AX-Timestamp` and `X-AX-Signature` headers, as webhook triggers are. |
+
+Good to know:
+
+- To deliver only when a check passed or a person chose to go on, put the step after the review gate or the branch. See [Offer named options at a gate](Human_in_the_Loop.md#offer-named-options-at-a-gate).
+- While your account is in the SES sandbox, you can send only to verified addresses, 200 messages a day and 1 a second. SES's own error is shown on the run's timeline. See [Request production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html).
+- Links last 60 minutes by default (**Links last (minutes)**, at most 10,080), and end sooner if the runtime's credentials do.
+- Every delivery, skip and failure is a line on the run's timeline. Each delivery or failure is also in the **Activity** log.
+- A failed target fails the step after the others were tried.
+- A build without a Deliver files step deploys exactly as before.
+
 # Ask the Assistant
 
-The AgentExpress Assistant can lay out and change the whole stage list: shapes and order, review gates with their mode, rules, timeout and where they are answered, gate ids and names, and branch rules. It can also add any of the four generic steps, including a Run code step that points at a script you keep in Git or S3. Requests you can paste:
+The AgentExpress Assistant can lay out and change the whole stage list: shapes and order, parallel stages, review gates with their mode, rules, named options, timeout and where they are answered, gate ids and names, and branch rules. It can also add any of the five generic steps, including a Run code step that points at a script you keep in Git or S3, and a Deliver files step. Requests you can paste:
 
 - "Run policyCheck and research in parallel, with a review gate named Evidence after them"
 - "After triage, go to investigator if disposition equals escalate, and end the run if there is no claimId"
 - "If nobody answers the Evidence gate within 24 hours, approve it"
 - "Add a generic step at the end that writes the report as a Markdown file"
+- "Generate the PDF report, the PPTX deck and the DOCX summary in parallel"
+- "After the check, deliver the PDF and PPTX files to the build's storage under delivered/"
+- "Email the report to team@example.com from reports@example.com, with my SES identity for example.com"
+- "Post the run's files to https://hooks.example.com/in, signed with a secret named hook"
+
+It sends email only to the recipients you give it, never to addresses a model wrote. It can name a webhook's signing secret, but you enter its value yourself, under **Signing secret** in the step's panel.
 
 Answering a gate (approve, revise or deny) happens in the execution plane, on the run page. See [Human in the loop](Human_in_the_Loop.md).
 

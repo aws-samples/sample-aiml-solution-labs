@@ -18,9 +18,13 @@ locals {
   # turned on: aws s3api put-bucket-abac). Anything else in the account stays out of
   # reach whatever a build names. Mirrors CODE_GRANTABLE in cdk/lib/tool-plane.ts.
   code_grantable = { StringEquals = { "aws:ResourceTag/agentexpress:code-tools" = "true" } }
+  # --- begin Track E storage ---
+  # The grant's s3Prefix with the ${storage} token resolved (storage.tf): as written otherwise.
+  code_tool_s3_prefix = { for n, g in local.code_tool_grants : n => replace(try(g.s3Prefix, ""), local.storage_token, local.storage_uri) }
+  # --- end Track E storage ---
   code_tool_s3 = { for n, g in local.code_tool_grants : n => {
-    bucket = split("/", replace(try(g.s3Prefix, ""), "s3://", ""))[0]
-    prefix = join("/", slice(split("/", replace(try(g.s3Prefix, ""), "s3://", "")), 1, length(split("/", replace(try(g.s3Prefix, ""), "s3://", "")))))
+    bucket = split("/", replace(local.code_tool_s3_prefix[n], "s3://", ""))[0]
+    prefix = join("/", slice(split("/", replace(local.code_tool_s3_prefix[n], "s3://", "")), 1, length(split("/", replace(local.code_tool_s3_prefix[n], "s3://", "")))))
   } }
   code_tool_statements = { for n, g in local.code_tool_grants : n => concat(
     [{
@@ -65,6 +69,18 @@ locals {
       Resource  = ["arn:aws:s3:::${local.code_tool_s3[n].bucket}"]
       Condition = merge(local.code_grantable, { StringLike = { "s3:prefix" = ["${local.code_tool_s3[n].prefix}*"] } })
     }] : s if !(try(g.s3Prefix, "") == "")],
+    # --- begin Track E storage ---
+    # The build's storage is encrypted with the build's key: reading needs kms:Decrypt and
+    # writing kms:GenerateDataKey, on that key only and only through S3. Mirrors UseStorageKey
+    # in cdk/lib/tool-plane.ts codeToolStatements.
+    [for s in [{
+      Sid       = "UseStorageKey"
+      Effect    = "Allow"
+      Action    = try(g.s3Access, "read") == "readwrite" ? ["kms:Decrypt", "kms:GenerateDataKey"] : ["kms:Decrypt"]
+      Resource  = [aws_kms_key.data.arn]
+      Condition = { StringEquals = { "kms:ViaService" = "s3.${var.region}.amazonaws.com" } }
+    }] : s if local.storage_kms && !(try(g.s3Prefix, "") == "") && local.code_tool_s3[n].bucket == local.storage_bucket_name],
+    # --- end Track E storage ---
     # Only when granted. A for-filter, not a conditional: the two results would
     # be tuples of different types, which Terraform refuses to unify.
     [for s in [{
@@ -168,7 +184,7 @@ resource "aws_lambda_function" "tool_code" {
       try(each.value.code.environment, {}),
       try(local.code_tool_grants[each.key].secret, "") == "" ? {} : { SECRET_NAME = local.code_tool_grants[each.key].secret },
       try(local.code_tool_grants[each.key].table, "") == "" ? {} : { TABLE_NAME = local.code_tool_grants[each.key].table },
-      try(local.code_tool_grants[each.key].s3Prefix, "") == "" ? {} : { S3_PREFIX = local.code_tool_grants[each.key].s3Prefix },
+      try(local.code_tool_grants[each.key].s3Prefix, "") == "" ? {} : { S3_PREFIX = local.code_tool_s3_prefix[each.key] },
     )
   }
   dynamic "vpc_config" {

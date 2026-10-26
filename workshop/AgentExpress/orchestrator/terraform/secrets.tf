@@ -30,12 +30,13 @@ resource "aws_secretsmanager_secret" "runtime" {
 resource "aws_secretsmanager_secret_version" "runtime" {
   count     = local.workflow_plane ? 1 : 0
   secret_id = aws_secretsmanager_secret.runtime[0].id
-  secret_string = jsonencode({
+  secret_string = jsonencode(merge({
     GATEWAY_CLIENT_SECRET = local.gateway_enabled ? local.gateway_client_secret : ""
     # orchestrator.gatewayIdentity "perAgent": each in-process agent's own client.
     GATEWAY_AGENT_CLIENTS = local.agent_clients_env
     A2A_TOKENS            = local.a2a_tokens_env
-  })
+    # v139 Track C deliver: DELIVER_SECRETS, only when a webhook target signs (deliver.tf).
+  }, local.deliver_secrets_env))
 }
 
 resource "aws_iam_role_policy" "runtime_secret" {

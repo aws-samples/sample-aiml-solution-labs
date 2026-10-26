@@ -99,7 +99,7 @@
      "properties": {
       "kind": {
        "type": "string",
-       "doc": "What the step does: \"tool\", \"code\", \"extract\" or \"output\" (taskKinds in vocabulary.json)."
+       "doc": "What the step does: \"tool\", \"code\", \"extract\", \"output\" or \"deliver\" (taskKinds in vocabulary.json)."
       },
       "tool": {
        "type": "string",
@@ -142,10 +142,15 @@
        "type": "array",
        "items": "string",
        "doc": "kind \"output\": which earlier outputs to write: agent ids, or <agent>.<field> for part of one. Default every earlier step's."
+      },
+      "targets": {
+       "type": "array",
+       "items": "object",
+       "doc": "kind \"deliver\": where to send the run's files, 1 to 10 targets. Each has `type` (\"s3\", \"email\" or \"webhook\"), optional `files` (name patterns with * and ?), `producedBy` (step ids whose files to send) and `when` (one condition, {\"field\": \"outputs.<step>.<field>\", \"equals\": ...}, with the operators of branch.when). s3: `uri` s3://<bucket>/<prefix>/ or ${storage}/<prefix>/; each file goes to <prefix><session>/<name>. email: `identityArn` (an SES identity), `fromAddress`, `to` (1-50 addresses you write), optional `subject`, `body`, `attach` (default true; links when the files are over 25 MB together), `recipientsFrom` (one {{outputs.<step>.<field>}} that adds addresses from a step's output), `linkExpiresMinutes`. webhook: `url` (https), optional `secret` (the NAME of a deliverSecrets build secret; the body is signed as X-AX-Signature), `linkExpiresMinutes`. Needs orchestrator.files."
       }
      },
-     "doc": "A step with no model call. {\"kind\": \"tool\", \"tool\": \"pricing\", \"arguments\": {\"service\": \"{{outputs.intake.service}}\"}} calls a tool through the Gateway (Cedar policy and interceptors apply); {\"kind\": \"code\", \"code\": \"...\"} runs a script in the AgentCore Code Interpreter sandbox; {\"kind\": \"extract\"} reads the run's PDFs and images with Amazon Textract (needs `attachments`); {\"kind\": \"output\", \"format\": \"csv\"} writes a file from earlier outputs (needs orchestrator.files). Its output is JSON, read downstream with ctx.input(<id>) like any agent's.",
-     "reads": "registry.py -> TaskAgent (app/common/task_agent.py); bff/task_check.py, web/src/builder/taskCheck.ts; tasks.tf / cdk/lib/tasks.ts (IAM)"
+     "doc": "A step with no model call. {\"kind\": \"tool\", \"tool\": \"pricing\", \"arguments\": {\"service\": \"{{outputs.intake.service}}\"}} calls a tool through the Gateway (Cedar policy and interceptors apply); {\"kind\": \"code\", \"code\": \"...\"} runs a script in the AgentCore Code Interpreter sandbox; {\"kind\": \"extract\"} reads the run's PDFs and images with Amazon Textract (needs `attachments`); {\"kind\": \"output\", \"format\": \"csv\"} writes a file from earlier outputs (needs orchestrator.files); {\"kind\": \"deliver\", \"targets\": [{\"type\": \"s3\", \"uri\": \"s3://bucket/reports/\"}]} sends the run's files to S3, by email or to a webhook (needs orchestrator.files). Its output is JSON, read downstream with ctx.input(<id>) like any agent's.",
+     "reads": "registry.py -> TaskAgent (app/common/task_agent.py, app/common/deliver.py); bff/task_check.py, web/src/builder/taskCheck.ts; tasks.tf / cdk/lib/tasks.ts, deliver.tf / cdk/lib/deliver.ts (IAM)"
     },
     "instructions": {
      "group": "harness",
@@ -605,6 +610,11 @@
       "timeout": {
        "type": "string",
        "doc": "With no answer by then (<n>m, <n>h or <n>d, at most 30d), the question goes unanswered and the agent carries on."
+      },
+      "options": {
+       "type": "array",
+       "items": "string",
+       "doc": "Named options this agent may ask a person to choose between, 2-6 labels, e.g. [\"Load images\", \"Continue\"]. Its model is also offered a `request_decision(question)` tool: the run page shows the question with one button per option and an optional comment, the model reads the choice, and the choice is the run field `decision` that this step's `branch.when` can route on."
       }
      },
      "doc": "Let this agent ask a person a question in the middle of its step (\"Which region did the claimant mean?\"): its model is offered an `ask_person` tool, the run waits for the answer on the run page, and the model reads it as the tool's result. true, or {\"maxQuestions\": 3, \"timeout\": \"24h\"}. Needs toolMode \"model\". A run started unattended (gates \"auto\") answers \"no person is available\". Model and tool calls made before the question are not repeated when the run resumes.",
@@ -1553,6 +1563,35 @@
      "doc": "The Browser tool (source \"browser\") only: the domains it may open, e.g. [\"docs.aws.amazon.com\"]. Each entry also allows the names under it (docs.aws.amazon.com allows a.docs.aws.amazon.com). Written as a name, with no https://, path, port or *; at most 50. Checked by the tool's function for the page asked for AND the page a redirect ends on, so a model cannot widen it. Left out: any public page.",
      "reads": "tools.tf / browser-tool.ts, as the function's ALLOW_DOMAINS; app/tools/browser/handler.py"
     },
+    "formats": {
+     "group": "target",
+     "type": "array",
+     "items": "string",
+     "vocabulary": "docgenFormats",
+     "appliesTo": [
+      "lambda"
+     ],
+     "doc": "Track B docgen. The Document generator (source \"docgen\") only, and required there: the files it may write, any of \"pdf\", \"pptx\", \"docx\", each once. A call asking for another format is refused by the function.",
+     "reads": "docgen_tool.tf / docgen-tool.ts, as the function's FORMATS; app/tools/docgen/handler.py"
+    },
+    "templateS3Uri": {
+     "group": "target",
+     "type": "string",
+     "appliesTo": [
+      "lambda"
+     ],
+     "doc": "Track B docgen. The Document generator (source \"docgen\") only: where its templates are. Either one template, s3://<bucket>/<key>.pptx or .docx, or a folder of them, s3://<bucket>/<prefix>/, from which a call picks one by name (`template`). The function's role may read only that object or that folder. Fields are {{name}}; lists repeat table rows, paragraphs and slides (docs/WORKFLOW_REFERENCE.md). PDF always uses the built-in layout. Left out: the built-in layout for every format. Also takes ${storage}/... (the build's storage).",
+     "reads": "docgen_tool.tf / docgen-tool.ts, as the function's TEMPLATE_S3_URI and its read grant"
+    },
+    "outputPrefix": {
+     "group": "target",
+     "type": "string",
+     "appliesTo": [
+      "lambda"
+     ],
+     "doc": "Track B docgen. The Document generator (source \"docgen\") only: an s3://<bucket>/<prefix>/ (ending in /) it also writes each file to, as <prefix><run>/<name>, and links to. Left out: the run's Files only (runs/<run>/outputs/ in the assets bucket). The function's role may write only there. Also takes ${storage}/.../ (the build's storage).",
+     "reads": "docgen_tool.tf / docgen-tool.ts, as the function's OUTPUT_PREFIX and its write grant"
+    },
     "publishedFrom": {
      "group": "filter",
      "type": "string",
@@ -1723,7 +1762,7 @@
       "object"
      ],
      "appliesTo": "*",
-     "doc": "Pause after this step for a human to approve, revise or deny. Revise re-runs the step with the reviewer's comment as feedback. true is always, in the console. Or an object: `mode` always (default), threshold (a person only when a `when` rule matches the output: branch rules without `goto`) or auto (approves itself, logged); `approval` console (default) or event (also asked for as an \"AgentExpress Approval Requested\" event, and answerable with an \"AgentExpress Approval Decision\" event); `timeout` {\"after\": \"24h\", \"action\": \"approve\" | \"deny\"}.",
+     "doc": "Pause after this step for a human to approve, revise or deny. Revise re-runs the step with the reviewer's comment as feedback. true is always, in the console. Or an object: `mode` always (default), threshold (a person only when a `when` rule matches the output: branch rules without `goto`) or auto (approves itself, logged); `approval` console (default) or event (also asked for as an \"AgentExpress Approval Requested\" event, and answerable with an \"AgentExpress Approval Decision\" event); `timeout` {\"after\": \"24h\", \"action\": \"approve\" | \"deny\"}; `options` [\"Override\", \"Abort\"] (2-6 named options a person chooses between instead of approve / revise / deny, with an optional comment; the choice is the run field `decision` that this step's `branch.when` routes on; single-agent and sequence steps, not with approval event).",
      "reads": "graph_builder gate nodes and routers; app/common/gates.py; bff/gates.py"
     },
     "gateId": {
@@ -1964,6 +2003,25 @@
      },
      "doc": "The shared orchestrator AgentCore Runtime's network, for every main and task agent: {\"mode\": \"VPC\", \"subnetIds\": [\"subnet-...\"], \"securityGroupIds\": [\"sg-...\"]} (1-16 each) or {\"mode\": \"PUBLIC\"}. Omitted: PUBLIC. Dedicated agents set their own.",
      "reads": "cdk/lib/runtime-network.ts (orchestrator-stack.ts Orchestrator), terraform/main.tf; bff/network_check.py. https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/agentcore-vpc.html"
+    },
+    "storage": {
+     "type": "object",
+     "properties": {
+      "create": {
+       "type": "boolean",
+       "doc": "true: the deploy creates the build's own S3 bucket, <build name>-storage-<account>: private (all four Block Public Access settings), HTTPS only, versioned (old versions kept 30 days), encrypted with the build's KMS key, tagged agentexpress:code-tools=true with ABAC on so code tool grants reach it. Default false."
+      },
+      "retain": {
+       "type": "boolean",
+       "doc": "true: destroying the build keeps the bucket and everything in it, encrypted with S3-managed keys because the build's KMS key is deleted with the build. Default false: a destroy empties the bucket (every version) and deletes it."
+      }
+     },
+     "default": {
+      "create": false,
+      "retain": false
+     },
+     "doc": "Storage created for the build: {\"create\": true} makes a private bucket that tools reach through the ${storage} token, e.g. a code tool's grants.s3Prefix \"${storage}/templates/\" or a kb tool's s3Uri \"${storage}/kb/\". Not set or create false: no bucket, and nothing in the deployment changes.",
+     "reads": "terraform/storage.tf / cdk/lib/storage.ts (the bucket, the token, STORAGE_BUCKET on the orchestrator runtime); bff/storage_check.py; deployer/runner.py (retain on a Terraform destroy)"
     }
    }
   },
@@ -3057,7 +3115,16 @@
    "values": [
     "pricing",
     "codeInterpreter",
-    "browser"
+    "browser",
+    "docgen"
+   ]
+  },
+  "docgenFormats": {
+   "$comment": "Track B docgen. The files the Document generator (a type=\"lambda\" tool with source \"docgen\", app/tools/docgen/) writes, in its `formats`: pdf (reportlab, always the built-in layout), pptx (python-pptx) and docx (python-docx), the latter two into a template or the built-in layout. Closed because each is a renderer the function ships.",
+   "values": [
+    "pdf",
+    "pptx",
+    "docx"
    ]
   },
   "identityTypes": {
@@ -3168,6 +3235,15 @@
     "deny"
    ]
   },
+  "decisionOptions": {
+   "$comment": "v139 Track D. Named options a person chooses between mid-run: a review gate's steps[].hitl.options, or the options an agent with agents.<id>.askPerson.options asks with request_decision. `values` is the run field the chosen option becomes, which branch.when routes on ({\"field\": \"decision\", \"equals\": \"Override\", \"goto\": \"...\"}). A list of 2 to maxOptions labels, each at most labelChars characters, unique ignoring case.",
+   "values": [
+    "decision"
+   ],
+   "minOptions": 2,
+   "maxOptions": 6,
+   "labelChars": 60
+  },
   "interceptorContextSources": {
    "$comment": "Where the injectContext interceptor template takes an argument's value from (templates.injectContext.arguments): the run's session id, the calling agent's id, or the run's user, sent by the runtime as the x-ax-session / x-ax-agent / x-ax-user headers.",
    "values": [
@@ -3177,12 +3253,21 @@
    ]
   },
   "taskKinds": {
-   "$comment": "What a runtime \"task\" step does (agents.<id>.task.kind), with no model call: tool = call one of the build's tools through the Gateway with arguments built from the run; code = run a script in the AgentCore Code Interpreter sandbox; extract = read text, tables and form fields from the run's PDFs and images with Amazon Textract; output = write a file from earlier steps' outputs. Each needs its own framework code (app/common/task_agent.py), so the set is closed.",
+   "$comment": "What a runtime \"task\" step does (agents.<id>.task.kind), with no model call: tool = call one of the build's tools through the Gateway with arguments built from the run; code = run a script in the AgentCore Code Interpreter sandbox; extract = read text, tables and form fields from the run's PDFs and images with Amazon Textract; output = write a file from earlier steps' outputs; deliver = send the run's files to S3, by email (Amazon SES) or to a webhook (app/common/deliver.py). Each needs its own framework code (app/common/task_agent.py), so the set is closed.",
    "values": [
     "tool",
     "code",
     "extract",
-    "output"
+    "output",
+    "deliver"
+   ]
+  },
+  "deliverTargetTypes": {
+   "$comment": "Where a deliver step (task.kind \"deliver\") sends the run's files (task.targets[].type): s3 = copy them to a bucket and prefix; email = send them with Amazon SES from a verified identity, attached or as links; webhook = POST their links and metadata to an https URL. Each needs its own framework code (app/common/deliver.py), so the set is closed.",
+   "values": [
+    "s3",
+    "email",
+    "webhook"
    ]
   },
   "taskLanguages": {
@@ -3708,6 +3793,20 @@
      }
     }
    }
+  },
+  "storageToken": {
+   "$comment": "Build storage (orchestrator.storage). The token a workflow.json value writes for the build's own bucket (orchestrator.storage.create): \"${storage}\" stands for s3://<the bucket>, so \"${storage}/templates/\" is s3://<the bucket>/templates/. It must start the value. `fields` are the only places it is read (a * matches any key or list index): the IaC resolves it there at synth/plan (cdk/lib/storage.ts resolveStorage, terraform/storage.tf storage_uri), and both validators (bff/storage_check.py, web/src/builder/storageCheck.ts) refuse it anywhere else, or with no storage, rather than deploy the literal text.",
+   "values": [
+    "${storage}"
+   ],
+   "fields": [
+    "tools.*.code.grants.s3Prefix",
+    "tools.*.s3Uri",
+    "orchestrator.interceptors.*.code.grants.s3Prefix",
+    "tools.*.templateS3Uri",
+    "tools.*.outputPrefix",
+    "agents.*.task.targets.*.uri"
+   ]
   }
  },
  "defaults": {
@@ -3776,6 +3875,10 @@
    "gatewayIdentity": "shared",
    "files": {
     "retentionDays": 90
+   },
+   "storage": {
+    "create": false,
+    "retain": false
    }
   },
   "guardrail": {
@@ -3792,5 +3895,5 @@
    "scope": "user"
   }
  },
- "frameworkVersion": "1.3.8"
+ "frameworkVersion": "1.3.9"
 }

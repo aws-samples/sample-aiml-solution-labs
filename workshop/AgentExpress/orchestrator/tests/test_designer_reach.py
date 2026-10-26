@@ -216,5 +216,6 @@ def test_in_a_turn_the_model_searches_then_imports(env, reg, model):
     found = script.calls[1]["messages"][-1]["content"][0]["toolResult"]["content"][0]["json"]
     assert found["records"][0]["becomes"] == "tools.ordersMcp"
     names = [t["toolSpec"]["name"] for t in script.calls[0]["toolConfig"]["tools"]]
-    # Nothing publishes: the two besides apply/undo only read.
-    assert names == ["apply_changes", "undo_last_change", "search_registry", "fetch_url"]
+    # Nothing publishes: the two besides apply/undo/restore only read.
+    assert names == ["apply_changes", "undo_last_change", "restore_version", "search_registry",
+                     "fetch_url"]

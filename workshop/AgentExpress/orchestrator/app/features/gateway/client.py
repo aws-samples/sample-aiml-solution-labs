@@ -577,9 +577,29 @@ async def _query_tool_impl(tool_key: str, query: str,
     return (_extract_chunks(result), "gateway")
 
 
+#: Track B docgen. The one tool the Document generator (`source: "docgen"`,
+#: app/tools/docgen/) publishes. Its `runId` and `agent` say which run's Files the file is
+#: saved with, so they are set HERE, from the run this call serves, whatever the model or
+#: the step sent (a model must not write into another run's folder). Told by the published
+#: name, as artifacts.is_code_tool tells the sandbox: the runtime's tool entries keep the
+#: call shape only (config.APP_TOOL_KEYS), not `source`. `attempt` is this run of the step
+#: (Scope.attempt): a step's new attempt replaces the file its earlier attempt wrote.
+DOCGEN_TOOL = "generate_document"
+
+
+def _run_args(tool, args: dict) -> dict:
+    """`args`, with a Document generator call's runId, agent and attempt set from the run."""
+    if str(getattr(tool, "name", "") or "").rsplit("___", 1)[-1] != DOCGEN_TOOL:
+        return args
+    from app.features.observability.scope import get_scope
+    s = get_scope()
+    return {**args, "runId": s.session_id, "agent": s.agent_id, "attempt": s.attempt}
+
+
 async def _invoke(tool, args: dict):
     """Invoke one published tool with these arguments: the timeout, and a Cedar deny
     told apart from an outage. The one invoke path for direct and model-chosen calls."""
+    args = _run_args(tool, args)  # Track B docgen
     try:
         return await asyncio.wait_for(tool.ainvoke(args), timeout=MCP_TIMEOUT)
     except Exception as e:

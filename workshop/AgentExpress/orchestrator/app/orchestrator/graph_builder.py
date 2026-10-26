@@ -131,6 +131,12 @@ def validate_branches() -> None:
         # A review gate's own spec (app/common/gates.py): checked here too, so a typo in a
         # mode or a threshold rule fails the container at start rather than every run.
         gates.validate(step.get("hitl"), f"workflow.json steps[{i}] ({_step_name(step, i)})")
+        if "parallel" in step and isinstance(step.get("hitl"), dict) and "options" in step["hitl"]:
+            # v139 Track D: a parallel gate decides each agent, and a parallel stage cannot branch.
+            raise ValueError(
+                f"workflow.json steps[{i}] ({_step_name(step, i)}): `hitl.options` is not supported on a "
+                f"`parallel` step: its gate decides each agent separately, and nothing can route on "
+                f"the choice because a parallel stage cannot branch.")
     for i, step in enumerate(STEPS):
         spec = step.get("branch")
         if spec is None:

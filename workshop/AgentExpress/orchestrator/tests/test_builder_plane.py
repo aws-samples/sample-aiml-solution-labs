@@ -67,6 +67,32 @@ def test_the_deploy_policy_splits_into_policies_that_can_be_attached():
         assert len(body) < 6144, f"chunk {i // size} is {len(body)} characters"
 
 
+def test_the_deploy_policy_manages_only_the_framework_s_own_kms_keys():
+    """Tags are access control here (KmsDataKeyManage is gated on aws:ResourceTag/agentexpress:app,
+    https://docs.aws.amazon.com/kms/latest/developerguide/abac.html), so the deploy role may tag,
+    untag and alias only keys that already carry agentexpress:app, may never remove that tag, and
+    names only agentexpress-* aliases. An alias call is authorized on the alias AND the key
+    (https://docs.aws.amazon.com/kms/latest/developerguide/alias-access.html); conditions do not
+    apply to the alias, so its statement scopes by name only."""
+    stmts = {s["Sid"]: s for s in json.loads((ORCH / "terraform" / "deploy-role-policy.json").read_text())["Statement"]}
+    on_key = ("kms:TagResource", "kms:UntagResource", "kms:CreateAlias", "kms:DeleteAlias", "kms:UpdateAlias")
+    for sid, s in stmts.items():
+        actions = [s["Action"]] if isinstance(s["Action"], str) else s["Action"]
+        if s["Effect"] == "Allow" and any(a in on_key for a in actions):
+            assert sid in ("KmsDataKeyManage", "KmsDataKeyAlias"), sid
+    manage = stmts["KmsDataKeyManage"]
+    assert set(on_key) <= set(manage["Action"])
+    assert manage["Resource"] == "arn:aws:kms:*:*:key/*"
+    assert manage["Condition"] == {"Null": {"aws:ResourceTag/agentexpress:app": "false"}}
+    assert stmts["KmsDataKeyAlias"]["Resource"] == ["arn:aws:kms:*:*:alias/agentexpress-*"]
+    assert "Condition" not in stmts["KmsDataKeyAlias"]
+    keep = stmts["KmsDataKeyKeepAppTag"]
+    assert (keep["Effect"], keep["Action"], keep["Resource"]) == ("Deny", ["kms:UntagResource"], "arn:aws:kms:*:*:key/*")
+    assert keep["Condition"] == {"ForAnyValue:StringEquals": {"aws:TagKeys": ["agentexpress:app"]}}
+    assert not {"kms:TagResource", "kms:UntagResource"} & set(stmts["KmsDataKeyRead"]["Action"])
+    assert stmts["KmsDataKeyCreate"]["Condition"] == {"Null": {"aws:RequestTag/agentexpress:app": "false"}}
+
+
 def test_the_buildspec_runs_the_runner():
     spec = json.loads((ORCH / "deployer" / "buildspec.json").read_text())
     assert "python3 deployer/runner.py" in "\n".join(spec["phases"]["build"]["commands"])

@@ -387,7 +387,11 @@
 
   "builtinLambdaSource": {
     "$comment": "A `type: \"lambda\"` tool's `source`: the folder under orchestrator/app/tools/ whose code the framework zips and deploys. Closed to the ones the repo ships, because a framework-deployed function needs an execution role config cannot express - each shipped function has a role written for it (pricing: logs plus read-only on the PUBLIC AWS price list; codeInterpreter: one AgentCore Code Interpreter sandbox; browser: sessions on the AWS-managed AgentCore Browser), which is wrong for a connector that needs VPC config or a secret. Your own function is deployed by you and declared with `lambdaArn`; the framework only registers it as a Gateway target. NOTE this closes `source` for type=\"lambda\" ONLY, via `vocabularyFor` in app/keys.json. A type=\"openapi\" `source` is deliberately OPEN: the framework only uploads a file, which needs no permissions, so closing it would force a customer to edit this framework-owned file to add a schema of their own. That one is checked by whether app/tools/<source>/openapi.json exists.",
-    "values": ["pricing", "codeInterpreter", "browser"]
+    "values": ["pricing", "codeInterpreter", "browser", "docgen"]
+  },
+  "docgenFormats": {
+    "$comment": "Track B docgen. The files the Document generator (a type=\"lambda\" tool with source \"docgen\", app/tools/docgen/) writes, in its `formats`: pdf (reportlab, always the built-in layout), pptx (python-pptx) and docx (python-docx), the latter two into a template or the built-in layout. Closed because each is a renderer the function ships.",
+    "values": ["pdf", "pptx", "docx"]
   },
   "identityTypes": {
     "$comment": "What an identity (identities.<name>) holds: oauth2 = OAuth client credentials (a client id here, its secret in the build's secrets), from which the framework creates an AgentCore Identity OAuth2 credential provider; apikey = an API key (in the build's secrets), vaulted in an AgentCore Identity API-key provider. The two provider kinds AgentCore Identity has for machine-to-machine calls.",
@@ -441,13 +445,24 @@
     "$comment": "What a review gate decides when nobody has by its timeout (steps[].hitl.timeout.action).",
     "values": ["approve", "deny"]
   },
+  "decisionOptions": {
+    "$comment": "v139 Track D. Named options a person chooses between mid-run: a review gate's steps[].hitl.options, or the options an agent with agents.<id>.askPerson.options asks with request_decision. `values` is the run field the chosen option becomes, which branch.when routes on ({\"field\": \"decision\", \"equals\": \"Override\", \"goto\": \"...\"}). A list of 2 to maxOptions labels, each at most labelChars characters, unique ignoring case.",
+    "values": ["decision"],
+    "minOptions": 2,
+    "maxOptions": 6,
+    "labelChars": 60
+  },
   "interceptorContextSources": {
     "$comment": "Where the injectContext interceptor template takes an argument's value from (templates.injectContext.arguments): the run's session id, the calling agent's id, or the run's user, sent by the runtime as the x-ax-session / x-ax-agent / x-ax-user headers.",
     "values": ["session", "agent", "user"]
   },
   "taskKinds": {
-    "$comment": "What a runtime \"task\" step does (agents.<id>.task.kind), with no model call: tool = call one of the build's tools through the Gateway with arguments built from the run; code = run a script in the AgentCore Code Interpreter sandbox; extract = read text, tables and form fields from the run's PDFs and images with Amazon Textract; output = write a file from earlier steps' outputs. Each needs its own framework code (app/common/task_agent.py), so the set is closed.",
-    "values": ["tool", "code", "extract", "output"]
+    "$comment": "What a runtime \"task\" step does (agents.<id>.task.kind), with no model call: tool = call one of the build's tools through the Gateway with arguments built from the run; code = run a script in the AgentCore Code Interpreter sandbox; extract = read text, tables and form fields from the run's PDFs and images with Amazon Textract; output = write a file from earlier steps' outputs; deliver = send the run's files to S3, by email (Amazon SES) or to a webhook (app/common/deliver.py). Each needs its own framework code (app/common/task_agent.py), so the set is closed.",
+    "values": ["tool", "code", "extract", "output", "deliver"]
+  },
+  "deliverTargetTypes": {
+    "$comment": "Where a deliver step (task.kind \"deliver\") sends the run's files (task.targets[].type): s3 = copy them to a bucket and prefix; email = send them with Amazon SES from a verified identity, attached or as links; webhook = POST their links and metadata to an https URL. Each needs its own framework code (app/common/deliver.py), so the set is closed.",
+    "values": ["s3", "email", "webhook"]
   },
   "taskLanguages": {
     "$comment": "What a code step's script is written in (task.language): the Code Interpreter's ProgrammingLanguage values.",
@@ -499,5 +514,10 @@
     "notOnConverse": {"$comment": "Models whose row in the same table says \"Converse doesn't support explicit caching for this model\". Exact base ids only.", "byModel": ["openai.gpt-6.1-sol", "openai.gpt-6-astra", "openai.gpt-5.6-sol", "openai.gpt-5.6-terra", "openai.gpt-5.6-luna"], "reason": "Explicit caching for this model needs the Responses API, Chat Completions or InvokeModel, not Converse (AWS prompt caching table). AgentExpress caches their system prompt through InvokeModel on single calls (openaiExplicit); tool-calling turns stay on Converse, uncached explicitly.", "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html", "copied": "2026-10-21"},
     "implicitOnly": {"$comment": "OpenAI models on Amazon Bedrock: implicit caching only through Converse. The prompt caching page says OpenAI models support Implicit Prompt Caching, that models before GPT-5.6 (such as openai.gpt-5.5 and openai.gpt-5.4) cache automatically for prefixes of 1,024 tokens or longer, and that explicit breakpoints on GPT-5.6 and later need the Responses API, Chat Completions or InvokeModel (notOnConverse). So no cache point is sent to an openai. model that has no byModel row (those rows are openaiExplicit); any cache tokens Converse reports are recorded and priced.", "prefix": "openai.", "reason": "OpenAI models cache implicitly (automatically, for prefixes of 1,024 tokens or more); Converse takes no cache point for them, so there is nothing to set. Observability still records any cache tokens they report.", "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html", "copied": "2026-10-21"},
     "undocumented": {"$comment": "Model ids AgentExpress ships that were checked against the table and are not in it (explicit caching through Converse not documented). Classified, so test_every_shipped_model_is_classified passes; they get W3 and no cache points.", "byModel": {"anthropic.claude-3-haiku-20240307-v1:0": {"checked": "2026-10-21"}}}
+  },
+  "storageToken": {
+    "$comment": "Build storage (orchestrator.storage). The token a workflow.json value writes for the build's own bucket (orchestrator.storage.create): \"${storage}\" stands for s3://<the bucket>, so \"${storage}/templates/\" is s3://<the bucket>/templates/. It must start the value. `fields` are the only places it is read (a * matches any key or list index): the IaC resolves it there at synth/plan (cdk/lib/storage.ts resolveStorage, terraform/storage.tf storage_uri), and both validators (bff/storage_check.py, web/src/builder/storageCheck.ts) refuse it anywhere else, or with no storage, rather than deploy the literal text.",
+    "values": ["${storage}"],
+    "fields": ["tools.*.code.grants.s3Prefix", "tools.*.s3Uri", "orchestrator.interceptors.*.code.grants.s3Prefix", "tools.*.templateS3Uri", "tools.*.outputPrefix", "agents.*.task.targets.*.uri"]
   }
 }

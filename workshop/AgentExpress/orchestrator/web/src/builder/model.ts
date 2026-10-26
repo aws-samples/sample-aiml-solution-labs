@@ -389,12 +389,14 @@ export function addAgent(project: Project, name: string): { project: Project; id
 }
 
 /** What a step with no model does (runtime "task", app/common/task_agent.py). */
-export type TaskKind = "tool" | "code" | "extract" | "output";
+export type TaskKind = "tool" | "code" | "extract" | "output" | "deliver";
 export const TASK_KINDS: { kind: TaskKind; label: string; name: string; description: string }[] = [
   { kind: "tool", label: "Tool", name: "Call a tool", description: "calls one tool, no model" },
   { kind: "code", label: "Code", name: "Run code", description: "runs a script in a sandbox" },
   { kind: "extract", label: "Extract", name: "Read a document", description: "text, tables and fields from PDFs and images" },
   { kind: "output", label: "Output", name: "Write a file", description: "CSV, JSON, Markdown or text from earlier steps" },
+  // v139 Track C deliver (app/common/deliver.py).
+  { kind: "deliver", label: "Deliver", name: "Deliver files", description: "send the run's files to S3, by email or to a webhook" },
 ];
 /** "Task · Code", for the canvas and the run graph. */
 export function taskLabel(kind: unknown): string {
@@ -422,7 +424,9 @@ export function newTaskEntry(kind: TaskKind | undefined, wf: Workflow): Entry {
   const task: Entry = kind === "tool"
     ? { kind, ...(firstTool ? { tool: firstTool } : {}), arguments: { query: "{{request}}" } }
     : kind === "code" ? { kind, language: "python", code: STARTER_SCRIPT }
-      : kind === "output" ? { kind, format: "csv" } : kind ? { kind } : {};
+      : kind === "output" ? { kind, format: "csv" }
+        // A deliver step starts with one S3 target whose bucket is still to be written.
+        : kind === "deliver" ? { kind, targets: [{ type: "s3" }] } : kind ? { kind } : {};
   return {
     name, runtime: "task", produces: `${idFromName(name).replace(/_/g, "-")}-output`,
     ...(kind === "extract" ? { attachments: true } : {}), task,

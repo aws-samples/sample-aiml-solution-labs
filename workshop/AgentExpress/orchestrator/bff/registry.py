@@ -465,9 +465,27 @@ def _wait_draft(registry_id: str, record_id: str) -> str:
     return status
 
 
+#: How many versions a new record tries when the one asked for is taken (_next_patch).
+CONFLICT_TRIES = 20
+
+
+def _conflict(e: Exception) -> bool:
+    """A ConflictException: a record of this name and version already exists."""
+    code = str((getattr(e, "response", None) or {}).get("Error", {}).get("Code") or "")
+    return "Conflict" in code or "Conflict" in type(e).__name__
+
+
+def _next_patch(version: str) -> str:
+    """The next version after `version`: its last number plus one ("1.0.0" -> "1.0.1")."""
+    parts = str(version or "0").split(".")
+    head, last = parts[:-1], parts[-1]
+    return ".".join([*head, str(int(last) + 1 if last.isdigit() else 1)])
+
+
 def put_record(registry_id: str, spec: dict, version: str, prior: dict | None) -> dict:
     """Create the record (or update the one published before) at `version`, and submit
-    it for approval. {recordId, name, version, status}."""
+    it for approval. {recordId, name, version, status}: `version` is the one it got,
+    later than asked when a record this build did not publish holds that name and version."""
     rid = _registry_id(registry_id)
     record_id = (prior or {}).get("recordId") if (prior or {}).get("registryId", rid) == rid else None
     if record_id:
@@ -481,10 +499,26 @@ def put_record(registry_id: str, spec: dict, version: str, prior: dict | None) -
                 raise
             record_id = None
     if not record_id:
-        made = _ctl().create_registry_record(
-            registryId=rid, name=spec["name"], displayName=spec["displayName"], description=spec["description"],
-            recordType=spec["recordType"], descriptors=spec["descriptors"], recordVersion=version,
-            tags={"agentexpress:published": "true"})
+        for _ in range(CONFLICT_TRIES):
+            try:
+                made = _ctl().create_registry_record(
+                    registryId=rid, name=spec["name"], displayName=spec["displayName"],
+                    description=spec["description"], recordType=spec["recordType"],
+                    descriptors=spec["descriptors"], recordVersion=version,
+                    tags={"agentexpress:published": "true"})
+                break
+            except Exception as e:
+                # The registry holds one record per name AND version. This name at this
+                # version is a record this build did not publish (another build's, or a
+                # destroyed build's, which stays as DEPRECATED): never change it; publish
+                # ours as a new record at the next free version, which updates() then
+                # offers as the newer version of that name.
+                if not _conflict(e):
+                    raise
+                version = _next_patch(version)
+        else:
+            raise _error()(409, f"the Agent Registry already holds {spec['name']!r} at {CONFLICT_TRIES} "
+                                "versions in a row; publish it under another name")
         record_id = made.get("recordId") or made["recordArn"].split("/")[-1]
     status = _wait_draft(rid, record_id)
     if status == "DRAFT":

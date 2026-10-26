@@ -74,6 +74,9 @@ def _apply(snap: dict[str, Any], event: dict[str, Any]) -> None:
             # An agent asking mid-step (app/common/asks.py): what the run page needs to show it.
             snap["hitl"].update({k: event[k] for k in ("approval", "timeoutAt", "timeoutAction",
                                                        "kind", "askId", "tool", "args") if event.get(k)})
+        if event.get("options"):
+            # v139 Track D: named options (a gate's hitl.options, an agent's request_decision).
+            snap["hitl"]["options"] = list(event["options"])
         if node in nodes:
             nodes[node]["status"] = "waiting_human"
     elif etype == "hitl_resolved" or (

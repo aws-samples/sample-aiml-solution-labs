@@ -99,7 +99,9 @@ export function endReason(snap: SessionSnapshot, workflow?: Workflow): { type: "
     return null;
   }
   if (overall === "failed") {
-    const why = logs.find((l) => / blocked by guardrail: | failed: /.test(l.msg));
+    // nodes.py: "<agent> blocked by guardrail[ (<reasons>)]: <message>" or "<agent> failed: ...".
+    // The reasons (the denied topic, the filter) are part of why, so the whole line is shown.
+    const why = logs.find((l) => / blocked by guardrail(?: \([^)]*\))?: | failed: /.test(l.msg));
     return { type: "error", text: why ? why.msg : "The run failed. The Timeline tab has each step's events." };
   }
   if (overall === "denied") {

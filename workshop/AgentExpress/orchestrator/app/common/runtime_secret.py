@@ -8,6 +8,9 @@ modules after it read them, so the code that uses them is unchanged:
 
     {"GATEWAY_CLIENT_SECRET": "...", "GATEWAY_AGENT_CLIENTS": {...}, "A2A_TOKENS": {...}}
 
+DELIVER_SECRETS (a deliver step's webhook signing secrets, by name; app/common/deliver.py)
+is in it only when a webhook target names one.
+
 A key already in the environment wins (local development sets them directly). A JSON
 object is re-encoded as the JSON string the readers expect.
 """
@@ -18,7 +21,8 @@ import json
 import os
 
 #: The only keys copied: a secret cannot set anything else in the environment.
-KEYS = ("GATEWAY_CLIENT_SECRET", "GATEWAY_AGENT_CLIENTS", "A2A_TOKENS")
+KEYS = ("GATEWAY_CLIENT_SECRET", "GATEWAY_AGENT_CLIENTS", "A2A_TOKENS",
+        "DELIVER_SECRETS")  # v139 Track C deliver
 
 _loaded = False
 

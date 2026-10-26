@@ -576,6 +576,18 @@ export function DesignChat({ project, issues, onApplied, flush, onShowProblems, 
             <ul className="axd-list">{defaults.map((d) => <li key={d}>{d}</li>)}</ul>
           </Container>
         ) : null}
+        {doc.versions?.length ? (
+          <Container header={<Header variant="h3" description={'Each change the Assistant saved. Say "go back to v1" to return to one.'}
+            info={infoSlot(docs, "assistant.versions")}>Versions</Header>}>
+            <ul className="axd-list" data-testid="design-versions">
+              {[...doc.versions].reverse().map((v) => (
+                <li key={v.v} aria-current={v.current ? "true" : undefined}>
+                  {`v${v.v}: ${unescape(v.name)}`}{v.current ? <Box variant="span" color="text-body-secondary"> (current)</Box> : null}
+                </li>
+              ))}
+            </ul>
+          </Container>
+        ) : null}
         {errors ? (
           <Box>
             <Button variant="inline-link" onClick={onShowProblems}>See the {errors} problem{errors > 1 ? "s" : ""} in Build manually</Button>

@@ -307,6 +307,86 @@ def test_publishing_creates_then_updates_the_same_record_and_never_approves_it(c
     assert not any(c[0] == "status" and c[1]["status"] == "APPROVED" for c in ctl.calls)
 
 
+class Conflict(Exception):
+    """What CreateRegistryRecord raises for a name and version the registry already holds."""
+    def __init__(self, name, version):
+        super().__init__(f"A record with name '{name}' and version '{version}' already exists")
+        self.response = {"Error": {"Code": "ConflictException", "Message": str(self)}}
+
+
+class TakenCtl(FakeCtl):
+    """A registry that already holds records published by someone else (name, version)."""
+    def __init__(self, taken):
+        super().__init__()
+        self.taken = set(taken)
+        for i, (name, version) in enumerate(sorted(self.taken)):
+            self.records[f"other{i}"] = {"status": "APPROVED", "name": name, "recordVersion": version}
+
+    def create_registry_record(self, **kw):
+        if (kw["name"], kw["recordVersion"]) in self.taken:
+            self.calls.append(("conflict", kw))
+            raise Conflict(kw["name"], kw["recordVersion"])
+        self.taken.add((kw["name"], kw["recordVersion"]))
+        return super().create_registry_record(**kw)
+
+
+@pytest.mark.parametrize("skill,taken,want", [
+    # An invoice-coding skill another build published first, at 1.0.0.
+    ("invoiceCoding", {("invoice-coding", "1.0.0")}, "1.0.1"),
+    # An onboarding checklist a destroyed build left at 1.0.0 and 1.0.1 (deprecated, not deleted).
+    ("onboardingChecklist", {("onboarding-checklist", "1.0.0"), ("onboarding-checklist", "1.0.1")}, "1.0.2"),
+])
+def test_a_first_publish_whose_name_and_version_are_taken_gets_the_next_version(monkeypatch, skill, taken, want):
+    fake = TakenCtl(taken)
+    monkeypatch.setitem(registry._clients, "ctl", fake)
+    monkeypatch.setattr(registry, "CREATE_WAIT_S", 9)
+    import time
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    try:
+        spec = registry.skill_record(skill, {"description": "When it applies.", "instructions": "1. Do it."})
+        others = {k: dict(v) for k, v in fake.records.items()}
+        rec = registry.put_record(RID, spec, "1.0.0", None)
+        assert rec["version"] == want and rec["status"] == "PENDING_APPROVAL"
+        # Ours is a new record; the ones already there are not touched (no update, no status change).
+        assert rec["recordId"] not in others
+        assert {k: v for k, v in fake.records.items() if k in others} == others
+        assert not [c for c in fake.calls if c[0] in ("update", "status")]
+        # Published again from this build: the same record, updated, as before.
+        again = registry.put_record(RID, spec, "2.0.0", rec)
+        assert again["recordId"] == rec["recordId"] and again["version"] == "2.0.0"
+        assert [c[0] for c in fake.calls][-2:] == ["update", "submit"]
+    finally:
+        registry._clients.clear()
+
+
+def test_a_conflict_that_never_clears_and_other_errors_are_said_plainly(monkeypatch):
+    class Always(FakeCtl):
+        def create_registry_record(self, **kw):
+            raise Conflict(kw["name"], kw["recordVersion"])
+    monkeypatch.setitem(registry._clients, "ctl", Always())
+    try:
+        spec = registry.skill_record("researchStyle", {"description": "d", "instructions": "i"})
+        import builds
+        with pytest.raises(builds.BuildError) as got:
+            registry.put_record(RID, spec, "1.0.0", None)
+        assert got.value.status == 409 and "already holds 'research-style'" in str(got.value)
+    finally:
+        registry._clients.clear()
+
+    class Denied(FakeCtl):
+        def create_registry_record(self, **kw):
+            e = Exception("no")
+            e.response = {"Error": {"Code": "AccessDeniedException", "Message": "no"}}
+            raise e
+    monkeypatch.setitem(registry._clients, "ctl", Denied())
+    try:
+        with pytest.raises(Exception) as got:
+            registry.put_record(RID, spec, "1.0.0", None)
+        assert got.value.response["Error"]["Code"] == "AccessDeniedException"
+    finally:
+        registry._clients.clear()
+
+
 def test_a_skill_is_published_as_its_skill_md():
     rec = registry.skill_record("refundPolicy", {"description": "When asked\nfor money back.",
                                                  "instructions": "1. Check the date."})

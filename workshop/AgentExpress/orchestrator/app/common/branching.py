@@ -176,13 +176,18 @@ def _describe(rule: dict) -> str:
     return " and ".join(parts) or field
 
 
-def _matches(rule: dict, data: dict, raw: str) -> bool:
-    """All of the rule's operators hold. `field` omitted compares the raw output."""
-    value = _dig(data, rule["field"]) if rule.get("field") else raw
+def _matches(rule: dict, data: dict, raw: str, fields: dict | None = None) -> bool:
+    """All of the rule's operators hold. `field` omitted compares the raw output.
+    `fields` are run fields that win over the output's own (v139 Track D: `decision`,
+    the option a person chose), so they are only ever present when one was chosen."""
+    if fields and rule.get("field") in fields:
+        value = fields[rule["field"]]
+    else:
+        value = _dig(data, rule["field"]) if rule.get("field") else raw
     return all(_holds(op, value, rule[op]) for op in _OPS if op in rule)
 
 
-def choose(spec: dict, output: str) -> tuple[str | None, str]:
+def choose(spec: dict, output: str, fields: dict | None = None) -> tuple[str | None, str]:
     """(target, reason) for one branch spec against the deciding agent's output.
 
     `target` is a step name, `"END"`, or None meaning "no rule matched and there is
@@ -190,12 +195,13 @@ def choose(spec: dict, output: str) -> tuple[str | None, str]:
 
     The output is parsed with the same salvaging parser every agent's own asset goes
     through (`assets.extract_json`), so a payload the model truncated at its token
-    budget can still be branched on.
+    budget can still be branched on. `fields` (optional) are run fields read before the
+    output, e.g. {"decision": "Override"} once a person chose an option.
     """
     data = assets.extract_json(output or "") or {}
     raw = output or ""
     for rule in spec.get("when") or []:
-        if _matches(rule, data, raw):
+        if _matches(rule, data, raw, fields):
             return str(rule["goto"]), _describe(rule)
     default = spec.get("default")
     if default:

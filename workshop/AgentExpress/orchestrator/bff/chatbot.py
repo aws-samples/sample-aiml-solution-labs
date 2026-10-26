@@ -268,6 +268,11 @@ def _t_review(args, ctx, si):
         # assistant, whose words come from a model reading run content.
         return {"error": "this run is waiting for a person to answer an agent's question or approve "
                          "a tool call; that is done on the run page, not by the assistant"}, None
+    if (it.get("hitl") or {}).get("options"):
+        # v139 Track D: a gate with named options. The choice routes the run, so a person
+        # makes it on the run page, as for an agent's request for a decision.
+        return {"error": "this gate offers named options (" + ", ".join(map(str, it["hitl"]["options"]))
+                         + "); a person chooses one on the run page, not the assistant"}, None
     gate = (it.get("hitl") or {}).get("node")
     si({"action": "resume", "session_id": sid, "decision": decision, "comment": comment})
     verb = {"approve": "Approved", "deny": "Denied", "revise": "Sent revision to"}[decision]

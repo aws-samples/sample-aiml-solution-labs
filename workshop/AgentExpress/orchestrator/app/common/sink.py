@@ -123,7 +123,8 @@ def _write_ddb(sid: str, ev: dict) -> None:
         # An agent asking mid-step (app/common/asks.py) also says what kind of wait it is.
         hitl = {"node": n, "question": ev.get("question", ""),
                 **{k: ev[k] for k in ("approval", "timeoutAt", "timeoutAction",
-                                      "kind", "askId", "tool", "args") if ev.get(k)}}
+                                      "kind", "askId", "tool", "args",
+                                      "options") if ev.get(k)}}  # options: v139 Track D
         before = (tbl.update_item(
             Key=_key(sid),
             UpdateExpression="SET overall = :ov, hitl = :h, updated_at = :u",

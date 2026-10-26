@@ -9,6 +9,7 @@
 import requestPy from "./interceptor-templates/request.py?raw";
 import responsePy from "./interceptor-templates/response.py?raw";
 import type { Entry, Json, ToolFiles, Workflow } from "./model";
+import type { Issue } from "./validate";
 
 export type Point = "request" | "response";
 
@@ -130,16 +131,74 @@ function canonical(v: Json): Json {
   return v;
 }
 
-/** The files of an interceptor generated from its checked templates. */
-export function interceptorFiles(point: Point, templates: Record<string, Record<string, Json>>, wf: Workflow): ToolFiles {
+/** Sections every generated handler keeps, whatever is checked: response.py's `protocol`
+ *  guard, which lets the steps change only a tool's result and never an MCP protocol field
+ *  (initialize's protocolVersion, capabilities, serverInfo; jsonrpc, id). */
+const ALWAYS = ["protocol"];
+
+function handlerOf(point: Point, templates: Record<string, Record<string, Json>>, sections: string[]): string {
   const keep = TEMPLATES[point].map((t) => t.id).filter((id) => id in templates);
   // One order whatever order the keys arrive in (a library item read back from the store
   // does not keep it): the same templates always generate the same code, so code that was
   // generated is never mistaken for code edited by hand.
   const settings = Object.fromEntries(keep.map((id) => [id, canonical(templates[id])]));
+  return render(SOURCES[point], [...keep, ...sections], settings);
+}
+
+/** The files of an interceptor generated from its checked templates. */
+export function interceptorFiles(point: Point, templates: Record<string, Record<string, Json>>, wf: Workflow): ToolFiles {
   return {
-    "handler.py": render(SOURCES[point], keep, settings),
+    "handler.py": handlerOf(point, templates, ALWAYS),
     "requirements.txt": "",
     "events.json": `${JSON.stringify(sampleEvents(point, wf, templates), null, 2)}\n`,
   };
+}
+
+/** Whether `handler` is what these templates generate: now, or before the always-kept
+ *  sections existed (a build saved then). Either is followed by the boxes, not taken for
+ *  code edited by hand, and is generated again (with the guard) on the next change. */
+export function isGenerated(point: Point, templates: Record<string, Record<string, Json>>, handler: string): boolean {
+  return handler === handlerOf(point, templates, ALWAYS) || handler === handlerOf(point, templates, []);
+}
+
+/** Each always-kept section of the response template, as the generated code holds it. */
+const GUARD_BLOCKS: string[] = (() => {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  for (const line of responsePy.split("\n")) {
+    if (OPEN.exec(line)?.[1] === "protocol") { current = []; continue; }
+    if (CLOSE.exec(line)?.[1] === "protocol") { if (current) blocks.push(current.join("\n")); current = null; continue; }
+    if (current) current.push(line);
+  }
+  return blocks;
+})();
+
+/** Whether a response handler holds the protocol guard as the template writes it. A text
+ *  check, for a warning only: the server's guard_problem (bff/interceptor_code.py, an AST
+ *  compare) is what refuses an Assistant's write without it. */
+export function hasProtocolGuard(handler: string): boolean {
+  return GUARD_BLOCKS.length > 0 && GUARD_BLOCKS.every((b) => handler.includes(b));
+}
+
+/** Warnings about the interceptor code a build holds: a response interceptor written in the
+ *  build whose handler.py has no protocol guard and is not what its templates generate (code
+ *  the Assistant or a person wrote before the guard existed). Its changes are not limited
+ *  to a tool's result, so a mask can break MCP initialize and every run then fails "Could
+ *  not list tools on the Gateway". Generated code without the guard (a build saved before
+ *  it) is not listed: its steps never touch other answers, and it gets the guard on its
+ *  next change. */
+export function interceptorIssues(wf: Workflow, toolCode: Record<string, ToolFiles> | undefined): Issue[] {
+  const orch = (wf.orchestrator ?? {}) as Record<string, unknown>;
+  const ics = (orch.interceptors ?? {}) as Record<string, { code?: unknown; templates?: Record<string, Record<string, Json>> }>;
+  const ic = ics && typeof ics === "object" && !Array.isArray(ics) ? ics.response : undefined;
+  const handler = toolCode?.["interceptor-response"]?.["handler.py"];
+  if (!ic || ic.code === undefined || typeof handler !== "string") return [];
+  if (hasProtocolGuard(handler) || isGenerated("response", ic.templates ?? {}, handler)) return [];
+  return [{
+    severity: "warning", where: { kind: "block", name: "orchestrator" }, path: "orchestrator.interceptors.response.code",
+    message: "the response interceptor's handler.py has no protocol guard, so it may change MCP protocol fields "
+      + "(initialize's protocolVersion, capabilities, serverInfo) and every run can fail with \"Could not list tools on "
+      + "the Gateway\". Open Interceptors and choose Generate code to regenerate it with the guard, then move your "
+      + "own change into custom().",
+  }];
 }

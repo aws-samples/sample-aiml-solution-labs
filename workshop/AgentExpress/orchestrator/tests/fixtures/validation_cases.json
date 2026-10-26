@@ -7904,7 +7904,7 @@
       "index": 0
      },
      "path": "steps[0].hitl.colour",
-     "message": "unknown key; a gate takes mode, when, approval, timeout"
+     "message": "unknown key; a gate takes mode, when, approval, timeout, options"
     },
     {
      "severity": "error",
@@ -9474,7 +9474,7 @@
       "id": "sandbox"
      },
      "path": "tools.sandbox.source",
-     "message": "\"sandbox\" is not one of: pricing, codeInterpreter, browser"
+     "message": "\"sandbox\" is not one of: pricing, codeInterpreter, browser, docgen"
     }
    ]
   },
@@ -9522,7 +9522,7 @@
       "id": "sandbox"
      },
      "path": "tools.sandbox.source",
-     "message": "\"codeinterpreter\" is not one of: pricing, codeInterpreter, browser"
+     "message": "\"codeinterpreter\" is not one of: pricing, codeInterpreter, browser, docgen"
     }
    ]
   },
@@ -9858,7 +9858,7 @@
       "id": "intake"
      },
      "path": "agents.intake.askPerson.other",
-     "message": "unknown key; allowed: maxQuestions, timeout"
+     "message": "unknown key; allowed: maxQuestions, timeout, options"
     }
    ]
   },
@@ -11500,7 +11500,7 @@
       "id": "step"
      },
      "path": "agents.step.task.kind",
-     "message": "say what this step does: one of tool, code, extract, output"
+     "message": "say what this step does: one of tool, code, extract, output, deliver"
     }
    ]
   },
@@ -11543,7 +11543,7 @@
       "id": "step"
      },
      "path": "agents.step.task.kind",
-     "message": "\"lambda\" is not one of: tool, code, extract, output"
+     "message": "\"lambda\" is not one of: tool, code, extract, output, deliver"
     }
    ]
   },
@@ -11633,7 +11633,7 @@
       "id": "step"
      },
      "path": "agents.step.task.bogus",
-     "message": "unknown key; allowed: kind, tool, arguments, language, code, codeSource, file, features, format, name, from"
+     "message": "unknown key; allowed: kind, tool, arguments, language, code, codeSource, file, features, format, name, from, targets"
     }
    ]
   },
@@ -17013,6 +17013,1676 @@
     ]
    ],
    "expect": []
+  },
+  {
+   "name": "Track B docgen: a Document generator as the Builder writes it, with a template folder and an output prefix",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "generate_document",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "generate_document",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         },
+         "runId": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         },
+         "agent": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         }
+        }
+       }
+      ],
+      "formats": [
+       "pdf",
+       "pptx",
+       "docx"
+      ],
+      "templateS3Uri": "s3://my-templates/forms/",
+      "outputPrefix": "s3://my-outputs/reports/"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "Track B docgen: a Document generator takes the build storage token",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "generate_document",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "generate_document",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         },
+         "runId": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         },
+         "agent": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         }
+        }
+       }
+      ],
+      "formats": [
+       "pdf",
+       "pptx",
+       "docx"
+      ],
+      "templateS3Uri": "${storage}/templates/report.docx",
+      "outputPrefix": "${storage}/out/"
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "Track B docgen: a Document generator needs run files, formats and well-formed S3 locations",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "render",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "render",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         },
+         "runId": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         }
+        }
+       }
+      ],
+      "templateS3Uri": "s3://my-templates/report.pdf",
+      "outputPrefix": "s3://my-outputs/out"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.formats",
+     "message": "the Document generator needs `formats`: any of pdf, pptx, docx"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.templateS3Uri",
+     "message": "must be one template, s3://<bucket>/<key>.pptx or .docx, or a folder of them, s3://<bucket>/<prefix>/ (or ${storage}/...)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.outputPrefix",
+     "message": "must be s3://<bucket>/ or s3://<bucket>/<prefix>/, ending in / (or ${storage}/.../)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.source",
+     "message": "the Document generator saves each file with its run: set orchestrator.files (even {}) so this deployment keeps run files"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.toolSchema[0].name",
+     "message": "the Document generator publishes one tool, \"generate_document\""
+    }
+   ]
+  },
+  {
+   "name": "Track B docgen: formats are listed once, from the vocabulary, and a template's type is among them",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "generate_document",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "generate_document",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         },
+         "runId": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         },
+         "agent": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         }
+        }
+       }
+      ],
+      "formats": [
+       "pdf",
+       "pdf",
+       "gif"
+      ],
+      "templateS3Uri": "s3://my-templates/t.pptx"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.formats[2]",
+     "message": "\"gif\" is not one of: pdf, pptx, docx"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.formats[1]",
+     "message": "\"pdf\" is listed twice"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.templateS3Uri",
+     "message": "is a .pptx template, so `formats` must include \"pptx\""
+    }
+   ]
+  },
+  {
+   "name": "Track B docgen: an empty formats list and the framework's own buckets are refused",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "generate_document",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "generate_document",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         },
+         "runId": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         },
+         "agent": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         }
+        }
+       }
+      ],
+      "formats": [],
+      "templateS3Uri": "s3://agentcore-x-assets-1/t/",
+      "outputPrefix": "s3://agentcore-x-assets-1/o/"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.formats",
+     "message": "list at least one format"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.templateS3Uri",
+     "message": "is one of the framework's own buckets, which no tool may reach"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.outputPrefix",
+     "message": "is one of the framework's own buckets, which no tool may reach"
+    }
+   ]
+  },
+  {
+   "name": "Track B docgen: only the Document generator reads formats, templateS3Uri and outputPrefix",
+   "ops": [
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "formats"
+     ],
+     [
+      "pdf"
+     ]
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "templateS3Uri"
+     ],
+     "s3://b/t.docx"
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "pricing",
+      "outputPrefix"
+     ],
+     "s3://b/o/"
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.formats",
+     "message": "only the Document generator (source \"docgen\") reads formats"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.templateS3Uri",
+     "message": "only the Document generator (source \"docgen\") reads templateS3Uri"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "pricing"
+     },
+     "path": "tools.pricing.outputPrefix",
+     "message": "only the Document generator (source \"docgen\") reads outputPrefix"
+    }
+   ]
+  },
+  {
+   "name": "deliver: s3, email and webhook targets after the report are valid",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "storage"
+     ],
+     {
+      "create": true
+     }
+    ],
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "send"
+     ],
+     {
+      "name": "Send",
+      "runtime": "task",
+      "task": {
+       "kind": "deliver",
+       "targets": [
+        {
+         "type": "s3",
+         "uri": "s3://amzn-s3-demo-bucket/reports/",
+         "files": [
+          "*.pdf",
+          "summary.docx"
+         ],
+         "producedBy": [
+          "report"
+         ]
+        },
+        {
+         "type": "email",
+         "identityArn": "arn:aws:ses:us-east-1:111122223333:identity/example.com",
+         "fromAddress": "reports@example.com",
+         "to": [
+          "team@example.com"
+         ],
+         "subject": "Report: {{outputs.intake.objective}}",
+         "attach": true,
+         "linkExpiresMinutes": 120,
+         "recipientsFrom": "{{outputs.intake.contacts}}",
+         "when": {
+          "field": "outputs.report.passed",
+          "equals": true
+         }
+        },
+        {
+         "type": "webhook",
+         "url": "https://hooks.example.com/in",
+         "secret": "hook"
+        },
+        {
+         "type": "s3",
+         "uri": "${storage}/out/"
+        }
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "send"
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "deliver: a step needs run files and at least one target",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "send"
+     ],
+     {
+      "name": "Send",
+      "runtime": "task",
+      "task": {
+       "kind": "deliver",
+       "targets": []
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "send"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task",
+     "message": "a deliver step sends the run's files, which needs orchestrator.files so the run keeps them"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets",
+     "message": "add at least one target: where to send the files"
+    }
+   ]
+  },
+  {
+   "name": "deliver: what each target type needs",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "send"
+     ],
+     {
+      "name": "Send",
+      "runtime": "task",
+      "task": {
+       "kind": "deliver",
+       "targets": [
+        {
+         "type": "s3"
+        },
+        {
+         "type": "email"
+        },
+        {
+         "type": "webhook"
+        },
+        {
+         "type": "fax"
+        },
+        {
+         "files": [
+          "*.pdf"
+         ]
+        }
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "send"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].uri",
+     "message": "write the bucket and prefix: s3://<bucket>/<prefix>/ or ${storage}/<prefix>/"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].identityArn",
+     "message": "pick the SES identity it is sent from: arn:aws:ses:<region>:<account>:identity/<domain or address>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].fromAddress",
+     "message": "write the From address, at the identity's domain"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].to",
+     "message": "write at least one recipient"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].url",
+     "message": "write the https URL to post to"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[3].type",
+     "message": "\"fax\" is not one of: s3, email, webhook"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[4].type",
+     "message": "pick where it goes: one of s3, email, webhook"
+    }
+   ]
+  },
+  {
+   "name": "deliver: values each target refuses",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "send"
+     ],
+     {
+      "name": "Send",
+      "runtime": "task",
+      "task": {
+       "kind": "deliver",
+       "targets": [
+        {
+         "type": "s3",
+         "uri": "s3://agentcore-x-assets-1/runs/",
+         "url": "https://x.example.com",
+         "bogus": 1
+        },
+        {
+         "type": "s3",
+         "uri": "s3://amzn-s3-demo-bucket/no-slash"
+        },
+        {
+         "type": "email",
+         "identityArn": "arn:aws:ses:us-east-1:111122223333:identity/example.com",
+         "fromAddress": "someone@other.example",
+         "to": [
+          "{{outputs.intake.owner}}",
+          "not-an-address"
+         ],
+         "attach": "yes",
+         "recipientsFrom": "people: {{outputs.intake.contacts}}",
+         "subject": 3
+        },
+        {
+         "type": "email",
+         "identityArn": "arn:aws:ses:us-east-1:111122223333:identity/me@example.com",
+         "fromAddress": "you@example.com",
+         "to": [
+          "a@example.com"
+         ],
+         "recipientsFrom": "{{outputs.later.list}}"
+        },
+        {
+         "type": "email",
+         "identityArn": "ses:example.com",
+         "fromAddress": "x",
+         "to": []
+        },
+        {
+         "type": "webhook",
+         "url": "http://hooks.example.com/in",
+         "secret": "not a name",
+         "linkExpiresMinutes": 0
+        }
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "send"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].url",
+     "message": "does not apply to type \"s3\""
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].bogus",
+     "message": "unknown key; type \"s3\" takes: type, files, producedBy, when, uri"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].uri",
+     "message": "is one of the framework's own buckets, which no delivery may write to"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].uri",
+     "message": "must be s3://<bucket>/ or s3://<bucket>/<prefix>/, ending in /, or ${storage}/<prefix>/"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].fromAddress",
+     "message": "must be an address at example.com, the identity's domain"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].to[0]",
+     "message": "recipients are written here, not taken from a step's output: use recipientsFrom for that"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].to[1]",
+     "message": "must be an email address"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].subject",
+     "message": "must be a string"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].attach",
+     "message": "must be true or false"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].recipientsFrom",
+     "message": "must be one placeholder, {{outputs.<step>.<field>}}"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[3].fromAddress",
+     "message": "must be the identity's own address, me@example.com"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[3].recipientsFrom",
+     "message": "\"later\" does not run before this step"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[4].identityArn",
+     "message": "must be an SES identity ARN: arn:aws:ses:<region>:<account>:identity/<domain or address>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[4].fromAddress",
+     "message": "must be an email address"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[4].to",
+     "message": "write at least one recipient"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[5].url",
+     "message": "must be an https:// URL, with no user:password@"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[5].secret",
+     "message": "must be the name of a deliverSecrets build secret (letters, digits, . _ -), never the secret itself"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[5].linkExpiresMinutes",
+     "message": "must be a whole number of minutes, 1 to 10080"
+    }
+   ]
+  },
+  {
+   "name": "deliver: file picks and conditions",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "send"
+     ],
+     {
+      "name": "Send",
+      "runtime": "task",
+      "task": {
+       "kind": "deliver",
+       "targets": [
+        {
+         "type": "s3",
+         "uri": "s3://amzn-s3-demo-bucket/out/",
+         "files": [
+          "out/a.pdf",
+          ""
+         ],
+         "producedBy": [
+          "later",
+          3
+         ],
+         "when": {
+          "field": "outputs.later.ok",
+          "equals": true,
+          "like": "x"
+         }
+        },
+        {
+         "type": "s3",
+         "uri": "s3://amzn-s3-demo-bucket/out/",
+         "files": "*.pdf",
+         "producedBy": "report",
+         "when": {
+          "field": "topic",
+          "in": "a",
+          "exists": "yes",
+          "gt": "1"
+         }
+        },
+        {
+         "type": "s3",
+         "uri": "s3://amzn-s3-demo-bucket/out/",
+         "when": {
+          "field": "request"
+         }
+        },
+        {
+         "type": "s3",
+         "uri": "s3://amzn-s3-demo-bucket/out/",
+         "when": "passed"
+        }
+       ]
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "send"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].files[0]",
+     "message": "must be a file-name pattern, e.g. *.pdf (no folder)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].files[1]",
+     "message": "must be a file-name pattern, e.g. *.pdf (no folder)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].producedBy[0]",
+     "message": "\"later\" does not run before this step"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].producedBy[1]",
+     "message": "must be a step id"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].when.like",
+     "message": "unknown key; a condition takes field and one of: equals, notEquals, in, contains, exists, gt, gte, lt, lte"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[0].when.field",
+     "message": "\"later\" does not run before this step"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].files",
+     "message": "must be a list of file-name patterns, e.g. *.pdf"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].producedBy",
+     "message": "must be a list of step ids"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].when.field",
+     "message": "name what to test: request, or outputs.<step>.<field>"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].when.in",
+     "message": "takes a list of alternatives"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].when.exists",
+     "message": "takes true or false"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[1].when.gt",
+     "message": "takes a number"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[2].when",
+     "message": "needs one comparison: equals, notEquals, in, contains, exists, gt, gte, lt, lte"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets[3].when",
+     "message": "must be an object: {\"field\": \"outputs.<step>.<field>\", \"equals\": ...}"
+    }
+   ]
+  },
+  {
+   "name": "deliver: targets belongs to a deliver step only",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "send"
+     ],
+     {
+      "name": "Send",
+      "runtime": "task",
+      "task": {
+       "kind": "tool",
+       "tool": "docs",
+       "targets": []
+      }
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "send"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "send"
+     },
+     "path": "agents.send.task.targets",
+     "message": "does not apply to a \"tool\" step"
+    }
+   ]
+  },
+  {
+   "name": "decisions (v139 D): a gate with named options and a rule that reads them",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "hitl"
+     ],
+     {
+      "options": [
+       "Override",
+       "Abort"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "branch"
+     ],
+     {
+      "when": [
+       {
+        "field": "decision",
+        "equals": "Abort",
+        "goto": "END"
+       }
+      ]
+     }
+    ]
+   ],
+   "expect": []
+  },
+  {
+   "name": "decisions (v139 D): option mistakes",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "hitl"
+     ],
+     {
+      "options": [
+       "Go",
+       "go",
+       "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "approval": "event"
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "branch"
+     ],
+     {
+      "when": [
+       {
+        "field": "decision",
+        "in": [
+         "Go",
+         "Stop"
+        ],
+        "goto": "END"
+       }
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      1,
+      "hitl"
+     ],
+     {
+      "options": [
+       "A",
+       "B"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].hitl.options[2]",
+     "message": "is at most 60 characters"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].hitl.options",
+     "message": "the options must differ (ignoring case)"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].hitl.options",
+     "message": "named options are chosen on the run page; an event cannot choose one, so they do not go with approval \"event\""
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[0]",
+     "message": "`decision` is one of: Go, go, xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; \"Stop\" is not one, so this rule never matches"
+    },
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1].hitl.options",
+     "message": "a parallel stage's gate decides each agent, and a parallel stage cannot branch: put named options on a single-agent or sequence stage"
+    },
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "step",
+      "index": 1
+     },
+     "path": "steps[1].hitl.options",
+     "message": "no `branch` rule on this stage reads `decision`, so every option continues to the next stage"
+    }
+   ]
+  },
+  {
+   "name": "decisions (v139 D): options not a list, and no rule reads them",
+   "ops": [
+    [
+     "set",
+     [
+      "steps",
+      2,
+      "hitl"
+     ],
+     {
+      "options": "Override"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "step",
+      "index": 2
+     },
+     "path": "steps[2].hitl.options",
+     "message": "must be a list of 2 to 6 option labels, e.g. [\"Override\", \"Abort\"]"
+    }
+   ]
+  },
+  {
+   "name": "decisions (v139 D): askPerson options bounds",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     {
+      "options": [
+       "Only"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "intake"
+     },
+     "path": "agents.intake.askPerson.options",
+     "message": "must be a list of 2 to 6 option labels, e.g. [\"Override\", \"Abort\"]"
+    }
+   ]
+  },
+  {
+   "name": "decisions (v139 D): askPerson options read by the stage's branch",
+   "ops": [
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "toolMode"
+     ],
+     "model"
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "intake",
+      "askPerson"
+     ],
+     {
+      "options": [
+       "Load images",
+       "Continue"
+      ]
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      0,
+      "branch",
+      "when",
+      0
+     ],
+     {
+      "field": "decision",
+      "equals": "Load",
+      "goto": "END"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "warning",
+     "where": {
+      "kind": "step",
+      "index": 0
+     },
+     "path": "steps[0].branch.when[0]",
+     "message": "`decision` is one of: Load images, Continue; \"Load\" is not one, so this rule never matches"
+    }
+   ]
+  },
+  {
+   "name": "v139 review: a Document generator's schema declares runId and agent, which the workflow sets",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "generate_document",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "generate_document",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         }
+        }
+       }
+      ],
+      "formats": [
+       "pdf",
+       "pptx",
+       "docx"
+      ],
+      "templateS3Uri": "s3://my-templates/forms/",
+      "outputPrefix": "s3://my-outputs/reports/"
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "tool",
+      "id": "docs"
+     },
+     "path": "tools.docs.toolSchema[0].properties",
+     "message": "declare runId and agent (optional strings): the Gateway passes the function only the arguments its schema declares, and the workflow sets runId and agent on every call so each file is saved with its run"
+    }
+   ]
+  },
+  {
+   "name": "v139 review: a harness agent cannot call the Document generator",
+   "ops": [
+    [
+     "set",
+     [
+      "orchestrator",
+      "files"
+     ],
+     {}
+    ],
+    [
+     "set",
+     [
+      "tools",
+      "docs"
+     ],
+     {
+      "type": "lambda",
+      "description": "Docs",
+      "source": "docgen",
+      "call": "generate_document",
+      "arg": "data",
+      "toolSchema": [
+       {
+        "name": "generate_document",
+        "description": "Write a PDF, PPTX or DOCX from data. Returns its s3:// URI and a download link.",
+        "properties": {
+         "format": {
+          "type": "string",
+          "required": true,
+          "description": "pdf, pptx or docx: one of this tool's formats."
+         },
+         "data": {
+          "type": "object",
+          "required": true,
+          "description": "The content as JSON."
+         },
+         "runId": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         },
+         "agent": {
+          "type": "string",
+          "required": false,
+          "description": "Set by the workflow on every call; leave it out."
+         }
+        }
+       }
+      ],
+      "formats": [
+       "pdf",
+       "pptx",
+       "docx"
+      ],
+      "templateS3Uri": "s3://my-templates/forms/",
+      "outputPrefix": "s3://my-outputs/reports/"
+     }
+    ],
+    [
+     "set",
+     [
+      "agents",
+      "writer"
+     ],
+     {
+      "name": "Writer",
+      "runtime": "harness",
+      "produces": "draft",
+      "instructions": "Write a short draft from the earlier outputs. Return JSON.",
+      "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "maxTokens": 2000,
+      "tool": "docs"
+     }
+    ],
+    [
+     "set",
+     [
+      "steps",
+      3
+     ],
+     {
+      "sequence": [
+       "report",
+       "writer"
+      ]
+     }
+    ]
+   ],
+   "expect": [
+    {
+     "severity": "error",
+     "where": {
+      "kind": "agent",
+      "id": "writer"
+     },
+     "path": "agents.writer.tool",
+     "message": "\"docs\" is the Document generator, which saves each file with the run the workflow sets on every call, and a harness calls the Gateway itself, so no run is set — bind it to an agent that is not a harness"
+    }
+   ]
   }
  ]
 }

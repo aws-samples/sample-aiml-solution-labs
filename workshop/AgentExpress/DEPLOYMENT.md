@@ -7,8 +7,8 @@ types, agents, the Builder): [GETTING_STARTED.md](GETTING_STARTED.md). Internals
 | Part | Sections |
 |---|---|
 | Set up | [Prerequisites](#prerequisites) · [Identity provider](#identity-provider) · [IAM to deploy](#iam-to-deploy) · [Organisation guardrails](#organisation-guardrails) · [Terraform](#deploy-with-terraform) · [CDK](#deploy-with-cdk) · [Users and RBAC](#users-groups-and-rbac) · [Secrets](#secrets) |
-| Tools | [Acting as the person](#tools-that-act-as-the-person) · [Smithy](#tools-that-call-an-aws-api-smithy) · [KB chunking](#knowledge-base-chunking-and-parsing) · [KB vector stores](#knowledge-base-on-your-own-vector-store) · [KB sources](#knowledge-base-from-a-web-crawl-confluence-sharepoint-or-salesforce) · [Code Interpreter](#running-code-in-a-sandbox) · [Browser](#opening-web-pages-with-a-browser) · [Hosted MCP](#hosted-mcp-servers) |
-| Agents | [Task steps](#steps-with-no-model-task-steps) · [Harness](#agents-run-by-agentcore-harness) · [Runtime VPC](#running-agentcore-runtimes-in-your-vpc) · [LiteLLM](#using-non-bedrock-models-through-litellm) · [Model routing](#choosing-which-model-answers-per-run-override-routing-and-fallbacks) |
+| Tools | [Acting as the person](#tools-that-act-as-the-person) · [Smithy](#tools-that-call-an-aws-api-smithy) · [KB chunking](#knowledge-base-chunking-and-parsing) · [KB vector stores](#knowledge-base-on-your-own-vector-store) · [KB sources](#knowledge-base-from-a-web-crawl-confluence-sharepoint-or-salesforce) · [Code Interpreter](#running-code-in-a-sandbox) · [Browser](#opening-web-pages-with-a-browser) · [Document generator](#generating-pdf-pptx-and-docx-files) · [Hosted MCP](#hosted-mcp-servers) |
+| Agents | [Task steps](#steps-with-no-model-task-steps) · [Deliver step](#delivering-a-runs-files) · [Build storage](#storage-created-for-a-build) · [Harness](#agents-run-by-agentcore-harness) · [Runtime VPC](#running-agentcore-runtimes-in-your-vpc) · [LiteLLM](#using-non-bedrock-models-through-litellm) · [Model routing](#choosing-which-model-answers-per-run-override-routing-and-fallbacks) |
 | Using it | [Smoke test](#smoke-test-a-deployment-before-a-release) · [Timeline chart](#the-timeline-chart-on-a-run) · [Flow tab](#the-flow-tab-on-a-run) · [Builder canvas](#the-builder-canvas) · [Analytics](#operational-analytics) · [Memory records](#memory-records-what-agents-remembered) · [Share links](#sharing-a-run-with-a-link) · [Files](#a-runs-files-and-the-files-page) · [Asks and approvals](#an-agent-asks-a-person-and-tool-calls-that-wait-for-approval) · [Teams](#teams-and-team-workspaces-builder-console) |
 | Builder console | [Console mode](#deploy-a-builder-console) · [Assistant](#the-agentexpress-assistant-links-and-review-changes) · [Connectors](#connectors) · [How a build deploys](#how-a-build-deploys) · [Code sources](#code-from-files-git-or-s3-code-sources) · [Registry](#aws-agent-registry) · [Connected accounts](#connected-accounts) · [Moving a build](#moving-a-build-out-of-a-console) · [Test suites](#test-suites) |
 | Operate | [Tuning](#tuning) · [Limits](#limits-on-spend-and-runs) · [Billing tag](#seeing-the-bill-in-aws) · [A2A endpoint](#serving-the-workflow-over-a2a) · [Live config](#changing-a-prompt-or-model-without-redeploying-live-config) · [Send runs to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others) · [OTLP export](#sending-traces-to-another-otlp-backend) · [Tear down](#tear-down) · [Troubleshooting](#troubleshooting) |
@@ -44,7 +44,9 @@ source of truth. They create:
 - With the tool plane: the Gateway, its Cedar policy engine, the Knowledge Base and an ingestion job
 - Only when needed: the A2A stand-in Lambda (an agent with `source: "a2a_lambda"`); an assets
   bucket (an agent with `output: "image"`). Agents with `vision` get `s3:GetObject` on `runs/*`
-  only when they read images
+  only when they read images. The Document generator's function (a tool with `source: "docgen"`),
+  the runtime's delivery permissions (a `deliver` step) and the build's own bucket
+  (`orchestrator.storage.create`) are created only when the workflow sets them
 - The BFF Lambda behind an HTTP API, with one API-wide invoke permission instead of one per route
   (Lambda caps a resource policy at 20 KB)
 - The in-app assistant, on unless `orchestrator.chatbot.enabled = false`
@@ -242,7 +244,11 @@ Bedrock KB, S3 Vectors, guardrails, DynamoDB, Lambda, API Gateway, S3, CloudFron
 roles, logs, AgentCore Identity secrets, the Builder's CodeBuild project (`BuilderPlane`) and the
 X-Ray calls for Transaction Search. `EvaluatorJudgeModel` allows `bedrock:InvokeModel` on
 foundation models and inference profiles: creating a custom evaluator checks the caller can
-invoke its judge model. CDK uses the bootstrap execution role instead; there is no policy file.
+invoke its judge model. `S3ManageBuildStorage` creates, configures, empties and deletes a build's
+own bucket ([build storage](#storage-created-for-a-build)) on `arn:aws:s3:::ax-*-storage-*` only,
+the names builds get; it grants no object read or write. A stack with another `agent_name` that
+sets `orchestrator.storage` needs the same actions on `<agent name>-storage-<account>`. CDK uses
+the bootstrap execution role instead; there is no policy file.
 
 ## Organisation guardrails
 
@@ -498,7 +504,7 @@ app links to the same documentation.
 
 **Where the links go: `docsUrl`.** By default, the public [user guide](docs/user-guide/README.md) on
 GitHub, pinned to the release's tag:
-`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.8/workshop/AgentExpress/docs/user-guide/`.
+`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.9/workshop/AgentExpress/docs/user-guide/`.
 A section's link is `<docsUrl><page>.md#<slug>`, GitHub's id for the heading (lower case, punctuation
 but `-` and `_` removed, spaces as `-`, a repeated heading `-1`, `-2`). An organisation that keeps the
 guide in an XWiki space, typically for internal or production deployments, points `docsUrl` at that
@@ -764,6 +770,17 @@ Good to know:
   agent's "started" line appears again on the timeline.
 - When two agents of one parallel stage both wait, the run page shows one at a time.
 
+**Named options.** A gate with `hitl.options` (2 to 6 labels, such as `["Override", "Abort"]`)
+offers those options instead of approve / revise / deny, and an agent with `askPerson.options` may
+call `request_decision(question)` mid-step. The run page shows one button per option and an optional
+comment; the choice is the run field `decision`, which the step's `branch.when` routes on
+(`{"field": "decision", "equals": "Abort", "goto": "END"}`). It goes through the same
+`POST /api/sessions/{id}/decision` route (`{"option": "Override", "comment": "..."}`), with the same
+`decision` permission, and the activity log records who chose which option and when
+(`run.decided`). No resource, IAM statement or setting is added. Not on a parallel stage, not with
+`approval: "event"`, and the run assistant does not choose. Keys:
+[WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#named-options--a-persons-choice-decides-what-runs-next).
+
 ### Teams and team workspaces (Builder console)
 Teams decide who shares builds; what each person may do is still set by their groups
 ([Users, groups and RBAC](#users-groups-and-rbac)).
@@ -805,6 +822,7 @@ in `workflow.json` or any file; pass them as JSON objects in the environment:
 | Tool API keys | tool name | `TF_VAR_tool_api_keys` | `TOOL_API_KEYS` |
 | Identity secrets (OAuth client secret or API key of an `identities` entry) | identity name | `TF_VAR_identity_secrets` | `IDENTITY_SECRETS` |
 | Bearer tokens for `runtime: "a2a"` agents with `auth: "bearer"` | agent id | `TF_VAR_a2a_tokens` | `A2A_TOKENS` |
+| Webhook signing secrets of `deliver` targets (`secret`) | secret name | `TF_VAR_deliver_secrets` | `DELIVER_SECRETS` |
 | M2M Gateway client secret | | `TF_VAR_gateway_client_secret` | `GATEWAY_CLIENT_SECRET` |
 
 - Example: `export TF_VAR_tool_api_keys='{"internalTools":"your-key"}'`
@@ -816,6 +834,10 @@ in `workflow.json` or any file; pass them as JSON objects in the environment:
   in use has no secret
 - `orchestrator.gatewayIdentity: "perAgent"` (one Gateway client per tool-using agent) needs the
   tool plane and a Cognito pool the stack creates
+- A deliver target's signing secret reaches the orchestrator runtime in its runtime secret
+  (`DELIVER_SECRETS`), only the names a webhook target references. In the Builder it is a build
+  secret of kind `deliverSecrets`, entered under **Signing secret** in the step's panel. The deploy
+  fails when a target names a secret the build does not have
 - The Gateway client secrets and A2A tokens reach a runtime through its own Secrets Manager secret
   (`agentexpress/<agent_name>/runtime-*` on Terraform), never its environment variables: the
   runtime gets `RUNTIME_SECRET_ARN` and reads the secret at start (`app/common/runtime_secret.py`).
@@ -1125,6 +1147,35 @@ adds nothing and costs nothing.
   page load, 40 s per call, 20,000 characters of text) are in
   [WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#source-browser--open-a-web-page).
 
+## Generating PDF, PPTX and DOCX files
+An agent can write a PDF, PPTX or DOCX file from JSON data when a `type: "lambda"` tool has
+`"source": "docgen"` (in the Builder: **Add a tool → Type → Document generator**). A deploy then
+adds one Lambda function (60 s, 512 MB) and its role, and registers it on the Gateway; a deploy
+without such a tool adds nothing and costs nothing.
+
+- `formats` (required: `pdf`, `pptx`, `docx`), `templateS3Uri` (optional: one `.pptx`/`.docx`
+  object, or a folder ending in `/`) and `outputPrefix` (optional: `s3://<bucket>/<prefix>/`).
+  Both S3 keys also take `${storage}/...` ([build storage](#storage-created-for-a-build)). PDF always
+  uses the built-in layout, as does any format without a template.
+- Each file is saved with the run (`runs/<run>/outputs/<name>`, the run's **Files** tab), so the
+  workflow must set `orchestrator.files`; the validators, the CDK synth and the Terraform plan refuse
+  it otherwise. With `outputPrefix`, the file is also written to `<prefix><run>/<name>`.
+- The function's role reads only the template object or folder (`s3:GetObject`), writes only
+  `runs/*/outputs/*` in the assets bucket and objects under `outputPrefix`, and writes its own log
+  group. No `s3:ListBucket`, no other bucket, table or secret. A template or output bucket encrypted
+  with your own KMS key also needs that key's policy to allow the function's role.
+- It returns the file's `s3://` URI and a presigned link for up to an hour; a link signed with a
+  role's temporary credentials stops working when they expire.
+- The libraries (`app/tools/docgen/requirements.txt`: python-pptx, python-docx, reportlab and their
+  dependencies, under MIT, MIT-CMU, BSD or PSF licences) are pinned. A console deploy installs them for Lambda's
+  Python 3.12 on x86_64. Deploying from a checkout, install them first; the CDK synth and the
+  Terraform plan refuse to deploy without them:
+  `cd orchestrator && python3 -m pip install -r app/tools/docgen/requirements.txt -t app/tools/docgen --platform manylinux2014_x86_64 --implementation cp --python-version 3.12 --only-binary=:all:`
+- A harness agent cannot use it (the runtime sets the run on every other agent's call). The tool
+  panel's **Test run with sample data** calls the deployed function once.
+- The tool entry, template rules and limits are in
+  [WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#source-docgen--the-document-generator-pdf-pptx-and-docx-files).
+
 ## Steps with no model (task steps)
 An agent entry with `"runtime": "task"` and a `task` block is a step that calls a tool, runs a
 script, reads a document or writes a file, with no model call. In the Builder, add one from the
@@ -1138,10 +1189,94 @@ role only what the workflow's steps use:
   (Textract has no resource type for these, so the grant is on `*`). It reads the run's files from
   the assets bucket, which `attachments: true` already lets the runtime read. Textract is billed
   per page and is not offered in every region;
-- `tool` and `output` steps need nothing new (the Gateway, and `orchestrator.files` for the file).
+- `tool` and `output` steps need nothing new (the Gateway, and `orchestrator.files` for the file);
+- a `deliver` step: what its targets need, below.
 
 A workflow with no task step gets no new permission or resource. The keys and limits are in
 [WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#runtime-task--a-step-with-no-model).
+
+## Delivering a run's files
+A task step with `"task": {"kind": "deliver", "targets": [...]}` sends the files the run's steps
+saved (`runs/<session>/outputs/`, so the workflow needs `orchestrator.files`) to 1 to 10 targets:
+`s3`, `email` (Amazon SES) or `webhook`. In the Builder: **+ New generic step**, then **Deliver
+files** in **What it does**. Each target can narrow the files (`files` name patterns, `producedBy`
+step ids) and hold a condition (`when`). To deliver only after a check passed or a person chose to
+go on, put the step after that gate or branch. Every delivery, skip and failure is a timeline line,
+and each delivery or failure an activity-log event (`run.delivered`, `run.delivery_failed`). A failed
+target fails the step after the others were tried. The keys are in
+[WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#deliver-targets).
+
+What a deploy grants the orchestrator runtime's role, only with a deliver step:
+
+| Sid | Grant |
+|---|---|
+| `DeliverReadRunFiles` | `s3:GetObject` on `<assets bucket>/runs/*/outputs/*` |
+| `DeliverListRunFiles` | `s3:ListBucket` on the assets bucket, for `s3:prefix` `runs/*/outputs/*` |
+| `DeliverS3Put` | `s3:PutObject` on `arn:aws:s3:::<bucket>/<prefix>*`, per `s3` target |
+| `DeliverSesSend` | `ses:SendEmail` on each configured identity ARN, with `ses:FromAddress` pinned to the configured From addresses |
+
+No statement is on `*`. The framework's own buckets are refused as targets. A target bucket
+encrypted with your own KMS key also needs that key's policy to allow the runtime role. On
+Terraform the statements are the policy `AgentCoreRuntimeDeliver-<agent_name>`.
+
+**Set up SES for an email target.**
+
+1. In the SES console, in the Region you send from, create and verify an identity: a domain (send
+   from any address at it) or one email address
+   ([Creating and verifying identities](https://docs.aws.amazon.com/ses/latest/dg/creating-identities.html)).
+   A Region needs its own identity.
+2. Put its ARN in `identityArn` (`arn:aws:ses:<region>:<account>:identity/<domain or address>`) and an
+   address at that identity in `fromAddress`.
+3. Write the recipients in `to` (1 to 50). A step's output adds recipients only with the explicit
+   `recipientsFrom` opt-in, one `{{outputs.<step>.<field>}}`, still at most 50 together.
+
+**The SES sandbox.** A new SES account is in the sandbox, per Region. There it may send only to
+verified addresses and domains (or the SES mailbox simulator), at most 200 messages in 24 hours and
+1 a second. Verify each recipient as an identity while you test, then request production access
+([Request production access](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html)).
+SES's own error is on the run's timeline as SES wrote it, with a hint: a "not verified" rejection
+names the sandbox, and `AccessDenied` says the runtime may send only from the configured identity and
+From address. The SES docs note that sandbox restrictions can prevent some IAM policies from working
+as written ([Controlling access to SES](https://docs.aws.amazon.com/ses/latest/dg/control-user-access.html));
+whether a sandbox send is also authorized against a recipient's identity has not been tested live.
+
+Other limits: one message per email target per step run; the files are attached while they are at
+most 25 MB together (SES v2 takes 40 MB per message after base64), and sent as links above that or
+with `attach: false`; links last `linkExpiresMinutes` (default 60, at most 10,080) or until the
+runtime's credentials expire, whichever is first.
+
+**Webhook targets** post through the SSRF guard (`app/common/netguard.py`): `https://` only, no
+private, loopback or link-local address, each redirect checked again, 10 s timeout, 2xx required.
+With `secret`, the body is signed as the BFF's webhook triggers are (`X-AX-Timestamp`,
+`X-AX-Signature: sha256=<HMAC-SHA256 of "<timestamp>.<body>">`); the secret is a build secret of
+kind `deliverSecrets` ([Secrets](#secrets)).
+
+## Storage created for a build
+`"orchestrator": {"storage": {"create": true}}` (in the Builder: **Settings → Storage → Create
+storage for this build**) makes the deploy create a bucket for the build,
+`<agent name with _ as ->-storage-<account>`. Without it nothing is created, and the deploy is the
+same as before (`cdk/test/storage-identity.test.ts`, `tests/test_v139_identity.py`).
+
+- The bucket: all four Block Public Access settings on, a policy refusing plain HTTP, versioned,
+  SSE-KMS with the build's own key and an S3 Bucket Key, tagged `agentexpress:code-tools=true` with
+  ABAC on, and a lifecycle rule that expires noncurrent versions after 30 days, clears expired delete
+  markers and aborts unfinished uploads after 7 days.
+- Tools name it with the token `${storage}`, at the start of the value: a code tool's or
+  interceptor's `code.grants.s3Prefix`, a `kb` tool's `s3Uri`, a Document generator's
+  `templateS3Uri` and `outputPrefix`, and a deliver step's `s3` target `uri`. Both validators and
+  both IaC paths refuse it anywhere else, or when the build creates no storage. Each tool is granted
+  only the folder it names; nothing else is granted on the bucket. A code tool's grant also gets
+  `kms:Decrypt` (and `kms:GenerateDataKey` for `readwrite`) on the build's key, through S3 only,
+  while the bucket uses that key. The
+  orchestrator runtime gets `STORAGE_BUCKET` to resolve a deliver target at run time.
+- **Destroy:** by default the bucket is emptied, every version included, and deleted with the build.
+  With `"retain": true` (**Keep it when the build is destroyed**) it is kept: CDK sets
+  `RemovalPolicy.RETAIN`, and on Terraform the runner and `teardown.sh` remove it from the state
+  before `terraform destroy`. A kept bucket uses SSE-S3 instead of the build's key, which is deleted
+  with the build; objects written before `retain` was turned on keep the key they were written with.
+  A later deploy of the same build finds the name taken: delete or import the kept bucket first.
+- The deploy role needs `S3ManageBuildStorage` ([IAM to deploy](#iam-to-deploy)).
+- The keys are in [WORKFLOW_REFERENCE.md](orchestrator/docs/WORKFLOW_REFERENCE.md#orchestratorstorage--a-bucket-created-for-the-build).
 
 ## Agents run by AgentCore Harness
 
@@ -1779,12 +1914,32 @@ clear it on purpose with `aws dynamodb update-table --table-name <agentName>_bui
 |---|---|---|
 | `cdk destroy`: `DELETE_FAILED` on `Orchestrator` or another Runtime, `NotStabilized` ("Request timed out while deleting") | AgentCore was still draining the runtime | Run `cdk destroy` again. The console's destroy waits 60 s and destroys again itself, up to 3 more times. It reads every stack resource with `ListStackResources`, paged, so a failed Runtime is found on a stack with more than 100 resources too |
 | `cdk destroy`: `DELETE_FAILED` on a Runtime, "Access denied for operation 'AWS::BedrockAgentCore::Runtime'", after a `NotStabilized` retry | AgentCore had already deleted the runtime (`aws bedrock-agentcore-control get-agent-runtime` returns `ResourceNotFoundException`) | Run `cdk destroy` again. The console's destroy does this itself, within its retry budget, once `GetAgentRuntime` confirms the runtime is gone |
-| `cdk destroy`: `DELETE_FAILED` on `UiLogsBucket`, "bucket … not empty" | CloudFront delivered a late access log after the stack emptied the bucket | `aws s3 rm s3://<UiLogsBucket name> --recursive`, then `cdk destroy` |
+| `cdk destroy`: `DELETE_FAILED` on `UiLogsBucket`, "bucket … not empty" | CloudFront delivered a late access log after the stack emptied the bucket | Empty that bucket and run `cdk destroy` again (see [A late CloudFront log](#a-late-cloudfront-log-stops-cdk-destroy) below). The console's destroy does this itself |
 | `terraform destroy`: `NotStabilized` on `awscc_bedrockagentcore_runtime`, or Cloud Control's "Request timed out while deleting AWS::BedrockAgentCore::Runtime" with no resource address | AgentCore was still deleting the runtime when Cloud Control gave up | Run `terraform destroy` again. The console's destroy waits 60 s and destroys again itself, up to 3 more times, rebuilding the UI step first |
 | `terraform destroy`: `NotStabilized` on `awscc_bedrockagentcore_runtime`, then `Invalid for_each argument ... data.external.ui_dist.result` on the retry | The first destroy removed the UI build step from state | `terraform apply -target=null_resource.ui_build`, then `terraform destroy` |
 
 Terraform empties the UI logs bucket in the same step that deletes it (`force_destroy`), so the
 late-log case is rare there; the same fix applies.
+
+#### A late CloudFront log stops `cdk destroy`
+
+CloudFront writes access logs a few minutes after a request. If one arrives after the stack has
+emptied its UI logs bucket, a `cdk destroy` from your laptop ends `DELETE_FAILED` on `UiLogsBucket`
+("The bucket you tried to delete is not empty"). Running the destroy again alone does not help,
+because the stack empties the bucket only once. Look up the bucket's name in the stack's resources,
+empty it, then destroy again (use your stack's name: `<agentName>-stack`, with `_` written `-`):
+
+```bash
+STACK=<agent-name>-stack                 # agentName with _ as -
+BUCKET=$(aws cloudformation describe-stack-resources --stack-name "$STACK" \
+  --query "StackResources[?ResourceType=='AWS::S3::Bucket' && starts_with(LogicalResourceId, 'UiLogsBucket')].PhysicalResourceId" \
+  --output text)
+aws s3 rm "s3://$BUCKET" --recursive
+cdk destroy                              # with the same -c flags you deployed with
+```
+
+Only that one bucket is emptied: it holds CloudFront access logs and nothing else. The console's
+destroy does the same thing itself and then retries.
 
 **Check what a destroy left behind.** A failed or interrupted apply or destroy can leave resources
 the state no longer knows about, and they block the next deploy under the same name:
@@ -1798,6 +1953,8 @@ the state no longer knows about, and they block the next deploy under the same n
 - Exit `10`: something found; `1`: could not look (never read as "nothing left").
 - It sees only taggable types, and a just-deleted resource can be listed for a few minutes. The
   stack's KMS key waits 7 days for deletion and is listed apart, not counted.
+- A build's storage bucket kept with `orchestrator.storage.retain` stays on purpose
+  ([build storage](#storage-created-for-a-build)).
 
 `teardown.sh` is best-effort and idempotent. A re-deploy gets a new UI URL; re-create your login
 user. Log groups of Lambdas this project creates are removed (retention `log_retention_days` /

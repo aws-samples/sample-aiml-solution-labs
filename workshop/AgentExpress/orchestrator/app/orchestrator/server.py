@@ -54,6 +54,7 @@ class Decision(BaseModel):
     decision: str = "approve"
     comment: str = ""
     decisions: dict | None = None  # per-agent map for parallel-group gates
+    option: str | None = None  # v139 Track D: a named option (hitl.options / request_decision)
 
 
 class Rerun(BaseModel):
@@ -185,7 +186,8 @@ async def decide(sid: str, req: Decision):
     if not req.decisions and req.decision not in ("approve", "deny", "revise"):
         raise HTTPException(400, "decision must be 'approve', 'deny' or 'revise', "
                                  "or provide a per-agent 'decisions' map")
-    resume = {"decision": req.decision, "comment": req.comment, "decisions": req.decisions}
+    resume = {"decision": req.decision, "comment": req.comment, "decisions": req.decisions,
+              **({"option": req.option} if req.option else {})}  # v139 Track D
     _spawn(_run(sid, resume=resume))
     return {"ok": True}
 

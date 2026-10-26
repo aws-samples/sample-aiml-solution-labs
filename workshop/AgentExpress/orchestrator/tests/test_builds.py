@@ -671,7 +671,7 @@ def test_a_builds_secrets_are_write_only_and_go_with_the_build(env):
     status, names = call(env, "PUT /api/builds/{id}/secrets", params={"id": "pclaims01"},
                          body={"toolApiKeys": {"billing": "sk-live-123"}, "a2aTokens": {"partner": "tok"}})
     assert status == 200 and names == {"toolApiKeys": ["billing"], "a2aTokens": ["partner"], "identitySecrets": [],
-                                  "exportHeaders": [], "gitTokens": []}
+                                  "exportHeaders": [], "gitTokens": [], "deliverSecrets": []}
     status, got = call(env, "GET /api/builds/{id}/secrets", params={"id": "pclaims01"})
     assert got == names and "sk-live-123" not in json.dumps(got)   # names out, never values
     assert call(env, "GET /api/builds/{id}/secrets", params={"id": "pclaims01"}, sub="u2")[0] == 404
@@ -953,7 +953,8 @@ def test_the_assistant_works_on_a_deployed_builds_runs(env, monkeypatch):
 
     def fake_chat(body, ctx, si, permitted=None, owner=None, target=None):
         seen["status"] = target["status"].name
-        si({"action": "resume", "session_id": "s"})
+        # A re-run; a gate decision is claimed and audited first (tests/test_assistant_gate_audit.py).
+        si({"action": "rerun_from", "session_id": "s", "agent_id": "claims_intake"})
         return {"reply": "ok", "actions": []}
     monkeypatch.setattr(env.handler.chatbot, "is_enabled", lambda: True)
     monkeypatch.setattr(env.handler.chatbot, "handle_chat", fake_chat)

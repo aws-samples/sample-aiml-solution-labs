@@ -36,6 +36,22 @@ describe("why a run ended where it did", () => {
       .toBe("Writer failed: ModelUnavailable: throttled");
     expect(endReason(run("failed"), wf)?.text).toMatch(/Timeline tab/);
   });
+  it("gives a guardrail block with its reasons, not the generic fallback", () => {
+    // app/orchestrator/nodes.py writes the reasons in brackets before the message.
+    const cases = [
+      // An invoice agent stopped by a denied topic.
+      "Invoice Checker blocked by guardrail (denied topic taxAdvice): Sorry, this request can't be handled.",
+      // An onboarding agent stopped by two filters at once.
+      "Onboarding Agent blocked by guardrail (content filter MISCONDUCT, word filter): This request was blocked.",
+    ];
+    for (const line of cases) {
+      expect(endReason(run("failed", "Intake Agent started", line, "Workflow failed"), wf))
+        .toEqual({ type: "error", text: line });
+    }
+    // A bracket in the message itself is not mistaken for the reasons.
+    expect(endReason(run("failed", "Report Writer blocked by guardrail: Blocked (policy 7)."), wf)?.text)
+      .toBe("Report Writer blocked by guardrail: Blocked (policy 7).");
+  });
   it("gives a denied run's gate and the reviewer's note", () => {
     expect(endReason(run("denied", "Intake Agent complete (v1)",
       'Human decision (intake): deny \u2014 note: "Personal trip, not covered by the policy."',

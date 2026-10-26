@@ -26,6 +26,7 @@ import type { LibraryKind } from "./storage";
 import { toolsOf } from "../lib/tools";
 import type { Selection } from "./Canvas";
 import { CodeTool } from "./CodeTool";
+import { DocgenTest } from "./DocgenTest"; // Track B docgen
 import { HostedMcp } from "./HostedMcp";
 import { EntryForm } from "./EntryForm";
 import { AGENT_ID_RE, TOOL_KEY_RE, applies, imageModelOf, variantOf, vocab } from "./meta";
@@ -284,6 +285,9 @@ function AgentPanel({ project, id, issues, onChange, onSelect, server, rows }: {
           registry: { hidden: true },
           // Edited in the Instructions section above.
           instructions: { hidden: true },
+          // v139 Track D: questions and named options the agent may ask a person mid-step.
+          askPerson: { info: infoSlot(docs, "agent.askPerson"),
+            render: (value, set) => <AskPersonSettings value={value} onChange={set} /> },
           // A harness agent's model provider, tools, skills, memory, environment and endpoint.
           harness: { info: infoSlot(docs, "agent.harness"), render: () => <HarnessSettings agent={agent} workflow={wf}
             onAgent={(e) => onChange(updateEntry(project, "agents", id, e))} /> },
@@ -581,7 +585,7 @@ function StagePanel({ project, index, issues, onChange }: {
           {step.hitl ? "A reviewer signs off here" : "No review"}
         </Toggle>
       </FormField>
-      {step.hitl ? <GateSettings hitl={step.hitl} onChange={(h) => set({ hitl: h })} /> : null}
+      {step.hitl ? <GateSettings hitl={step.hitl} parallel={kind === "parallel"} onChange={(h) => set({ hitl: h })} /> : null}
       {kind !== "single" ? (
         <>
           <FormField label="Gate id" description="The stage's name for branch targets. Letters, digits, underscores.">
@@ -669,6 +673,7 @@ const TOOL_DOCS: Record<string, DocsFeature> = {
 function toolDocs(tool: Entry): DocsFeature {
   if (tool.type === "lambda" && tool.source === "codeInterpreter") return "tool.codeInterpreter";
   if (tool.type === "lambda" && tool.source === "browser") return "tool.browser";
+  if (tool.type === "lambda" && tool.source === "docgen") return "tool.docgen";
   return TOOL_DOCS[String(tool.type)] ?? "tool";
 }
 
@@ -755,6 +760,7 @@ function ToolPanel({ project, id, issues, onChange, onSelect, server, callbackUr
           ...builtinOverrides(tool) }}
         onChange={(e) => onChange(updateEntry(project, "tools", id, e))} />
       {String(tool.type) === "lambda" && !builtinLabel(tool) ? <CodeTool project={project} id={id} onChange={onChange} server={server} /> : null}
+      {String(tool.type) === "lambda" && tool.source === "docgen" && server ? <DocgenTest buildId={project.id} id={id} tool={tool} /> : null}
       {String(tool.type) === "mcp" ? (
         <Container header={<Header variant="h3" info={infoSlot(docs, "tool.hostedMcp")}>MCP server</Header>}>
           <HostedMcp project={project} id={id} onChange={onChange} issues={mine} server={server} />
@@ -856,6 +862,45 @@ export function Inspector({ project, selection, issues, onChange, onSelect, serv
 }
 
 
+/** v139 Track D: agents.<id>.askPerson (app/common/asks.py): on or off, and when on its
+ *  question cap, timeout and the named options it may ask a person to choose between.
+ *  Nothing set beyond "on" writes `true`, as before. */
+function AskPersonSettings({ value, onChange }: { value: Json | undefined; onChange: (v: Json | undefined) => void }) {
+  const on = value === true || (typeof value === "object" && value !== null && !Array.isArray(value));
+  const a = (on && typeof value === "object" ? value : {}) as Record<string, Json>;
+  const [options, setOptions] = useState(Array.isArray(a.options) ? a.options.map(String).join("\n") : "");
+  const write = (patch: Record<string, Json | undefined>) => {
+    const next: Record<string, Json | undefined> = { ...a, ...patch };
+    for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+    onChange(Object.keys(next).length ? (next as Json) : true);
+  };
+  return (
+    <SpaceBetween size="s">
+      <Toggle checked={on} onChange={({ detail }) => onChange(detail.checked ? true : undefined)}>
+        {on ? "The agent may ask a person" : "Off"}
+      </Toggle>
+      {on ? (
+        <>
+          <FormField label="Questions per step" description="1 to 10. Empty: 3.">
+            <Input type="number" inputMode="numeric" ariaLabel="Questions per step" placeholder="3"
+              value={a.maxQuestions === undefined ? "" : String(a.maxQuestions)}
+              onChange={({ detail }) => write({ maxQuestions: detail.value.trim() ? Number(detail.value) : undefined })} />
+          </FormField>
+          <FormField label="Timeout" description="With no answer after this long (30m, 24h, 2d), the agent carries on. Empty: wait.">
+            <Input ariaLabel="Ask timeout" placeholder="24h" value={typeof a.timeout === "string" ? a.timeout : ""}
+              onChange={({ detail }) => write({ timeout: detail.value.trim() || undefined })} />
+          </FormField>
+          <FormField label="Decision options" stretch
+            description={'One per line, 2 to 6 (e.g. Load images, Continue). The agent can ask a person to choose one, and the choice is the field "decision" its stage\'s Branch rules route on. Empty: questions only.'}>
+            <Textarea rows={3} value={options} ariaLabel="Decision options" placeholder={"Load images\nContinue"}
+              onChange={({ detail }) => { setOptions(detail.value); write({ options: linesOf(detail.value) }); }} />
+          </FormField>
+        </>
+      ) : null}
+    </SpaceBetween>
+  );
+}
+
 /** How a stage's review gate decides (steps[].hitl, app/common/gates.py). All defaults
  *  write `true`, so a plain gate stays a plain gate. */
 interface Gate {
@@ -863,12 +908,24 @@ interface Gate {
   when?: Json[];
   approval?: "console" | "event";
   timeout?: { after: string; action: "approve" | "deny" };
+  /** v139 Track D: named options instead of approve / revise / deny. */
+  options?: string[];
 }
 
-function GateSettings({ hitl, onChange }: { hitl: boolean | GateSpec; onChange: (h: boolean | GateSpec) => void }) {
+/** One label per line, blank lines dropped; undefined when there are none. */
+const linesOf = (text: string): string[] | undefined => {
+  const vals = text.split("\n").map((s) => s.trim()).filter(Boolean);
+  return vals.length ? vals : undefined;
+};
+
+function GateSettings({ hitl, parallel, onChange }: {
+  hitl: boolean | GateSpec; parallel?: boolean; onChange: (h: boolean | GateSpec) => void;
+}) {
+  const docs = useDocsBase();
   const h = (typeof hitl === "object" ? hitl : {}) as Gate;
   const [rules, setRules] = useState(h.when ? JSON.stringify(h.when, null, 1) : "");
   const [rulesErr, setRulesErr] = useState<string | null>(null);
+  const [options, setOptions] = useState((h.options ?? []).join("\n"));
   const write = (patch: Partial<Gate>) => {
     const next: Record<string, unknown> = { ...h, ...patch };
     for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
@@ -888,6 +945,13 @@ function GateSettings({ hitl, onChange }: { hitl: boolean | GateSpec; onChange: 
           <Select selectedOption={modes.find((m) => m.value === mode)!} options={modes}
             onChange={({ detail }) => write({ mode: detail.selectedOption.value as Gate["mode"] })} />
         </FormField>
+        {!parallel ? (
+          <FormField label="Named options" stretch info={infoSlot(docs, "stage.gateOptions")}
+            description={'One per line, 2 to 6 (e.g. Override, Abort). The person chooses one instead of approve / revise / deny, and the choice is the field "decision" this stage\'s Branch rules route on. Empty: approve / revise / deny.'}>
+            <Textarea rows={3} value={options} ariaLabel="Named options" placeholder={"Override\nAbort"}
+              onChange={({ detail }) => { setOptions(detail.value); write({ options: linesOf(detail.value) }); }} />
+          </FormField>
+        ) : null}
         {mode === "threshold" ? (
           <FormField label="Rules that call for HITL" stretch errorText={rulesErr}
             description={'Branch rules without goto, against this stage\'s output: [{"field": "riskScore", "gte": 80}, {"contains": "URGENT"}]. No match: it approves itself.'}>

@@ -382,7 +382,7 @@ def test_the_registry_builds_a_task_agent_with_no_folder():
 
 
 @pytest.mark.parametrize("task, why", [
-    ({"kind": "lambda"}, "is not one of tool, code, extract, output"),
+    ({"kind": "lambda"}, "is not one of tool, code, extract, output, deliver"),
     ({"kind": "tool", "tool": "nope"}, "is not a key in the `tools` block"),
     ({"kind": "tool", "tool": "pricing", "code": "x"}, "task.code does not apply"),
     ({"kind": "code"}, "needs task.code"),

@@ -332,7 +332,7 @@ resource "aws_iam_role_policy" "runtime" {
 # Give the execution role a moment to propagate before the runtime validates it.
 resource "time_sleep" "iam_propagation" {
   count           = local.workflow_plane ? 1 : 0
-  depends_on      = [aws_iam_role_policy.runtime, aws_iam_role_policy.runtime_secret, aws_secretsmanager_secret_version.runtime, aws_iam_role_policy.runtime_otlp_export, aws_iam_role_policy.runtime_litellm, aws_iam_role_policy.runtime_export, aws_secretsmanager_secret_version.export_headers]
+  depends_on      = [aws_iam_role_policy.runtime, aws_iam_role_policy.runtime_secret, aws_secretsmanager_secret_version.runtime, aws_iam_role_policy.runtime_otlp_export, aws_iam_role_policy.runtime_litellm, aws_iam_role_policy.runtime_export, aws_secretsmanager_secret_version.export_headers, aws_iam_role_policy.runtime_deliver]
   create_duration = "25s"
 }
 
@@ -457,7 +457,7 @@ resource "awscc_bedrockagentcore_runtime" "orchestrator" {
     # Lets an agent invoke its configured tool without hardcoding anything.
     TOOLS_JSON = local.tools_env
     # LiteLLM settings (litellm.tf) and HARNESS_ARNS (harness.tf) are merged in only when used.
-  }, local.otlp_export_env, local.litellm_env, local.harness_env, local.export_env) # export.tf
+  }, local.otlp_export_env, local.litellm_env, local.harness_env, local.export_env, local.storage_env) # export.tf; storage.tf (Track E)
 
   depends_on = [null_resource.build_push, time_sleep.iam_propagation]
 }

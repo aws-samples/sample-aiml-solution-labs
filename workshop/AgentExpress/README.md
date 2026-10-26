@@ -49,10 +49,12 @@ One line per feature; the link goes to the detail.
 | Feature | What it does | Details |
 |---|---|---|
 | AgentExpress Assistant | A chat that drafts and edits the workflow as you talk; reads public pages you link (`build this based on <url>`); cannot deploy or publish | [GETTING_STARTED](GETTING_STARTED.md#agentexpress-assistant) |
+| Assistant versions | Each change the Assistant saves is a named version (`v1: multi-agent draft`); "go back to v1" restores one, and it says which version first | [ARCHITECTURE](ARCHITECTURE.md#7-the-bff) |
 | Review changes | Off, Auto (default) or Always: a second model checks the Assistant's larger changes before they're saved, and only advises | [GETTING_STARTED](GETTING_STARTED.md#agentexpress-assistant) |
 | Code sources | Code for Lambda tools, interceptors, Run code steps and hosted MCP servers: written or uploaded in the build, from Git or S3, or a private ECR image | [DEPLOYMENT](DEPLOYMENT.md#code-from-files-git-or-s3-code-sources) |
 | Canvas | Drag agents onto stages, and tools and AgentCore pieces onto agents; each agent card lists its components; **Show** menu and AgentCore rail | [DEPLOYMENT](DEPLOYMENT.md#the-builder-canvas) |
-| Generic step | **+ New generic step**: a step with no model (tool, code, extract, output); pick the kind in its panel | [DEPLOYMENT](DEPLOYMENT.md#steps-with-no-model-task-steps) |
+| Generic step | **+ New generic step**: a step with no model (tool, code, extract, output, deliver); pick the kind in its panel | [DEPLOYMENT](DEPLOYMENT.md#steps-with-no-model-task-steps) |
+| Build storage | `orchestrator.storage: {"create": true}`: a private, encrypted, versioned S3 bucket for the build; tools name it `${storage}`; emptied and deleted on destroy unless `retain` | [DEPLOYMENT](DEPLOYMENT.md#storage-created-for-a-build) |
 | Connectors | **Tools → Add a connector**: 10 OAuth connectors (Salesforce, Slack, Jira, GitHub, Microsoft 365, …) as ready-made OpenAPI tools | [DEPLOYMENT](DEPLOYMENT.md#connectors) |
 | Library | Tools, skills, memory, guardrails, identity, policies, interceptors and evals shared across builds | [GETTING_STARTED](GETTING_STARTED.md#library-and-sharing) |
 | AWS Agent Registry | Add approved MCP servers, A2A agents and skills (optionally kept in sync); admins publish a build | [DEPLOYMENT](DEPLOYMENT.md#aws-agent-registry) |
@@ -66,7 +68,8 @@ One line per feature; the link goes to the detail.
 | Feature | What it does | Details |
 |---|---|---|
 | `main` / `dedicated` | Run in the orchestrator, or in the agent's own AgentCore Runtime | [WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#runtime--where-the-agent-actually-runs) |
-| Task steps | `runtime: "task"`: call a tool, run a script in Code Interpreter, read a document with Textract, write a file | [WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#runtime-task--a-step-with-no-model) |
+| Task steps | `runtime: "task"`: call a tool, run a script in Code Interpreter, read a document with Textract, write a file, deliver the run's files | [WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#runtime-task--a-step-with-no-model) |
+| Deliver step | `task.kind: "deliver"`: send a run's files to S3, by email with Amazon SES, or to a signed webhook; per-target file filters and conditions | [DEPLOYMENT](DEPLOYMENT.md#delivering-a-runs-files) |
 | AgentCore Harness | `runtime: "harness"`: an agent with no code; Gateway tools, managed Code Interpreter and Browser, a named endpoint, or **your own harness by ARN**; other model providers, skills, memory, MCP servers, container, mounts, VPC | [DEPLOYMENT](DEPLOYMENT.md#agents-run-by-agentcore-harness) |
 | A2A agents | `runtime: "a2a"`: delegate a step to an agent you do not operate | [GETTING_STARTED](GETTING_STARTED.md#3-add-your-own-agent) |
 | Frameworks | Plain, Strands or LangGraph inside `run()`; model calls go through `ctx.llm` | [ARCHITECTURE](ARCHITECTURE.md#frameworks) |
@@ -92,6 +95,7 @@ Every tool is a Gateway target with a Cedar permit generated from `workflow.json
 | `smithy` | An AWS service API from its Smithy model (RestJson services, 1–20 resource ARNs) | [DEPLOYMENT](DEPLOYMENT.md#tools-that-call-an-aws-api-smithy) |
 | Code Interpreter | `source: "codeInterpreter"`: the agent runs code it wrote in the managed sandbox | [DEPLOYMENT](DEPLOYMENT.md#running-code-in-a-sandbox) |
 | Browser | `source: "browser"`: open a public page and read its text and links | [DEPLOYMENT](DEPLOYMENT.md#opening-web-pages-with-a-browser) |
+| Document generator | `source: "docgen"`: PDF, PPTX and DOCX files from JSON data, into a template in S3 or a built-in layout; saved with the run | [DEPLOYMENT](DEPLOYMENT.md#generating-pdf-pptx-and-docx-files) |
 | Acting as the person | `auth: "user"` (each person connects) or `"obo"` (their sign-in) | [DEPLOYMENT](DEPLOYMENT.md#tools-that-act-as-the-person) |
 
 ### AgentCore features
@@ -115,6 +119,7 @@ Every tool is a Gateway target with a Cedar permit generated from `workflow.json
 |---|---|---|
 | HITL review gates | Approve, revise or deny after an agent or stage; `threshold` / `auto` modes, EventBridge answers, timeouts | [GETTING_STARTED](GETTING_STARTED.md#9-review-gates-that-decide-for-themselves) |
 | Agent asks a person | `askPerson`: the agent asks mid-step and resumes; `approval` on a tool makes each call wait | [DEPLOYMENT](DEPLOYMENT.md#an-agent-asks-a-person-and-tool-calls-that-wait-for-approval) |
+| Named options | `hitl.options` (e.g. Override / Abort) on a gate, or `askPerson.options` for an agent mid-step; the choice is the run field `decision` that `branch.when` routes on | [WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#named-options--a-persons-choice-decides-what-runs-next) |
 | Branch rules | A step's output picks what runs next, skips a stage or ends the run | [WORKFLOW_REFERENCE](orchestrator/docs/WORKFLOW_REFERENCE.md#branch--the-output-decides-what-runs-next) |
 | Re-run | Re-run one agent and everything after it, with a note; each run version is kept | [ARCHITECTURE](ARCHITECTURE.md#rewind-and-re-run) |
 | Triggers | Signed webhooks, schedules, EventBridge, S3 and SQS start runs | [GETTING_STARTED](GETTING_STARTED.md#8-triggers-runs-nobody-typed) |

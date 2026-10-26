@@ -180,6 +180,50 @@ A **Browser** tool lets an agent open a public web page and read its title, text
 - It refuses anything but http and https, URLs with credentials, URLs over 2,048 characters, and private or internal hosts.
 - It reads pages only: no clicking, typing or pages behind a sign-in. Page text is untrusted input to the model.
 
+# Document generator
+
+A **Document generator** tool lets an agent write a PDF, PPTX or DOCX file from JSON data. Use it when a workflow must hand over a report, a deck or a summary as a file. Add it with **Add a tool**, **Type**, **Document generator**. In `workflow.json` it is a `lambda` tool with `source: "docgen"`.
+
+```json
+"documents": {
+  "type": "lambda", "source": "docgen",
+  "call": "generate_document", "arg": "data",
+  "formats": ["pdf", "pptx", "docx"],
+  "templateS3Uri": "${storage}/templates/",
+  "outputPrefix": "${storage}/outputs/"
+}
+```
+
+The tool also lists its one tool, `generate_document`, in `toolSchema`. The control plane writes that for you. See the full entry in [workflow.json settings](Workflow_JSON_Reference.md).
+
+- `formats` (required): any of `pdf`, `pptx` and `docx`.
+- `templateS3Uri` (optional): one `.pptx` or `.docx` template, or a folder of them ending in `/`. Without one, every file uses a simple built-in layout. PDF always uses the built-in layout.
+- `outputPrefix` (optional): an S3 folder ending in `/` that each file is also written to.
+- Both S3 settings take an `s3://` address or the build's storage, `${storage}/<folder>/`.
+- Each file is always saved with the run, on its **Files** tab, so the build needs run files turned on (`orchestrator.files`).
+
+## Write a template
+
+A field in a PPTX or DOCX template is its name in double curly braces. For the data `{"title": "Q3", "account": {"name": "Example Corp"}, "rows": [{"item": "A"}, {"item": "B"}]}`:
+
+```text
+{{title}}            becomes  Q3
+{{account.name}}     becomes  Example Corp
+{{rows.item}}        repeats its table row, DOCX paragraph or PPTX slide: A, then B
+```
+
+- A list repeats the table rows, DOCX paragraphs and PPTX slides that use one of its fields. A list of plain values uses the field `value`.
+- An empty list removes the row, paragraph or slide. A field the data does not have renders as nothing.
+- DOCX headers and footers are filled too. A filled paragraph takes the formatting of its first run.
+
+## What it may reach
+
+- Its role may read only the template object or folder, and write only the run's files and the output folder.
+- It returns the file's S3 address and a download link that works for up to an hour.
+- **Test run with sample data** in the tool panel calls the deployed tool once with sample data you can edit, and shows the link.
+- A harness agent cannot use it.
+- A build without a Document generator deploys exactly as before.
+
 # Tools that act as the person
 
 Most tools sign in with the build's own identity. An `mcp` or `openapi` tool can instead act as the person who started the run, so it sees only what that person may see.
@@ -197,12 +241,17 @@ The AgentExpress Assistant can add any tool type on this page and set any of its
 - "Add an OpenAPI tool for our orders API from the attached openapi.json, signed with SigV4"
 - "Use the attached handler.py as the code of a new zones Lambda tool, with read access to the zones table"
 - "Limit web search to [docs.aws.amazon.com](https://docs.aws.amazon.com/) and to results published since 2025-01-01"
+- "Add a Document generator that writes the report as a PDF and the deck as a PPTX from the templates in the build's storage"
+- "Give the report writer a tool that writes a DOCX summary, and save each file under \${storage}/outputs/"
+- "Add three document tools, one each for the PDF report, the PPTX deck and the DOCX summary"
 
-* Paste a link to an API's documentation ("Build this tool based on &lt;url>"), or attach the spec or code. Up to 5 pages and 5 files per message. Attached code becomes the tool's files as it is.
-* It never invents an endpoint, ARN, bucket, Git URL or ref. It asks, or lists the value under **Needs your input**.
-* It can't enter an API key, client secret or Git token: it names the secret, and you fill it in on the **Secrets** card beside the chat or under **How it connects** in the tool panel.
-* It can't upload knowledge-base documents (tool panel **Documents**), upload an openapi.json in the tool panel, or run **Check and run** and **Test the deployed tool**. Do those in the tool panel.
-* With **Review changes** on **Auto**, a second model checks new tools, code, data sources, vector stores, domains, sign-in and approval changes before they are saved.
+When a brief needs PDF, PPTX or DOCX files, the Assistant uses the Document generator. For any other file, such as a chart, it writes a Lambda tool with pinned libraries. When you list several tools, it makes one tool for each, or says why two must be one.
+
+- Paste a link to an API's documentation ("Build this tool based on &lt;url>"), or attach the spec or code. Up to 5 pages and 5 files per message. Attached code becomes the tool's files as it is.
+- It never invents an endpoint, ARN, bucket, Git URL or ref. It asks, or lists the value under **Needs your input**.
+- It can't enter an API key, client secret or Git token: it names the secret, and you fill it in on the **Secrets** card beside the chat or under **How it connects** in the tool panel.
+- It can't upload knowledge-base documents (tool panel **Documents**), upload an openapi.json in the tool panel, or run **Check and run** and **Test the deployed tool**. Do those in the tool panel.
+- With **Review changes** on **Auto**, a second model checks new tools, code, data sources, vector stores, domains, sign-in and approval changes before they are saved.
 
 More requests are on [Ask the Assistant](Ask_the_Assistant.md).
 

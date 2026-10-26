@@ -37,6 +37,7 @@ Endpoints:
   POST   /api/sessions/{id}/decision {decision, comment}  -> {ok}
         decision: approve | deny | revise; comment: feedback used on revise
         (an agent's question or a tool approval: approve | deny, comment = the answer; bff/asks.py)
+        (named options, a gate's hitl.options or an agent's request_decision: {option, comment})
   POST   /api/sessions/{id}/cancel               -> {ok}
   POST   /api/sessions/{id}/rerun    {agentId|agents, comment} -> {ok}
   POST   /api/sessions/{id}/evaluate {agentId, prompt} -> {ok}  (AgentCore Evaluations)
@@ -403,6 +404,8 @@ def _run(event: dict) -> dict:
         payload["decision"] = event.get("decision", "approve")
         payload["comment"] = event.get("comment", "")
         payload["decisions"] = event.get("decisions")  # per-agent map for group gates
+        if event.get("option"):  # v139 Track D: a named option, checked by the decision route
+            payload["option"] = event["option"]
     elif action == "rerun_from":
         # Rewind to a chosen agent and re-run it + everything downstream, with the
         # reviewer comment injected as that agent's feedback. `agents` (a list of
@@ -1377,6 +1380,28 @@ def _gate_resume(context):
     return resume
 
 
+def _chat_invoke(event: dict, context, target: dict | None):
+    """How the Run Assistant (bff/chatbot.py) sends the runtime an action: as the buttons
+    do. A gate decision goes the way the run page's goes: claimed once per pause
+    (_claim_decision) and logged as run.decided for the person who asked, so an approval
+    made through the Assistant is in Activity like one made on the run page."""
+    tbl = target["status"] if target else status_tbl
+
+    def invoke(payload: dict) -> None:
+        payload = {**payload, **(_build_field(target) if target else {})}
+        if payload.get("action") == "resume":
+            sid = str(payload.get("session_id") or "")
+            hitl = (tbl.get_item(Key={"session_id": sid}, ProjectionExpression="hitl")
+                    .get("Item") or {}).get("hitl")
+            if not _claim_decision(tbl, sid, hitl):
+                raise RuntimeError(ALREADY_DECIDED)
+            _audit_run(event, "run.decided", sid, decision=str(payload.get("decision") or ""),
+                       comment=str(payload.get("comment") or "")[:200], via="assistant")
+            payload.setdefault("user", _session_user(sid, tbl))
+        _self_invoke(context.function_name, payload)
+    return invoke
+
+
 def _trigger_start(context):
     """How bff/triggers.py starts a run: in this deployment's own workflow, as the
     trigger's identity, with the delivery attached when an agent reads files."""
@@ -1991,7 +2016,10 @@ def _route(event: dict, context) -> dict:
         bad = asks.refusal(body, asked)
         if bad:
             return _resp(400, {"error": bad})
-        decision = body.get("decision")
+        # v139 Track D: a named option (a gate's hitl.options, an agent's request_decision)
+        # continues the run as an approve that carries the option.
+        option = asks.chosen_option(body, asked)
+        decision = body.get("decision") or ("approve" if option else None)
         # Per-agent decisions for a parallel-group gate; when present, the single
         # decision need not be one of the three.
         decisions = body.get("decisions")
@@ -2030,9 +2058,11 @@ def _route(event: dict, context) -> dict:
                    decisions={str(k): str((v or {}).get("decision") if isinstance(v, dict) else v)
                               for k, v in (decisions if isinstance(decisions, dict) else {}).items()}
                    or None,
-                   comment=str(body.get("comment") or "")[:200])
+                   comment=str(body.get("comment") or "")[:200],
+                   **({"option": option} if option else {}))  # v139 Track D: who chose what
         _self_invoke(context.function_name,
                      {"action": "resume", "session_id": sid, "decision": decision or "approve",
+                      **({"option": option} if option else {}),  # v139 Track D
                       "comment": body.get("comment", ""), "decisions": decisions,
                       "user": _session_user(sid, target["status"]),
                       **_build_field(target), **_token_field(event, target, sid)})
@@ -2141,9 +2171,7 @@ def _route(event: dict, context) -> dict:
         build_id = str(body.get("build") or "").strip()
         target = _build_target(build_id, _owner(event)) if build_id else None
         result = chatbot.handle_chat(
-            body, body.get("session_id", ""),
-            lambda payload: _self_invoke(context.function_name,
-                                         {**payload, **(_build_field(target) if target else {})}),
+            body, body.get("session_id", ""), _chat_invoke(event, context, target),
             authz.permitted_actions(event), owner=_owner(event), target=target)
         return _resp(400 if result.get("error") else 200, result)
 

@@ -22,6 +22,11 @@ class Scope:
     # 2+ = a re-run triggered by reviewer feedback). Lets the observability UI
     # separate telemetry across re-runs and label it "Version N".
     version: int = 0
+    # This one run of the agent, unique to it: a gate's revise, a rerun_from and a re-run
+    # of part of a stage each get a new one. The Document generator records it with each
+    # file, so a step's new attempt replaces the file its earlier attempt wrote and never a
+    # file of a call from the same attempt (app/tools/docgen/handler.py _claim).
+    attempt: str = ""
 
 
 # A shared default instance is safe here BECAUSE `Scope` is frozen: nothing can
@@ -32,9 +37,9 @@ _current: contextvars.ContextVar[Scope] = contextvars.ContextVar(
     "obs_scope", default=Scope())  # noqa: B039 - Scope is frozen, see above
 
 
-def set_scope(session_id: str, agent_id: str, user: str = "", version: int = 0) -> None:
+def set_scope(session_id: str, agent_id: str, user: str = "", version: int = 0, attempt: str = "") -> None:
     _current.set(Scope(session_id=session_id or "", agent_id=agent_id or "",
-                       user=user or "", version=int(version or 0)))
+                       user=user or "", version=int(version or 0), attempt=attempt or ""))
 
 
 def get_scope() -> Scope:

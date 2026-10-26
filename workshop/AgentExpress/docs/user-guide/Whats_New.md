@@ -4,6 +4,38 @@ Coming back to AgentExpress after a while? Here's what you can now do, newest fi
 
 # Newest
 
+## Document generator
+
+- A built-in tool that writes PDF, PPTX and DOCX files from an agent's JSON data, into your PPTX or DOCX template in S3 or a simple built-in layout.
+- Each file is saved with the run, and optionally to an S3 folder. Test it in the tool panel with sample data.
+- See [Tool types in depth](Tool_Types.md#document-generator).
+
+## Deliver a run's files
+
+- A **Deliver files** generic step sends the files a run saved to Amazon S3, by email with Amazon SES, or to a signed webhook.
+- Put it after a gate or a branch to deliver only when a check passed or a person chose to go on.
+- See [Stages and steps](Stages_and_Steps.md#deliver-a-runs-files).
+
+## Named options at a gate
+
+- A gate can offer your own options, such as **Override** and **Abort**. The choice becomes the run field `decision`, and branch rules route on it.
+- An agent can also ask a person to choose one of your options in the middle of its step.
+- See [Human in the loop](Human_in_the_Loop.md#offer-named-options-at-a-gate).
+
+## Storage for the build
+
+- **Settings**, **Storage** makes the deploy create a private, encrypted, versioned S3 bucket for the build. Tools name it as `${storage}`.
+- It is emptied and deleted with the build unless you keep it.
+- See [Settings](Settings.md#create-storage-for-the-build).
+
+## The Assistant: versions, parallel work and files
+
+- Each change the Assistant saves is a named version. Say "go back to v1", and it says which version it restores first.
+- It puts work you ask to run in parallel in a parallel stage, and makes one tool for each tool you list.
+- It uses the Document generator for PDF, PPTX and DOCX files, and the build's storage when you named no bucket.
+- A message with no request gets one short question, and the scope of what it builds is said once.
+- See [Build with the AgentExpress Assistant](AgentExpress_Assistant.md#go-back-to-a-version).
+
 ## Ask the Assistant, on every feature page
 
 - A new page, [Ask the Assistant](Ask_the_Assistant.md), lists what you can ask the AgentExpress Assistant to set for each feature, with requests you can paste.

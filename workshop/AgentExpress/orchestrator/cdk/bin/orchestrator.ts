@@ -117,6 +117,8 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   identitySecrets: parseSecretMap("IDENTITY_SECRETS", "identity name", process.env.IDENTITY_SECRETS),
   // orchestrator.export's headers by secret name (the Builder's exportHeaders); lib/export.ts.
   exportHeaders: parseSecretMap("EXPORT_HEADERS", "orchestrator.export.secret name", process.env.EXPORT_HEADERS),
+  // A deliver step's webhook signing secrets, by name (v139 Track C deliver; lib/deliver.ts).
+  deliverSecrets: parseSecretMap("DELIVER_SECRETS", "deliver target secret name", process.env.DELIVER_SECRETS),
   // Bearer tokens for `runtime: "a2a"` agents, keyed by agent id. Credentials for
   // somebody ELSE's agent, so they come from the environment and never from config.
   a2aTokens: parseSecretMap("A2A_TOKENS", "agent id", process.env.A2A_TOKENS),

@@ -6,7 +6,9 @@
  *    toolApproval  the tool and the exact arguments it will be called with, and Approve /
  *                  Deny. The arguments are shown as text (React escapes them): never run,
  *                  never rendered as HTML, because they come from a model.
- *  Both go through the same decision route as a review gate (bff/asks.py). */
+ *    decision      (v139 Track D) the agent's question and one button per askPerson option,
+ *                  with an optional comment (DecisionOptions.tsx); sends {option, comment}.
+ *  All go through the same decision route as a review gate (bff/asks.py). */
 
 import Alert from "@cloudscape-design/components/alert";
 import Box from "@cloudscape-design/components/box";
@@ -20,6 +22,7 @@ import { useState } from "react";
 
 import type { SessionSnapshot, Workflow } from "../types";
 import type { Decision } from "./HitlGate";
+import { DecisionOptions } from "./DecisionOptions";
 import { useDocsBase } from "../docs/docsLinks";
 import { infoSlot } from "../docs/InfoLink";
 
@@ -33,11 +36,49 @@ export function AskPerson({
   workflow: Workflow;
   canDecide: boolean;
   denyReason: string | null;
-  onDecide: (d: Decision, comment: string) => Promise<void>;
+  onDecide: (d: Decision, comment: string, option?: string) => Promise<void>;
 }) {
   const docs = useDocsBase();
   const hitl = snap.hitl!;
   const agent = workflow.agents[hitl.node]?.name ?? hitl.node;
+  if (hitl.kind === "decision") {
+    // v139 Track D: the agent asked a person to choose one of its askPerson.options.
+    return (
+      <Container
+        header={
+          <Header variant="h2" info={infoSlot(docs, "run.decision")}
+            description="The agent paused for you to choose. Your choice is given to it, and it decides what runs next.">
+            {`${agent} needs a decision`}
+          </Header>
+        }
+      >
+        <SpaceBetween size="l">
+          <Alert type="info" statusIconAriaLabel="Info">
+            The run is paused and will stay paused until you choose.
+            {hitl.timeoutAt ? ` With no choice by ${hitl.timeoutAt} (UTC) the agent carries on without one.` : ""}
+          </Alert>
+          {denyReason ? <Alert type="warning">{denyReason}</Alert> : null}
+          <Box variant="p" fontSize="heading-s">{hitl.question}</Box>
+          <DecisionOptions options={hitl.options ?? []} canDecide={canDecide}
+                           onChoose={(o, c) => onDecide("approve", c, o)} />
+        </SpaceBetween>
+      </Container>
+    );
+  }
+  return <AskOrApprove snap={snap} agent={agent} canDecide={canDecide} denyReason={denyReason} onDecide={onDecide} />;
+}
+
+function AskOrApprove({
+  snap, agent, canDecide, denyReason, onDecide,
+}: {
+  snap: SessionSnapshot;
+  agent: string;
+  canDecide: boolean;
+  denyReason: string | null;
+  onDecide: (d: Decision, comment: string) => Promise<void>;
+}) {
+  const docs = useDocsBase();
+  const hitl = snap.hitl!;
   const isQuestion = hitl.kind === "question";
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);

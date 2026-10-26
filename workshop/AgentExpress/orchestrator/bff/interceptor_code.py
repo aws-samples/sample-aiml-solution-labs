@@ -10,9 +10,12 @@ The sources are web/src/builder/interceptor-templates/{request,response}.py, sta
 the BFF package as interceptor_templates/ (cdk stageBffPackage, terraform/bff.tf)."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
+import sys
+import textwrap
 
 POINTS = ("request", "response")
 #: TEMPLATES in interceptorCode.ts: each point's templates, in that order.
@@ -137,14 +140,166 @@ def sample_events(point: str, wf: dict, templates: dict) -> list:
     ]
 
 
-def files(point: str, templates: dict, wf: dict) -> dict:
-    """The files of an interceptor generated from its checked templates."""
+#: ALWAYS in interceptorCode.ts: sections every generated handler keeps, whatever is
+#: checked. response.py's `protocol` guard lets the steps change only a tool's result,
+#: never an MCP protocol field (initialize's protocolVersion, capabilities, serverInfo;
+#: jsonrpc, id), and GUARDED names what in it the Assistant may not rewrite.
+ALWAYS = ["protocol"]
+GUARDED = {"response": ("lambda_handler", "_keep_protocol")}
+
+
+def _handler(point: str, templates: dict, sections: list[str]) -> str:
     templates = templates if isinstance(templates, dict) else {}
     keep = [t for t in TEMPLATES[point] if t in templates]
     settings = {t: _canonical(templates[t]) for t in keep}
-    return {"handler.py": render(source(point), keep, settings),
+    return render(source(point), [*keep, *sections], settings)
+
+
+def files(point: str, templates: dict, wf: dict) -> dict:
+    """The files of an interceptor generated from its checked templates."""
+    templates = templates if isinstance(templates, dict) else {}
+    return {"handler.py": _handler(point, templates, ALWAYS),
             "requirements.txt": "",
             "events.json": _stringify(sample_events(point, wf, templates), 2) + "\n"}
+
+
+def _custom_node(tree):
+    found = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "custom"]
+    return found[0] if len(found) == 1 else None
+
+
+def custom_function(handler: str) -> str | None:
+    """The source of handler.py's top-level custom() function, or None when it has none."""
+    try:
+        tree = ast.parse(handler)
+    except SyntaxError:
+        return None
+    node = _custom_node(tree)
+    if node is None:
+        return None
+    lines = handler.splitlines(keepends=True)
+    start = min([node.lineno, *(d.lineno for d in node.decorator_list)])
+    return "".join(lines[start - 1:node.end_lineno]).rstrip("\n") + "\n"
+
+
+def _defines(n) -> list[str] | None:
+    """The names a top-level statement binds, or None when it is not a definition."""
+    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [n.name]
+    if isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+        targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+        return [x.id for t in targets for x in ast.walk(t) if isinstance(x, ast.Name)]
+    if isinstance(n, (ast.Import, ast.ImportFrom)):
+        return [a.asname or a.name.split(".")[0] for a in n.names]
+    return None
+
+
+def with_custom(handler: str, code: str, generated: str | None = None) -> str:
+    """`handler` with its custom() function replaced by `code` (a whole `def custom(...)`,
+    with helpers of its own if it needs them); the rest of the file as it was. `generated`
+    is what its templates generate: a helper an earlier custom() added (not in it) is
+    replaced by one of the same name. Raises ValueError when `code` is not that, or would
+    redefine anything else in the handler."""
+    try:
+        tree = ast.parse(handler)
+    except SyntaxError as e:
+        raise ValueError(f"handler.py does not parse: {e.msg} (line {e.lineno})") from None
+    old = _custom_node(tree)
+    if old is None:
+        raise ValueError("handler.py has no custom() function (it was edited by hand: "
+                         "generate it again from its templates first)")
+    code = textwrap.dedent(str(code or "")).strip("\n")
+    try:
+        mine = ast.parse(code)
+    except SyntaxError as e:
+        raise ValueError(f"custom() does not parse: {e.msg} (line {e.lineno})") from None
+    new = _custom_node(mine)
+    if new is None:
+        raise ValueError("`code` must define exactly one top-level `def custom(...)`")
+    if [a.arg for a in new.args.args] != [a.arg for a in old.args.args]:
+        raise ValueError("custom() must keep its signature: custom("
+                         + ", ".join(a.arg for a in old.args.args) + ")")
+    mine_names: set[str] = set()
+    for n in mine.body:
+        names = _defines(n)
+        if names is None:
+            raise ValueError("`code` may hold only custom(), helper functions, imports and constants")
+        mine_names |= set(names)
+    base = ast.parse(generated) if generated else tree
+    fixed = {x for n in base.body if not (isinstance(n, ast.FunctionDef) and n.name == "custom")
+             and not isinstance(n, (ast.Import, ast.ImportFrom)) for x in (_defines(n) or [])}
+    clash = sorted((mine_names - {"custom"}) & fixed)
+    if clash:
+        raise ValueError(f"`code` redefines {clash[0]!r}, which the rest of handler.py defines")
+    # Helpers an earlier custom() added, defined again now: the old ones go.
+    drop = [old] + [n for n in tree.body if n is not old and not isinstance(n, (ast.Import, ast.ImportFrom))
+                    and (names := _defines(n)) and set(names) <= mine_names and not set(names) & fixed]
+    # A standard-library module the code uses (re, json...) that neither it nor the
+    # handler imports is imported just before it, so it never fails on a NameError.
+    bound = {a.asname or a.name.split(".")[0] for t in (tree, mine) for n in ast.walk(t)
+             if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}
+    used = {n.id for n in ast.walk(mine) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    need = sorted(m for m in used - bound - fixed - mine_names if m in sys.stdlib_module_names)
+    if need:
+        code = "".join(f"import {m}\n" for m in need) + "\n\n" + code
+    lines = handler.splitlines(keepends=True)
+    spans = sorted((min([n.lineno, *(d.lineno for d in getattr(n, "decorator_list", []))]), n.end_lineno, n is old)
+                   for n in drop)
+    out, at = [], 0
+    for start, end, is_old in spans:
+        out.append("".join(lines[at:start - 1]))
+        if is_old:
+            out.append(code + "\n")
+        at = end
+    out.append("".join(lines[at:]))
+    return "".join(out)
+
+
+def is_generated(point: str, templates: dict, handler: str) -> bool:
+    """isGenerated in interceptorCode.ts: `handler` is what these templates generate, now or
+    before the ALWAYS sections existed (a build saved then)."""
+    return handler in (_handler(point, templates, ALWAYS), _handler(point, templates, []))
+
+
+def guard_problem(point: str, handler: str, templates: dict) -> str:
+    """Why `handler` (code the Assistant wrote for this point) would let the steps change
+    MCP protocol fields, or "" when it keeps the generated guard.
+
+    The functions in GUARDED must be in it once each, exactly as generated, and nothing
+    else at the top level may bind those names or `copy`: then whatever the other
+    functions (custom included) do to an answer, lambda_handler hands back a tool's result
+    and nothing else changed."""
+    import ast
+    names = GUARDED.get(point)
+    if not names:
+        return ""
+    try:
+        tree = ast.parse(handler)
+    except SyntaxError as e:
+        return f"handler.py does not parse: {e.msg} (line {e.lineno})"
+    want = {n.name: ast.dump(n) for n in ast.parse(_handler(point, templates, ALWAYS)).body
+            if isinstance(n, ast.FunctionDef) and n.name in names}
+    defs: dict[str, list[str]] = {}
+    for node in tree.body:                       # the module's top level
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defs.setdefault(node.name, []).append(ast.dump(node))
+            continue
+        bound: list[tuple[str, bool]] = []       # (name, is it `import copy` itself)
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound = [(a.asname or a.name.split(".")[0], isinstance(node, ast.Import) and a.name == "copy"
+                      and not a.asname) for a in node.names]
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            bound = [(n.id, False) for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)]
+        for name, plain_import in bound:
+            if name in names or (name == "copy" and not plain_import):
+                return f"handler.py rebinds {name!r}, which the generated protocol guard needs"
+    for name in names:
+        if defs.get(name) != [want[name]]:
+            return (f"handler.py must keep the generated {name}() exactly as it is: it lets the steps change "
+                    "only a tool's result and never an MCP protocol field (initialize's protocolVersion, "
+                    "capabilities, serverInfo; jsonrpc, id)")
+    return ""
 
 
 def needs_headers(point: str, templates: dict) -> bool:

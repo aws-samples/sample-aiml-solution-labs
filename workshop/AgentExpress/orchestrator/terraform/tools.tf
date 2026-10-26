@@ -105,14 +105,23 @@ locals {
         for s in try(t.toolSchema, []) : {
           name        = try(s.name, "")
           description = substr(try(s.description, try(s.name, "tool")), 0, 190)
-          properties = [
+          properties = concat([
             for pname, p in try(s.properties, {}) : {
               name        = pname
               type        = lower(try(p.type, "string"))
               required    = try(p.required, false)
               description = substr(try(p.description, pname), 0, 190)
             }
-          ]
+            ],
+            # Track B docgen: the Document generator also gets the arguments the runtime
+            # sets that the config need not declare (docgen_published_args below).
+            [for pname, p in local.docgen_published_args : {
+              name        = pname
+              type        = p.type
+              required    = false
+              description = p.description
+            } if try(t.source, "") == "docgen" && try(s.name, "") == "generate_document" && !contains(keys(try(s.properties, {})), pname)]
+          )
         }
       ]
       # `maxResults` applies to kb and websearch only, so `lookup` with a null fallback
@@ -132,6 +141,14 @@ locals {
       # The Browser tool's (source "browser") allow-list, which its function reads as
       # ALLOW_DOMAINS (browser_tool.tf).
       allow_domains = try(t.allowDomains, [])
+      # --- begin Track B docgen: the Document generator's (source "docgen") settings,
+      # which its function reads as FORMATS, TEMPLATE_S3_URI and OUTPUT_PREFIX and its role
+      # is scoped to (docgen_tool.tf).
+      # Both locations with the ${storage} token resolved (storage.tf, Track E): as written otherwise.
+      formats         = try(t.formats, [])
+      template_s3_uri = replace(try(t.templateS3Uri, ""), local.storage_token, local.storage_uri)
+      output_prefix   = replace(try(t.outputPrefix, ""), local.storage_token, local.storage_uri)
+      # --- end Track B docgen
       # The web-search connector version. A target created without one gets the
       # connector's DEFAULT (1.1.0 as of Oct 2026), not the latest, and keeps it after
       # (the version is sticky). The domain include list and published-date filters need
@@ -272,6 +289,7 @@ locals {
   builtin_lambda_pricing_tools          = { for n, t in local.builtin_lambda_tools : n => t if t.source == "pricing" }
   builtin_lambda_code_interpreter_tools = { for n, t in local.builtin_lambda_tools : n => t if t.source == "codeInterpreter" }
   builtin_lambda_browser_tools          = { for n, t in local.builtin_lambda_tools : n => t if t.source == "browser" }
+  builtin_lambda_docgen_tools           = { for n, t in local.builtin_lambda_tools : n => t if t.source == "docgen" } # Track B docgen
 
   # The same split for OpenAPI targets, on the same key and for the same reason.
   # `source` = a schema in app/tools/<source>/openapi.json that the framework uploads;
@@ -762,7 +780,7 @@ resource "terraform_data" "tools_validation" {
       # express, so only the built-in demo function is supported.
       condition = alltrue([for n, t in local.builtin_lambda_tools :
       contains(local.vocab.builtinLambdaSource.values, t.source)])
-      error_message = "A type=\"lambda\" tool's \"source\" names a folder under orchestrator/app/tools/, and the only ones the framework ships are \"pricing\" (orchestrator/app/tools/pricing/), \"codeInterpreter\" (orchestrator/app/tools/codeInterpreter/) and \"browser\" (orchestrator/app/tools/browser/). It is not a general \"deploy any directory\" option: a framework-deployed function needs an execution role that config cannot express - each shipped one has a role written for it (read-only on the PUBLIC AWS price list; one AgentCore Code Interpreter sandbox; the AWS-managed AgentCore Browser), which is wrong for a warehouse or database connector that needs VPC config and a secret. To use a function of your own: deploy it yourself, then set \"lambdaArn\" instead of \"source\". Offending: ${join(", ", [for n, t in local.builtin_lambda_tools : n if !contains(local.vocab.builtinLambdaSource.values, t.source)])}."
+      error_message = "A type=\"lambda\" tool's \"source\" names a folder under orchestrator/app/tools/, and the only ones the framework ships are \"pricing\" (orchestrator/app/tools/pricing/), \"codeInterpreter\" (orchestrator/app/tools/codeInterpreter/) and \"browser\" (orchestrator/app/tools/browser/) and \"docgen\" (orchestrator/app/tools/docgen/). It is not a general \"deploy any directory\" option: a framework-deployed function needs an execution role that config cannot express - each shipped one has a role written for it (read-only on the PUBLIC AWS price list; one AgentCore Code Interpreter sandbox; the AWS-managed AgentCore Browser; the Document generator's templates and outputs), which is wrong for a warehouse or database connector that needs VPC config and a secret. To use a function of your own: deploy it yourself, then set \"lambdaArn\" instead of \"source\". Offending: ${join(", ", [for n, t in local.builtin_lambda_tools : n if !contains(local.vocab.builtinLambdaSource.values, t.source)])}."
     }
     precondition {
       condition = alltrue([
@@ -1527,14 +1545,16 @@ resource "aws_lambda_function" "tool" {
   # The code interpreter function waits on a sandbox run of up to 30 s (a constant in
   # its handler) plus starting and stopping the session, and the browser function on a
   # page of up to 40 s (CALL_SECONDS in its handler); pricing keeps its 30.
-  timeout     = contains(["codeInterpreter", "browser"], each.value.source) ? 60 : 30
-  memory_size = 256
+  # The document generator (Track B docgen) reads a template and renders a file of up to
+  # 25 MB, with more memory; every other function keeps its 256.
+  timeout     = contains(["codeInterpreter", "browser", "docgen"], each.value.source) ? 60 : 30
+  memory_size = each.value.source == "docgen" ? 512 : 256
 
   # The pricing function has settings, and a browser function with allowDomains. A
   # dynamic block keeps pricing's `environment` exactly as it was, so an upgrade plans no
   # change to it.
   dynamic "environment" {
-    for_each = each.value.source == "pricing" || (each.value.source == "browser" && length(each.value.allow_domains) > 0) ? [1] : []
+    for_each = each.value.source == "pricing" || each.value.source == "docgen" || (each.value.source == "browser" && length(each.value.allow_domains) > 0) ? [1] : []
     content {
       variables = each.value.source == "pricing" ? tomap({
         # Where the Price List Query API endpoint lives, which is NOT where prices
@@ -1543,7 +1563,11 @@ resource "aws_lambda_function" "tool" {
         # in any region. The region to price FOR is the tool's own `region` argument,
         # defaulting to this deployment's AWS_REGION.
         PRICING_API_REGION = "us-east-1"
-        }) : tomap({
+        }) : each.value.source == "docgen" ? tomap(merge({
+          # Track B docgen: what the Document generator may write and where (docgen_tool.tf).
+          FORMATS       = join(",", each.value.formats)
+          ASSETS_BUCKET = try(aws_s3_bucket.assets[0].id, "")
+        }, { for k, v in { TEMPLATE_S3_URI = each.value.template_s3_uri, OUTPUT_PREFIX = each.value.output_prefix } : k => v if v != "" })) : tomap({
         # The domains the Browser tool may open (allowDomains), comma-separated.
         ALLOW_DOMAINS = join(",", each.value.allow_domains)
       })

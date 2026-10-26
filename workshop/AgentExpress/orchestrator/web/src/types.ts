@@ -24,7 +24,7 @@ export interface AgentMeta {
   maxTokens?: number;
   source?: string;
   skill?: string;
-  /** A task step's kind (runtime "task": tool, code, extract, output); `source` labels it. */
+  /** A task step's kind (runtime "task": tool, code, extract, output, deliver); `source` labels it. */
   task?: string;
   /** What is attached to it, by kind and name (bff/workflow.py components()). */
   components?: RunComponent[];
@@ -177,7 +177,10 @@ export interface SessionSnapshot extends SessionSummary {
   result?: string;
   hitl?: { node: string; question?: string; approval?: string; timeoutAt?: string; timeoutAction?: string;
     /** An agent asking mid-step (app/common/asks.py); absent at a review gate. */
-    kind?: "question" | "toolApproval"; askId?: string; tool?: string; args?: string } | null;
+    kind?: "question" | "toolApproval" | "decision"; askId?: string; tool?: string; args?: string;
+    /** v139 Track D: named options a person chooses between (a gate's hitl.options, or an
+     *  agent's request_decision with kind "decision"). */
+    options?: string[] } | null;
 }
 
 export interface Me {

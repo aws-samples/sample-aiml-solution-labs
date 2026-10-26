@@ -32,7 +32,8 @@ const toolErrors = (wf: ReturnType<typeof newProject>["workflow"], key: string) 
 
 describe("the Code Interpreter and Browser choices", () => {
   it("are offered by name after the tool types", () => {
-    expect(BUILTIN_CHOICES.map((c) => [c.value, c.label])).toEqual([["codeInterpreter", "Code Interpreter"], ["browser", "Browser"]]);
+    expect(BUILTIN_CHOICES.map((c) => [c.value, c.label])).toEqual([["codeInterpreter", "Code Interpreter"], ["browser", "Browser"],
+      ["docgen", "Document generator"]]);
   });
 
   it("write exactly the documented Code Interpreter tool, which checks clean", () => {
@@ -64,10 +65,12 @@ describe("the Code Interpreter and Browser choices", () => {
   it("hide the function's fields on the form, and allowDomains everywhere but the Browser", () => {
     const hidden = (t: Entry) => Object.keys(builtinOverrides(t)).sort();
     const lambdaOnly = ["arg", "args", "call", "code", "lambdaArn", "rowFields", "rowPath", "source", "toolSchema"];
-    expect(hidden({ type: "lambda", source: "browser" })).toEqual(lambdaOnly);
-    expect(hidden({ type: "lambda", source: "codeInterpreter" })).toEqual(["allowDomains", ...lambdaOnly].sort());
-    expect(hidden({ type: "lambda", lambdaArn: "arn:aws:lambda:us-east-1:1:function:f" })).toEqual(["allowDomains"]);
-    expect(hidden({ type: "mcp" })).toEqual(["allowDomains"]);
+    // Track B docgen: the Document generator's settings are hidden on every other tool too.
+    const docgen = ["formats", "outputPrefix", "templateS3Uri"];
+    expect(hidden({ type: "lambda", source: "browser" })).toEqual([...docgen, ...lambdaOnly].sort());
+    expect(hidden({ type: "lambda", source: "codeInterpreter" })).toEqual(["allowDomains", ...docgen, ...lambdaOnly].sort());
+    expect(hidden({ type: "lambda", lambdaArn: "arn:aws:lambda:us-east-1:1:function:f" })).toEqual(["allowDomains", ...docgen].sort());
+    expect(hidden({ type: "mcp" })).toEqual(["allowDomains", ...docgen].sort());
     expect(builtinLabel({ type: "lambda", source: "pricing" })).toBeUndefined();
   });
 });

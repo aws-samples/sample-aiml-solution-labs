@@ -12,6 +12,7 @@ disabled. An agent can therefore call them unconditionally.
 import contextlib
 import json as _json
 import re
+import uuid
 from typing import ClassVar
 
 from app.common.config import TOOLS
@@ -119,6 +120,11 @@ def _significant(text: str) -> set[str]:
     return {w for w in words if w not in _TOPIC_STOPWORDS}
 
 
+#: Long-term strategies whose records hold for a run on any subject (memory_recall keeps
+#: them without the _on_topic check): what a person prefers, not what a topic was about.
+_ANY_SUBJECT = frozenset({"userPreference"})
+
+
 def _on_topic(recalled: list[str], query: str) -> list[str]:
     """Recalled insights that share at least one content word with the query.
 
@@ -205,9 +211,13 @@ class AgentContext:
         # numbering the node writes to `history`), so the observability UI can
         # group and label telemetry by version across re-runs.
         self.version = len((state.get("history") or {}).get(agent.id) or []) + 1
+        # This attempt of the step, unique to it (observability/scope.py Scope.attempt). The
+        # version alone is not enough: an attempt that failed adds no history, so the next
+        # one would have the same number.
+        self.attempt = f"{self.version}-{uuid.uuid4().hex[:12]}"
         with contextlib.suppress(Exception):  # observability is best-effort
             from app.features.observability.scope import set_scope
-            set_scope(self.session_id, self.agent_id, self.user, self.version)
+            set_scope(self.session_id, self.agent_id, self.user, self.version, self.attempt)
         # Reviewer feedback for this agent, set when a HITL gate chose "revise"
         # and the graph looped back to re-run this agent. Empty on a first run.
         self.feedback = (state.get("feedback") or {}).get(agent.id, "")
@@ -678,6 +688,7 @@ class AgentContext:
 
         from app.features.memory import recall
         combined: list[str] = []
+        found: list[tuple[str, str]] = []        # (strategy, record), in recall order
         for strat in strategies:
             how, namespace = self._recall_scope(strat)
             start = _t.perf_counter()
@@ -695,8 +706,13 @@ class AgentContext:
                 "\n---\n".join(str(x) for x in results) if results else "(no matching memories)",
                 int((_t.perf_counter() - start) * 1000))
             combined.extend(results)
+            found += [(strat, r) for r in results]
 
-        kept = _on_topic(combined, query)
+        # A preference is about the PERSON (tone, format, length), not the subject, so it
+        # applies to a run on any topic and is never "off-topic": seen live, a stated tone
+        # was recalled and then dropped because its words were not the new request's.
+        # Every other strategy's records still have to share a subject word (_on_topic).
+        kept = [r for strat, r in found if strat in _ANY_SUBJECT or _on_topic([r], query)]
         # WHAT THE AGENT ACTUALLY GOT, not what the store returned. The rows above
         # record the RAW result per namespace, and `_on_topic` runs after them — so
         # a recall that found five records and discarded all five was reported as a
@@ -708,8 +724,9 @@ class AgentContext:
         if len(kept) != len(combined):
             self._record_memory(
                 "recall-filtered", "", query,
-                f"{len(kept)} of {len(combined)} recalled insight(s) shared a "
-                f"subject word with this run; the rest were dropped as off-topic.",
+                f"{len(kept)} of {len(combined)} recalled insight(s) kept (preferences always, "
+                f"the rest when they share a subject word with this run); the others were "
+                f"dropped as off-topic.",
                 0)
         return kept
 

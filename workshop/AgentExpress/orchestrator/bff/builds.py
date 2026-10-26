@@ -384,7 +384,10 @@ def test_tool(build_id: str, owner: str, key: str, tool: str, event) -> dict:
         raise BuildError(409, "this build is not deployed: deploy it, then test its tools")
     wf = _version_workflow(build_id, int(deployed["version"]))
     interceptor = key in buildstore.code_interceptors(wf)
-    if key not in buildstore.code_tools(wf) and not interceptor:
+    # Track B docgen: the Document generator's test run with sample data (DocgenTest.tsx).
+    docgen = (isinstance((wf.get("tools") or {}).get(key), dict)
+              and wf["tools"][key].get("type") == "lambda" and wf["tools"][key].get("source") == "docgen")
+    if key not in buildstore.code_tools(wf) and not interceptor and not docgen:
         raise BuildError(404, f"the deployed version has no tool {key!r} written in the build")
     if interceptor:
         # An interceptor is called with the Gateway's own payload, not a tool's arguments.
@@ -729,7 +732,10 @@ def delete(build_id: str, owner: str) -> None:
 #: orchestrator.export.secret gives (bff/export_check.py, app/features/observability/runexport.py).
 #: ...and the tokens of private git repositories a code source names (`git.token`,
 #: bff/code_source.py), read by the deployer only (deployer/code_fetch.py).
-SECRET_KINDS = ("toolApiKeys", "a2aTokens", "identitySecrets", "exportHeaders", "gitTokens")
+#: ...and (v139 Track C deliver) a deliver step's webhook signing secrets, by the name its
+#: target's `secret` gives (app/common/deliver.py), deployed into the runtime secret.
+SECRET_KINDS = ("toolApiKeys", "a2aTokens", "identitySecrets", "exportHeaders", "gitTokens",
+                "deliverSecrets")
 
 
 def _secret_id(build_id: str) -> str:

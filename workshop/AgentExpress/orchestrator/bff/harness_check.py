@@ -19,6 +19,9 @@ import re
 
 from netguard import blocked_address
 
+#: The Document generator's source (docgen_tool.SOURCE).
+DOCGEN_SOURCE = "docgen"
+
 #: Bounds of the `harness` block (app/common/harness_agent.LIMITS).
 LIMITS = {"maxIterations": (1, 100), "timeoutSeconds": (1, 900)}
 PROVIDERS = ("bedrock", "openai", "gemini", "litellm")
@@ -165,6 +168,10 @@ def check(agents: dict, add, wf: dict | None = None) -> None:
             if _obj(t) and str(t.get("auth") or "").lower() in PERSON_AUTH:
                 add("error", where, f"{path}.tool", f'"{key}" acts as the person who runs it, and a harness '
                     "calls the Gateway as this build's machine client — pick a tool that does not")
+            if _obj(t) and t.get("source") == DOCGEN_SOURCE:
+                add("error", where, f"{path}.tool", f'"{key}" is the Document generator, which saves each file '
+                    "with the run the workflow sets on every call, and a harness calls the Gateway itself, "
+                    "so no run is set — bind it to an agent that is not a harness")
             if isinstance(key, str) and len(f"@gateway/{key}___*") > 64:
                 add("error", where, f"{path}.tool", f'"{key}" is too long for a harness: at most 51 characters')
         for name, pattern in (("browser", BROWSER_ARN_RE), ("codeInterpreter", CODE_ARN_RE)):
