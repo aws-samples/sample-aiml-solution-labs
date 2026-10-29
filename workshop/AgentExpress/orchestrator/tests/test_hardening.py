@@ -198,7 +198,7 @@ def test_the_runner_hands_the_guardrails_to_the_deploy():
     for the deploy flow itself."""
     src = (ORCH_ROOT / "deployer" / "runner.py").read_text()
     assert "guard = guardrails(env, target)" in src
-    assert "deploy_cdk(action, agent, gateway, sub_env, tags, target, signin, guard)" in src
-    assert "deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin, guard)" in src
+    assert "deploy_cdk(action, agent, gateway, sub_env, tags, target, signin, guard,\n" in src
+    assert "deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin, guard,\n" in src
     assert "cdk_context(agent, gateway, tags, signin, guard)" in src
-    assert "tf_vars(agent, gateway, region, tags, signin, guard)" in src
+    assert "tf_vars(agent, gateway, region, tags, signin, guard, bucket_naming)" in src

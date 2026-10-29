@@ -63,7 +63,7 @@ resource "terraform_data" "image_residency" {
 resource "aws_s3_bucket" "assets" {
   count = local.assets_enabled ? 1 : 0
   # Dashed like the other buckets: an S3 bucket name may not contain an underscore.
-  bucket        = "agentcore-${replace(var.agent_name, "_", "-")}-assets-${local.account_id}"
+  bucket        = local.bucket_names.assets
   force_destroy = true
 }
 

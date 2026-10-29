@@ -98,7 +98,7 @@ naming the corpus and the tool; a bundle never carries documents, so put them un
 ```
 
 The AWS-managed AgentCore Web Search connector: no key or endpoint, available in `us-east-1`,
-`eu-west-1` and `ap-northeast-1`. `domains` is set on the Gateway target, so it is hidden from the
+`us-east-2`, `us-west-2`, `eu-west-1`, `ap-southeast-2`, `ap-northeast-1` and `us-gov-west-1`. `domains` is set on the Gateway target, so it is hidden from the
 agent and applies to every request. Web Search's terms require displaying citations: the framework
 keeps each result's title, URL and date, drops cited URLs not in the evidence, and renders sources
 as links. Keep that in your own agents.

@@ -33,7 +33,7 @@ A temporary password stops working 7 days after it was issued. See [Open the exe
 # Fix a deploy
 
 - **Read the error.** The Deployment panel shows it, and **Log** holds the deploy's output. **Full log in CloudWatch** opens the whole log. **History** shows the end of each failure's reason.
-- **Refused for its Region.** Something the build uses is not offered there. AgentCore Web Search is offered in us-east-1, eu-west-1 and ap-northeast-1 only. Image agents outside the US need `image.allowCrossRegion`.
+- **Refused for its Region.** Something the build uses is not offered there. AgentCore Web Search is offered in us-east-1, us-east-2, us-west-2, eu-west-1, ap-southeast-2, ap-northeast-1 and us-gov-west-1 only. Image agents outside the US need `image.allowCrossRegion`.
 - **A CDK stack whose first create failed** is deleted and created again on the next deploy. A stack that ever deployed is never deleted this way.
 - **A connected account cannot be verified.** Verifying shows the reason from AWS STS: no such role, a trust or External ID mismatch, or a service control policy. See [Set up AWS accounts](AWS_Accounts.md).
 - **A grant fails at run time, not at deploy.** With a permissions boundary set, the boundary still caps every role. Widen the boundary or narrow the grant.

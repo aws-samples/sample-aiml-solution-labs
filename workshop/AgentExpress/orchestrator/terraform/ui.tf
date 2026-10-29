@@ -2,7 +2,7 @@
 
 resource "aws_s3_bucket" "ui" {
   # S3 bucket names must be lowercase and cannot contain underscores.
-  bucket        = "agentcore-${replace(var.agent_name, "_", "-")}-ui-${local.account_id}"
+  bucket        = local.bucket_names.ui
   force_destroy = true
 }
 
@@ -29,7 +29,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "ui" {
 # object) and grants the log delivery account write when the distribution is configured.
 # Public access stays fully blocked. Logs expire with var.log_retention_days.
 resource "aws_s3_bucket" "ui_logs" {
-  bucket        = "agentcore-${replace(var.agent_name, "_", "-")}-ui-logs-${local.account_id}"
+  bucket        = local.bucket_names["ui-logs"]
   force_destroy = true
 }
 resource "aws_s3_bucket_ownership_controls" "ui_logs" {

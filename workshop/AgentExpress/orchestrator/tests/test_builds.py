@@ -719,6 +719,8 @@ def test_documents_are_uploaded_per_corpus_and_copied_into_kb_docs(env, runner, 
     status, up = call(env, "POST /api/builds/{id}/docs", params={"id": "pclaims01"},
                       body={"corpus": "claims", "name": "policy.pdf"})
     assert status == 200 and up["fields"]["key"] == "builds/pclaims01/kb/claims/policy.pdf"
+    # Posted to the bucket's regional host, never the global one (bff/s3_presign.py).
+    assert up["url"] == "https://console-builds.s3.us-east-1.amazonaws.com/"
     env.s3.put_object(Bucket="console-builds", Key=up["fields"]["key"], Body=b"%PDF-1.4")
     assert call(env, "GET /api/builds/{id}/docs", params={"id": "pclaims01"})[1][0]["corpus"] == "claims"
     for bad in ({"corpus": "../x", "name": "a.pdf"}, {"corpus": "claims", "name": "../a.pdf"},
@@ -1307,7 +1309,7 @@ def test_a_region_that_cannot_run_a_tool_is_refused_before_the_deploy(env):
                              "agentCard": "https://partner.example.com/card.json"}})
     _connected(env)
     status, body = call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"},
-                        body={"tool": "cdk", "account": "123456789012", "region": "us-west-2"})
+                        body={"tool": "cdk", "account": "123456789012", "region": "eu-central-1"})
     assert status == 400 and "web search (search) is only available in" in body["error"]
     assert env.cb.started == []
 
@@ -1520,48 +1522,324 @@ def test_admin_and_audit_are_closed_unless_granted_and_insights_whenever_rbac_is
     assert not authz.permitted("admin", ev()) and not authz.permitted("audit", ev())
 
 
-def test_a_failed_first_create_is_deleted_before_the_retry_and_nothing_else_is(runner, monkeypatch):
-    """Live: a create that failed left ROLLBACK_FAILED (a Memory still CREATING when
-    rolled back), and `cdk deploy` refuses that. Only first-create failures are cleared."""
-    class Cfn:
-        def __init__(self, states):
-            self.states, self.deleted = list(states), 0
+# --- a failed first create (deployer/runner.py recover_failed_create) -----------------
 
-        def describe_stacks(self, StackName):
-            if not self.states:
-                from botocore.exceptions import ClientError
-                raise ClientError({"Error": {"Code": "ValidationError",
-                                             "Message": f"Stack with id {StackName} does not exist"}}, "Describe")
-            return {"Stacks": [{"StackStatus": self.states[0]}]}
+ACCT = "123456789012"
+STACK = "ax-1a2b3c4d-stack"
+STACK_ID = f"arn:aws:cloudformation:us-east-1:{ACCT}:stack/{STACK}/0f1e2d3c"
 
-        def delete_stack(self, StackName):
-            self.deleted += 1
 
-        def get_waiter(self, _):
-            cfn = self
+def _stack_event(status):
+    return {"LogicalResourceId": STACK, "ResourceType": "AWS::CloudFormation::Stack",
+            "ResourceStatus": status}
 
-            class W:
-                def wait(self, **_):
-                    cfn.states.pop(0)
-                    if cfn.states and cfn.states[0] == "DELETE_FAILED":
-                        raise RuntimeError("still settling")
-            return W()
 
-    class Sts:
-        def get_caller_identity(self):
-            return {"Account": "123456789012"}
+#: A first create that failed and rolled back (newest first, as DescribeStackEvents returns).
+FAILED_HISTORY = [_stack_event("ROLLBACK_FAILED"), _stack_event("ROLLBACK_IN_PROGRESS"),
+                  {"LogicalResourceId": "UiBucket", "ResourceType": "AWS::S3::Bucket",
+                   "ResourceStatus": "CREATE_COMPLETE"},
+                  _stack_event("CREATE_IN_PROGRESS"), _stack_event("REVIEW_IN_PROGRESS")]
 
-        def assume_role(self, RoleArn, **_):
-            assert RoleArn == "arn:aws:iam::123456789012:role/cdk-hnb659fds-deploy-role-123456789012-us-east-1"
-            return {"Credentials": {"AccessKeyId": "a", "SecretAccessKey": "b", "SessionToken": "c"}}
 
-    session = types.SimpleNamespace(client=lambda _: Sts())
-    for states, deletes in ((["ROLLBACK_FAILED"], 1), (["ROLLBACK_FAILED", "DELETE_FAILED"], 2),
-                            (["CREATE_COMPLETE"], 0), (["UPDATE_ROLLBACK_FAILED"], 0), ([], 0)):
-        cfn = Cfn(states)
-        monkeypatch.setattr(boto3, "client", lambda *a, _c=cfn, **k: _c)
-        runner.clear_failed_create(session, "ax-1-stack", "us-east-1", pause=0)
-        assert cfn.deleted == deletes, states
+def _bucket(logical, name, status="DELETE_FAILED"):
+    return {"LogicalResourceId": logical, "ResourceType": "AWS::S3::Bucket",
+            "ResourceStatus": status, "PhysicalResourceId": name}
+
+
+class _RecoverWorld:
+    """CloudFormation (as the CDK deploy role) and S3 for recover_failed_create, recording
+    every call. `states`: the stack's status at each DescribeStacks, popped by each delete's
+    wait; `events` pages of stack events; `resources` the ListStackResources answer."""
+
+    def __init__(self, states, events=None, resources=(), event_error=None, versions=None):
+        from botocore.exceptions import ClientError
+        self.ClientError = ClientError
+        self.states, self.events, self.resources = list(states), events or [FAILED_HISTORY], list(resources)
+        self.event_error, self.versions = event_error, versions or {}
+        self.deletes, self.listed, self.emptied, self.event_reads = [], [], [], []
+        world = self
+
+        class Paginator:
+            def __init__(self, name):
+                self.name = name
+
+            def paginate(self, **kw):
+                if self.name == "describe_stack_events":
+                    world.event_reads.append(kw["StackName"])
+                    if world.event_error:
+                        raise world.event_error
+                    yield from ({"StackEvents": page} for page in world.events)
+                elif self.name == "list_stack_resources":
+                    world.listed.append(kw["StackName"])
+                    for i in range(0, max(len(world.resources), 1), 100):
+                        yield {"StackResourceSummaries": world.resources[i:i + 100]}
+                else:
+                    assert self.name == "list_object_versions"
+                    assert kw["ExpectedBucketOwner"] == ACCT
+                    if kw["Bucket"] not in world.versions:
+                        raise ClientError({"Error": {"Code": "NoSuchBucket", "Message": "x"}}, "List")
+                    yield {"Versions": [{"Key": k, "VersionId": "v1"} for k in world.versions[kw["Bucket"]]],
+                           "DeleteMarkers": [{"Key": "gone.txt", "VersionId": "m1"}]}
+
+        class Cfn:
+            def describe_stacks(self, StackName):
+                assert StackName == STACK
+                if not world.states:
+                    raise ClientError({"Error": {"Code": "ValidationError",
+                                                 "Message": f"Stack with id {StackName} does not exist"}}, "Describe")
+                return {"Stacks": [{"StackStatus": world.states[0], "StackId": STACK_ID}]}
+
+            def describe_stack_resources(self, **_):
+                raise AssertionError("DescribeStackResources returns only the first 100: never call it")
+
+            def get_paginator(self, name):
+                return Paginator(name)
+
+            def delete_stack(self, StackName):
+                world.deletes.append(StackName)
+
+            def get_waiter(self, name):
+                assert name == "stack_delete_complete"
+
+                class W:
+                    def wait(self, StackName, **_):
+                        assert StackName == STACK_ID
+                        world.states.pop(0)
+                        if world.states and world.states[0] == "DELETE_FAILED":
+                            raise RuntimeError("Waiter StackDeleteComplete failed: DELETE_FAILED")
+                return W()
+
+        class S3:
+            def get_paginator(self, name):
+                return Paginator(name)
+
+            def delete_objects(self, Bucket, Delete, ExpectedBucketOwner):
+                assert ExpectedBucketOwner == ACCT
+                world.emptied.append((Bucket, sorted(o["Key"] for o in Delete["Objects"])))
+                return {}
+
+        class Sts:
+            def get_caller_identity(self):
+                return {"Account": ACCT}
+
+            def assume_role(self, RoleArn, **_):
+                assert RoleArn == f"arn:aws:iam::{ACCT}:role/cdk-hnb659fds-deploy-role-{ACCT}-us-east-1"
+                return {"Credentials": {"AccessKeyId": "a", "SecretAccessKey": "b", "SessionToken": "c"}}
+
+        self.cfn, self.s3, self.sts = Cfn(), S3(), Sts()
+        self.session = types.SimpleNamespace(
+            client=lambda name, **_: {"sts": self.sts, "s3": self.s3}[name])
+
+
+@pytest.fixture
+def recover(runner, monkeypatch):
+    """recover_failed_create(world, **kw) against a _RecoverWorld, no waits."""
+    def go(world, **kw):
+        monkeypatch.setattr(boto3, "client", lambda *a, **k: world.cfn)
+        return runner.recover_failed_create(world.session, STACK, "us-east-1", agent="ax_1a2b3c4d",
+                                            pause=0, **kw)
+    return go
+
+
+#: This build's buckets, as the stack names them, in the legacy scheme and the regional one.
+UI = "agentcore-ax-1a2b3c4d-ui-123456789012-us-east-1"
+ASSETS_LEGACY = "agentcore-ax-1a2b3c4d-assets-123456789012"
+STORAGE_REGIONAL = "ax-1a2b3c4d-storage-123456789012-us-east-1"
+UI_LOGS = "ax-1a2b3c4d-stack-uilogsbucket361ab5ff-piyu"
+
+
+def test_a_failed_first_create_has_its_own_buckets_emptied_and_is_deleted(recover, capsys):
+    """Seen live: a first create's rollback could not delete the UI bucket the deploy had
+    already filled (BucketNotEmpty), the stack ended ROLLBACK_FAILED, and every later deploy
+    failed. Only this stack's own framework buckets are emptied, then the stack is deleted."""
+    others = [{"LogicalResourceId": f"Role{i}", "ResourceType": "AWS::IAM::Role",
+               "ResourceStatus": "DELETE_COMPLETE", "PhysicalResourceId": f"r{i}"} for i in range(140)]
+    resources = [*others, _bucket("UiBucketABC", UI), _bucket("AssetsBucketDEF", ASSETS_LEGACY),
+                 _bucket("UiLogsBucket361AB5FF", UI_LOGS),
+                 _bucket("BuildStorage1", STORAGE_REGIONAL, "CREATE_COMPLETE"),
+                 _bucket("Imported", "customer-data-bucket"),
+                 _bucket("Gone", "agentcore-ax-1a2b3c4d-kbdocs-123456789012", "DELETE_COMPLETE"),
+                 {"LogicalResourceId": "UiDeploy", "ResourceType": "Custom::CDKBucketDeployment",
+                  "ResourceStatus": "DELETE_FAILED", "PhysicalResourceId": UI}]
+    world = _RecoverWorld(["ROLLBACK_FAILED"], resources=resources,
+                          versions={UI: ["index.html", "assets/app.js"], ASSETS_LEGACY: [],
+                                    "customer-data-bucket": ["keep.csv"]})
+    assert recover(world) is False                 # gone: the deploy creates it afresh
+    assert [b for b, _ in world.emptied] == [UI, ASSETS_LEGACY]
+    assert world.emptied[0][1] == ["assets/app.js", "gone.txt", "index.html"]   # versions and markers
+    assert world.deletes == [STACK_ID] and world.listed == [STACK_ID] and world.event_reads == [STACK_ID]
+    out = [line for line in capsys.readouterr().out.splitlines() if line.startswith("runner:")]
+    assert out[0] == f"runner: {STACK} is ROLLBACK_FAILED: checking that it never deployed before clearing it"
+    assert out[1].startswith(f"runner: {STACK} never deployed")
+    assert f"runner: emptied {UI} (3 object version(s))" in out
+    assert f"runner: {UI_LOGS} does not exist; nothing to empty" in out
+    assert any("not emptying Imported (customer-data-bucket): not one of this build's buckets" in o for o in out)
+    assert out[-2:] == [f"runner: deleting {STACK} (attempt 1 of 4)", f"runner: {STACK} deleted; deploying it again"]
+
+
+def test_a_bucket_on_the_second_page_of_resources_is_found(recover):
+    """ListStackResources, every page: DescribeStackResources stops at 100."""
+    others = [{"LogicalResourceId": f"Role{i}", "ResourceType": "AWS::IAM::Role",
+               "ResourceStatus": "CREATE_COMPLETE", "PhysicalResourceId": f"r{i}"} for i in range(149)]
+    world = _RecoverWorld(["ROLLBACK_COMPLETE"], resources=[*others, _bucket("UiBucketABC", UI, "CREATE_COMPLETE")],
+                          versions={UI: ["index.html"]})
+    recover(world)
+    assert [b for b, _ in world.emptied] == [UI]
+
+
+def test_events_are_read_to_their_last_page(recover):
+    world = _RecoverWorld(["ROLLBACK_FAILED"], events=[FAILED_HISTORY[:2], FAILED_HISTORY[2:]])
+    recover(world)
+    assert world.deletes == [STACK_ID]
+    # The create is only on the second page: without it the history proves nothing.
+    world = _RecoverWorld(["ROLLBACK_FAILED"], events=[FAILED_HISTORY[:2], []])
+    with pytest.raises(Exception, match="does not reach back to its create"):
+        recover(world)
+    assert world.deletes == []
+
+
+@pytest.mark.parametrize("history,why", [
+    ([_stack_event("DELETE_FAILED"), _stack_event("DELETE_IN_PROGRESS"), _stack_event("CREATE_COMPLETE"),
+      _stack_event("CREATE_IN_PROGRESS")], "CREATE_COMPLETE"),
+    ([_stack_event("DELETE_FAILED"), _stack_event("UPDATE_COMPLETE"), _stack_event("ROLLBACK_IN_PROGRESS"),
+      _stack_event("CREATE_IN_PROGRESS")], "UPDATE_COMPLETE"),
+    ([_stack_event("DELETE_FAILED"), _stack_event("UPDATE_ROLLBACK_FAILED"), _stack_event("CREATE_IN_PROGRESS")],
+     "UPDATE_ROLLBACK_FAILED"),
+    ([_stack_event("ROLLBACK_FAILED"), _stack_event("ROLLBACK_IN_PROGRESS")], "does not reach back"),
+    ([_stack_event("DELETE_FAILED"), _stack_event("DELETE_IN_PROGRESS"), _stack_event("CREATE_IN_PROGRESS")],
+     "no rollback"),
+])
+def test_a_stack_that_may_have_deployed_is_never_emptied_or_deleted(recover, history, why):
+    world = _RecoverWorld(["DELETE_FAILED"], events=[history], resources=[_bucket("UiBucketABC", UI)],
+                          versions={UI: ["index.html"]})
+    with pytest.raises(Exception, match=why) as e:
+        recover(world)
+    assert "Destroy the build from the console" in str(e.value)
+    assert world.deletes == [] and world.emptied == [] and world.listed == []
+
+
+def test_an_unreadable_history_is_not_proof(recover):
+    from botocore.exceptions import ClientError
+    world = _RecoverWorld(["ROLLBACK_FAILED"], event_error=ClientError(
+        {"Error": {"Code": "AccessDenied", "Message": "no"}}, "DescribeStackEvents"))
+    with pytest.raises(Exception, match="could not be read"):
+        recover(world)
+    assert world.deletes == []
+
+
+def test_a_deploy_on_record_in_this_account_and_region_is_refused(recover):
+    world = _RecoverWorld(["ROLLBACK_FAILED"])
+    with pytest.raises(Exception, match="deploy on record"):
+        recover(world, meta={"deployed": {"account": "", "region": "us-east-1"}})
+    assert world.deletes == []
+    # A deploy on record somewhere else says nothing about this stack.
+    world = _RecoverWorld(["ROLLBACK_FAILED"])
+    recover(world, meta={"deployed": {"account": "111122223333", "region": "eu-west-1"}})
+    assert world.deletes == [STACK_ID]
+
+
+def test_a_delete_that_fails_is_tried_again_after_emptying_again(recover):
+    world = _RecoverWorld(["DELETE_FAILED", "DELETE_FAILED"], resources=[_bucket("UiBucketABC", UI)],
+                          versions={UI: ["index.html"]},
+                          events=[[_stack_event("DELETE_FAILED"), _stack_event("DELETE_IN_PROGRESS"),
+                                   *FAILED_HISTORY]])
+    assert recover(world) is False
+    assert world.deletes == [STACK_ID, STACK_ID] and [b for b, _ in world.emptied] == [UI, UI]
+
+
+def test_retained_storage_is_not_emptied(recover, capsys):
+    world = _RecoverWorld(["ROLLBACK_FAILED"], resources=[_bucket("BuildStorage1", STORAGE_REGIONAL)],
+                          versions={STORAGE_REGIONAL: ["data.csv"]})
+    recover(world, workflow={"orchestrator": {"storage": {"create": True, "retain": True}}})
+    assert world.emptied == [] and world.deletes == [STACK_ID]
+    assert "orchestrator.storage.retain keeps it" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("states,exists", [([], False), (["CREATE_COMPLETE"], True),
+                                           (["UPDATE_ROLLBACK_FAILED"], True)])
+def test_a_missing_or_deployed_stack_is_left_alone(recover, states, exists):
+    world = _RecoverWorld(states, resources=[_bucket("UiBucketABC", UI)], versions={UI: ["index.html"]})
+    assert recover(world) is exists
+    assert world.deletes == [] and world.emptied == [] and world.event_reads == []
+
+
+# --- bucket naming per build (bff/bucket_names.py, deployer/runner.py bucket_naming) --------
+
+@pytest.mark.parametrize("meta,kw,want", [
+    ({"bucketNaming": "regional"}, {"stack_exists": True}, "regional"),
+    ({"bucketNaming": "legacy"}, {}, "legacy"),
+    ({"deployed": {"bucketNaming": "regional"}}, {}, "regional"),
+    ({"deployed": {"version": 1}}, {}, "legacy"),            # deployed before the scheme was recorded
+    ({}, {"stack_exists": True}, "legacy"),
+    ({}, {"state_exists": True}, "legacy"),
+    ({}, {}, "regional"),
+    ({"bucketNaming": "bogus"}, {}, "regional"),
+])
+def test_a_builds_bucket_naming_is_legacy_whenever_something_may_be_deployed(runner, meta, kw, want):
+    assert runner.bucket_naming(meta, **kw)[0] == want
+
+
+def test_the_naming_reaches_cdk_and_terraform(runner):
+    assert runner.cdk_context("ax_12345678", False, bucket_naming="regional")[-2:] == ["-c", "bucketNaming=regional"]
+    assert "bucketNaming=legacy" not in " ".join(runner.cdk_context("ax_12345678", False))
+    assert runner.tf_vars("ax_12345678", False, "us-west-2", bucket_naming="regional")["bucket_naming"] == "regional"
+    assert "bucket_naming" not in runner.tf_vars("ax_12345678", False, "us-west-2")
+
+
+def test_a_builds_naming_is_written_once_and_forgotten_on_destroy(env, runner):
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    store = env.builds.buildstore
+    meta = lambda: env.table.get_item(Key={"pk": "BUILD#pclaims01", "sk": "META"})["Item"]  # noqa: E731
+    store.set_bucket_naming(env.table, "pclaims01", "regional")
+    store.set_bucket_naming(env.table, "pclaims01", "regional")      # the same value again is fine
+    with pytest.raises(botocore.exceptions.ClientError, match="ConditionalCheckFailed"):
+        store.set_bucket_naming(env.table, "pclaims01", "legacy")
+    assert meta()["bucketNaming"] == "regional"
+    store.record_destroyed(env.table, "pclaims01", keep_naming="regional")   # storage kept
+    assert meta()["bucketNaming"] == "regional"
+    store.record_destroyed(env.table, "pclaims01")
+    assert "bucketNaming" not in meta()
+
+
+def test_a_first_cdk_deploy_records_regional_names_and_a_redeploy_keeps_them(env, runner, monkeypatch, capsys):
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    monkeypatch.setattr(runner, "run", lambda *a, **k: [])
+    seen = []
+
+    def deploy_cdk(action, agent, gw, sub_env, tags, target, signin, guard, naming, meta, workflow):
+        seen.append(naming(False))
+        return {"runtimeArn": "arn:rt", "uiUrl": "https://ui"}
+    monkeypatch.setattr(runner, "deploy_cdk", deploy_cdk)
+    assert runner.main(runner_env(env), env.table, env.s3) == 0
+    item = env.table.get_item(Key={"pk": "BUILD#pclaims01", "sk": "META"})["Item"]
+    assert seen == ["regional"] and item["bucketNaming"] == "regional"
+    assert item["deployed"]["bucketNaming"] == "regional"
+    assert "runner: bucket names: regional (nothing of the build is deployed)" in capsys.readouterr().out
+
+
+def test_a_build_deployed_before_naming_was_recorded_keeps_its_legacy_names(env, runner, monkeypatch):
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    mark_deployed(env, "pclaims01")
+    monkeypatch.setattr(runner, "run", lambda *a, **k: [])
+    seen = []
+    monkeypatch.setattr(runner, "deploy_cdk", lambda *a: seen.append(a[8](True)) or {"runtimeArn": "arn:rt"})
+    assert runner.main(runner_env(env), env.table, env.s3) == 0
+    item = env.table.get_item(Key={"pk": "BUILD#pclaims01", "sk": "META"})["Item"]
+    assert seen == ["legacy"] and item["bucketNaming"] == "legacy"
+
+
+def test_a_terraform_build_with_state_keeps_its_legacy_names(env, runner, monkeypatch):
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "terraform"})
+    env.s3.put_object(Bucket="console-builds", Key="tfstate/u1/pclaims01/terraform.tfstate", Body=b"{}")
+    monkeypatch.setattr(runner, "run", lambda *a, **k: [])
+    seen = []
+    monkeypatch.setattr(runner, "deploy_terraform", lambda *a: seen.append(a[-1]) or {"runtimeArn": "arn:rt"})
+    assert runner.main(runner_env(env, tool="terraform"), env.table, env.s3) == 0
+    assert seen == ["legacy"]
 
 
 def _late_log_world(resources, runtimes=None):

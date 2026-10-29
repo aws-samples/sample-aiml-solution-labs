@@ -51,6 +51,7 @@ import boto3
 import buildstore
 import code_source
 import review as _review
+import s3_presign
 import validate_build
 import webfetch
 import workflow as wf_mod
@@ -1396,15 +1397,15 @@ def _check_one(name: str, size: int, where: str) -> dict:
 def attachment_upload(build_id: str, owner, name: str) -> dict:
     """A presigned POST for one file to attach to the next message: it goes straight to
     the builds bucket, under the build (deleted with it)."""
-    builds, s3, bucket = _clients()
+    builds, _s3, bucket = _clients()
     builds._meta(build_id, owner)
     name = os.path.basename(str(name or "")).strip()[:200]
     if not name:
         raise builds.BuildError(400, "name required")
     _check_one(name, 1, name)
     key = f"{_attach_prefix(build_id)}{secrets.token_hex(4)}-{name}"
-    post = s3.generate_presigned_post(Bucket=bucket, Key=key, ExpiresIn=900,
-                                      Conditions=[["content-length-range", 1, DOC_MAX_BYTES]])
+    post = s3_presign.client(REGION).generate_presigned_post(Bucket=bucket, Key=key, ExpiresIn=900,
+                                                             Conditions=[["content-length-range", 1, DOC_MAX_BYTES]])
     return {"url": post["url"], "fields": post["fields"], "key": key, "name": name,
             "maxBytes": DOC_MAX_BYTES}
 

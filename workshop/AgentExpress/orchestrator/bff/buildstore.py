@@ -319,14 +319,29 @@ def record_deployed(table, build_id: str, deployed: dict) -> None:
                                    ":ok": "SUCCEEDED", ":t": now(), ":p": "done"})
 
 
-def record_destroyed(table, build_id: str) -> None:
-    """Nothing of the build is left in AWS: forget the stack and the tool it used."""
+def set_bucket_naming(table, build_id: str, scheme: str) -> None:
+    """Record how the build's buckets are named (bff/bucket_names.py), before it deploys.
+    Written once: a build that has a scheme keeps it, because a renamed bucket is replaced
+    with what it holds. A different value already there raises ConditionalCheckFailed."""
+    table.update_item(
+        Key=meta_key(build_id), UpdateExpression="SET bucketNaming = :n",
+        ConditionExpression="attribute_not_exists(bucketNaming) OR bucketNaming = :n",
+        ExpressionAttributeValues={":n": scheme})
+
+
+def record_destroyed(table, build_id: str, keep_naming: str = "") -> None:
+    """Nothing of the build is left in AWS: forget the stack, the tool it used and how its
+    buckets were named, so its next deploy starts afresh. `keep_naming`: a bucket was kept
+    (orchestrator.storage.retain), so the build keeps that scheme and finds it again."""
+    names, values = {"#j": "job", "#s": "status"}, {":ok": "SUCCEEDED", ":t": now(), ":p": "done"}
+    if keep_naming:
+        values[":n"] = keep_naming
     table.update_item(
         Key=meta_key(build_id),
-        UpdateExpression="REMOVE deployed, tool, account SET #j.#s = :ok, #j.finishedAt = :t, "
-                         "#j.phase = :p, updated = :t",
-        ExpressionAttributeNames={"#j": "job", "#s": "status"},
-        ExpressionAttributeValues={":ok": "SUCCEEDED", ":t": now(), ":p": "done"})
+        UpdateExpression=("REMOVE deployed, tool, account SET bucketNaming = :n, " if keep_naming
+                          else "REMOVE deployed, tool, account, bucketNaming SET ")
+        + "#j.#s = :ok, #j.finishedAt = :t, #j.phase = :p, updated = :t",
+        ExpressionAttributeNames=names, ExpressionAttributeValues=values)
 
 
 def record_failed(table, build_id: str, error: str) -> None:

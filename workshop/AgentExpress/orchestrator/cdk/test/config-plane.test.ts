@@ -170,10 +170,12 @@ describe("validateTools", () => {
   });
 
   it("rejects websearch in a region where the connector does not exist", () => {
-    expect(() => validateTools({ ws: { type: "websearch" } }, {}, "us-west-2")).toThrow(
-      /only available in us-east-1, eu-west-1, ap-northeast-1 \(got us-west-2\)/
+    // The connector's Availability list in the AgentCore Developer Guide
+    // (gateway-target-connector-web-search-tool.html).
+    expect(() => validateTools({ ws: { type: "websearch" } }, {}, "eu-central-1")).toThrow(
+      /only available in us-east-1, us-east-2, us-west-2, eu-west-1, ap-southeast-2, ap-northeast-1, us-gov-west-1 \(got eu-central-1\)/
     );
-    for (const r of ["us-east-1", "eu-west-1", "ap-northeast-1"]) {
+    for (const r of ["us-east-1", "us-east-2", "us-west-2", "eu-west-1", "ap-southeast-2", "ap-northeast-1", "us-gov-west-1"]) {
       expect(() => validateTools({ ws: { type: "websearch" } }, {}, r)).not.toThrow();
     }
   });

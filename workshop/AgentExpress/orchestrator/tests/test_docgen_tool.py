@@ -429,6 +429,7 @@ def _delivered(dg, monkeypatch, run: str, target: dict) -> list[dict]:
     read from the same bucket) through the target's filters."""
     from app.common import deliver
     monkeypatch.setattr(deliver, "_client", lambda service, region="": dg._s3)
+    monkeypatch.setattr(deliver.s3_presign, "client", lambda region="": dg._s3)
     return deliver.select(deliver.run_files(run), target)
 
 

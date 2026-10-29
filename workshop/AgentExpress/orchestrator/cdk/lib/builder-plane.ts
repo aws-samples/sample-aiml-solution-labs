@@ -411,10 +411,12 @@ export class BuilderPlane extends Construct {
         "dynamodb:DeleteItem", "dynamodb:Query", "dynamodb:Scan"],
       resources: [t, `${t}/index/*`],
     }));
-    // ...and the images their image agents render (bff/handler.py _image_link).
+    // ...and the images their image agents render (bff/handler.py _image_link), in either
+    // naming scheme (lib/bucket-names.ts): a build deployed here is in this Region.
+    const assets = `arn:aws:s3:::agentcore-${BUILD_AGENT_PREFIX.replace(/_/g, "-")}*-assets-${stack.account}`;
     bff.addToRolePolicy(new iam.PolicyStatement({
       actions: ["s3:GetObject"],
-      resources: [`arn:aws:s3:::agentcore-${BUILD_AGENT_PREFIX.replace(/_/g, "-")}*-assets-${stack.account}/runs/*`],
+      resources: [`${assets}/runs/*`, `${assets}-${stack.region}/runs/*`],
     }));
     const r = `arn:aws:bedrock-agentcore:${stack.region}:${stack.account}:runtime/${BUILD_AGENT_PREFIX}*`;
     bff.addToRolePolicy(new iam.PolicyStatement({

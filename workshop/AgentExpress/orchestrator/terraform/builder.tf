@@ -792,9 +792,13 @@ resource "aws_iam_role_policy" "bff_builder" {
         # ...and the images their image agents render (bff/handler.py _image_link).
         Sid    = "BuildImages"
         Effect = "Allow"
-        # Read-only, this account's build asset buckets, runs/ prefix only.
-        Action   = ["s3:GetObject"] # nosemgrep
-        Resource = "arn:aws:s3:::agentcore-${replace(local.build_agent_prefix, "_", "-")}*-assets-${local.account_id}/runs/*"
+        # Read-only, this account's build asset buckets, runs/ prefix only, in either naming
+        # scheme (bucket_names.tf): a build deployed here is in this Region.
+        Action = ["s3:GetObject"] # nosemgrep
+        Resource = [
+          "arn:aws:s3:::agentcore-${replace(local.build_agent_prefix, "_", "-")}*-assets-${local.account_id}/runs/*",
+          "arn:aws:s3:::agentcore-${replace(local.build_agent_prefix, "_", "-")}*-assets-${local.account_id}-${var.region}/runs/*",
+        ]
       }
     ]
   })

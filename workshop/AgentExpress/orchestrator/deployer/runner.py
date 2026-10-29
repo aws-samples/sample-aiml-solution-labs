@@ -39,6 +39,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "bff"))
+import bucket_names  # noqa: E402  - the buckets' names, mirrored by both IaC paths
 import buildstore  # noqa: E402  - the shared layout, next to the BFF that reads it
 
 REQUIRED = ("ACTION", "TOOL", "BUILD_ID", "VERSION", "AGENT_NAME",
@@ -174,7 +175,7 @@ def docs_settings(env: dict) -> dict:
 
 
 def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dict | None = None,
-                guard: dict | None = None) -> list[str]:
+                guard: dict | None = None, bucket_naming: str = "") -> list[str]:
     """The same flags a developer deploys with, pinned for a build stack.
     Who signs its users in (authorization.signIn): a Cognito pool of its own by default,
     or the build's Okta, Auth0 or Entra ID app — the agents' Gateway client is then made
@@ -199,11 +200,14 @@ def cdk_context(agent: str, gateway: bool, tags: dict | None = None, signin: dic
         flags += ["-c", f"tags={json.dumps(tags, separators=(',', ':'))}"]
     # The console's permissions boundary and role path (guardrails()), on this build's roles.
     flags += [x for k, v in (guard or {}).items() for x in ("-c", f"{k}={v}")]
+    # How its buckets are named (bucket_naming(); lib/bucket-names.ts). Unset = "legacy".
+    if bucket_naming:
+        flags += ["-c", f"bucketNaming={bucket_naming}"]
     return flags
 
 
 def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None,
-            signin: dict | None = None, guard: dict | None = None) -> dict:
+            signin: dict | None = None, guard: dict | None = None, bucket_naming: str = "") -> dict:
     """terraform/variables.tf values, mirroring cdk_context()."""
     s = signin or {"provider": "cognito"}
     provider = s["provider"]
@@ -227,7 +231,32 @@ def tf_vars(agent: str, gateway: bool, region: str, tags: dict | None = None,
         out["docs_url"] = guard["docsUrl"]
     if guard.get("docsLinks") == "false":
         out["docs_links"] = False
+    if bucket_naming:
+        out["bucket_naming"] = bucket_naming
     return out
+
+
+def bucket_naming(meta: dict, *, stack_exists: bool = False, state_exists: bool = False) -> tuple[str, str]:
+    """How the build's buckets are named (bff/bucket_names.py), and why: the scheme the build
+    already has, else "legacy" for anything that may already hold a bucket, else "regional".
+
+    A bucket whose name changes is REPLACED by CloudFormation and Terraform, with what it
+    holds, so a build that may have deployed keeps the legacy names: one with a deploy on
+    record from before schemes were recorded, a CDK stack that still exists (after
+    recover_failed_create cleared a failed first create), or Terraform state under the build.
+    Everything else has nothing deployed and gets the Region in its names, so a build moved
+    to another Region never meets its old names while S3 still holds them."""
+    for scheme, where in ((meta.get("bucketNaming"), "recorded on the build"),
+                          ((meta.get("deployed") or {}).get("bucketNaming"), "recorded with its deploy")):
+        if scheme in bucket_names.SCHEMES:
+            return str(scheme), where
+    if meta.get("deployed"):
+        return "legacy", "the build was deployed before bucket names were recorded"
+    if stack_exists:
+        return "legacy", "the build's stack exists"
+    if state_exists:
+        return "legacy", "the build has Terraform state"
+    return "regional", "nothing of the build is deployed"
 
 
 def build_tags(bid: str, version: int, owner: str, email: str, console: str) -> dict:
@@ -794,47 +823,163 @@ def tf_outputs(raw: str) -> dict:
 
 
 #: A stack whose FIRST create failed: nothing in it ever worked, and CloudFormation can
-#: only delete it. ROLLBACK_FAILED is what a create leaves when rolling back hits a
-#: resource still coming up (AgentCore Memory: "in transitional state CREATING").
+#: only delete it. ROLLBACK_COMPLETE and ROLLBACK_FAILED follow only a failed or cancelled
+#: create; DELETE_FAILED can follow anything, so the stack's history decides
+#: (never_deployed). https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/view-stack-events.html
 FAILED_CREATE = ("ROLLBACK_COMPLETE", "ROLLBACK_FAILED", "DELETE_FAILED")
+#: A stack-level status that means the stack deployed, or was changed after its create.
+DEPLOYED_STATUS = re.compile(r"^(CREATE_COMPLETE|UPDATE_|IMPORT_)")
+#: The first status of a stack: CREATE_IN_PROGRESS, or REVIEW_IN_PROGRESS when it was created
+#: from a change set, which is how `cdk deploy` creates one.
+FIRST_STATUS = ("REVIEW_IN_PROGRESS", "CREATE_IN_PROGRESS")
+#: Resources CloudFormation has already let go of.
+GONE = ("DELETE_COMPLETE", "DELETE_SKIPPED")
 
 
-def clear_failed_create(session, stack: str, region: str, attempts: int = 4,
-                        pause: float = 60.0) -> None:
-    """Delete the build's stack when its first create failed, so the retry can create it
-    again: `cdk deploy` refuses a stack in ROLLBACK_FAILED. Only those states — a stack
-    that ever deployed (UPDATE_ROLLBACK_FAILED...) is never touched. Done as the CDK
-    deploy role, which is what CloudFormation already trusts with this stack."""
-    import time
-
+def cdk_cloudformation(session, region: str):
+    """CloudFormation as the account's CDK deploy role, and the account. The role CloudFormation
+    already trusts with the build's stack: it can delete it, and it carries
+    AWSCloudFormationReadOnlyAccess (the CDK bootstrap template), which the connected
+    account's deploy role does not."""
     import boto3
-    from botocore.exceptions import ClientError
     account = session.client("sts").get_caller_identity()["Account"]
     c = session.client("sts").assume_role(
         RoleArn=f"arn:aws:iam::{account}:role/cdk-hnb659fds-deploy-role-{account}-{region}",
         RoleSessionName="agentexpress-recover")["Credentials"]
-    cfn = boto3.client("cloudformation", region_name=region, aws_access_key_id=c["AccessKeyId"],
-                       aws_secret_access_key=c["SecretAccessKey"], aws_session_token=c["SessionToken"])
-    for i in range(attempts):
-        try:
-            status = cfn.describe_stacks(StackName=stack)["Stacks"][0]["StackStatus"]
-        except ClientError as e:
-            if "does not exist" in str(e):
-                return
-            raise
-        if status not in FAILED_CREATE:
-            return
-        print(f"[recover] {stack} is {status} from a failed first create: deleting it before "
-              f"deploying again (attempt {i + 1})", flush=True)
-        cfn.delete_stack(StackName=stack)
+    return boto3.client("cloudformation", region_name=region, aws_access_key_id=c["AccessKeyId"],
+                        aws_secret_access_key=c["SecretAccessKey"],
+                        aws_session_token=c["SessionToken"]), account
+
+
+def never_deployed(cfn, stack: str, stack_id: str, *, build_account: str, region: str,
+                   meta: dict) -> str:
+    """"" when the stack provably never deployed, else why that is not proven. Fails closed:
+    a history that cannot be read, or that does not reach back to the stack's create, is not
+    proof. `build_account` is the build's target account, "" for this console's own.
+    The events are read by StackId, every page
+    (https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_DescribeStackEvents.html),
+    newest first."""
+    deployed = meta.get("deployed") or {}
+    if deployed and str(deployed.get("account") or "") == build_account \
+            and str(deployed.get("region") or "") == region:
+        return "the build has a deploy on record in this account and Region"
+    try:
+        events = [e for page in cfn.get_paginator("describe_stack_events").paginate(StackName=stack_id)
+                  for e in page.get("StackEvents") or []]
+    except Exception as e:  # noqa: BLE001 - unreadable is not proof
+        return f"its history could not be read ({type(e).__name__}: {e})"
+    statuses = [str(e.get("ResourceStatus") or "") for e in events
+                if e.get("LogicalResourceId") == stack and e.get("ResourceType") == "AWS::CloudFormation::Stack"]
+    done = [s for s in statuses if DEPLOYED_STATUS.match(s)]
+    if done:
+        return f"its history shows {done[0]}"
+    if not statuses or statuses[-1] not in FIRST_STATUS or "CREATE_IN_PROGRESS" not in statuses:
+        return "its history does not reach back to its create"
+    if "ROLLBACK_IN_PROGRESS" not in statuses:
+        return "its history shows no rollback of its create"
+    return ""
+
+
+def empty_bucket(s3, name: str, account: str) -> int | None:
+    """Delete every version and delete marker in `name`, only if `account` owns it
+    (ExpectedBucketOwner: https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucket-owner-condition.html).
+    How many were deleted; None when the bucket does not exist."""
+    from botocore.exceptions import ClientError
+    n = 0
+    try:
+        for page in s3.get_paginator("list_object_versions").paginate(Bucket=name, ExpectedBucketOwner=account):
+            objects = [{"Key": v["Key"], "VersionId": v["VersionId"]}
+                       for v in (page.get("Versions") or []) + (page.get("DeleteMarkers") or [])]
+            for i in range(0, len(objects), 1000):      # DeleteObjects takes 1000 keys a call
+                out = s3.delete_objects(Bucket=name, ExpectedBucketOwner=account,
+                                        Delete={"Objects": objects[i:i + 1000], "Quiet": True})
+                if out.get("Errors"):
+                    e = out["Errors"][0]
+                    raise StepFailed(f"could not empty {name}: {e.get('Code')} on {e.get('Key')}: "
+                                     f"{e.get('Message')}")
+            n += len(objects)
+    except ClientError as e:
+        if (getattr(e, "response", {}).get("Error") or {}).get("Code") == "NoSuchBucket":
+            return None
+        raise
+    return n
+
+
+def recover_failed_create(session, stack: str, region: str, *, agent: str, build_account: str = "",
+                          meta: dict | None = None, workflow: dict | None = None, attempts: int = 4,
+                          pause: float = 60.0) -> bool:
+    """Before a CDK deploy: clear the build's stack when its first create failed, so the
+    deploy can create it again (`cdk deploy` refuses a stack in ROLLBACK_FAILED). Whether
+    the stack exists afterwards.
+
+    Seen live: a failed first create rolled back, but could not delete the UI bucket the
+    deploy had already filled (BucketNotEmpty), and ended ROLLBACK_FAILED; every later
+    deploy failed. So, only when never_deployed() proves the stack never deployed (no user
+    data can be in it): empty this stack's own framework buckets (an AWS::S3::Bucket of the
+    stack, named as this agent's buckets are in either scheme, or the UI logs bucket
+    CloudFormation named after the stack), delete the stack by its StackId, wait, and again
+    if it ends DELETE_FAILED. Any other bucket is left alone, and so is storage kept with
+    orchestrator.storage.retain. A stack that may have deployed is refused with why."""
+    from botocore.exceptions import ClientError
+    meta, workflow = meta or {}, workflow or {}
+    cfn, account = cdk_cloudformation(session, region)
+    try:
+        found = cfn.describe_stacks(StackName=stack)["Stacks"][0]
+    except ClientError as e:
+        if "does not exist" in str(e):
+            return False
+        raise
+    status, stack_id = found["StackStatus"], found["StackId"]
+    if status not in FAILED_CREATE:
+        return True
+    print(f"runner: {stack} is {status}: checking that it never deployed before clearing it", flush=True)
+    why = never_deployed(cfn, stack, stack_id, build_account=build_account, region=region, meta=meta)
+    if why:
+        raise StepFailed(f"{stack} is {status} and is not cleared automatically: {why}, so its "
+                         f"buckets may hold data. Destroy the build from the console, or empty and "
+                         f"delete the stack by hand, then deploy again.")
+    print(f"runner: {stack} never deployed (its first create failed): emptying its own buckets, "
+          f"then deleting it", flush=True)
+    s3 = session.client("s3", region_name=region)
+    names = bucket_names.all_names(agent, account, region)
+    kept = ({bucket_names.name("storage", agent, account, region, s) for s in bucket_names.SCHEMES}
+            if storage_retained(workflow) else set())
+    logs_bucket = re.compile(rf"{re.escape(stack.lower())}-uilogsbucket[a-z0-9-]*")
+    for attempt in range(1, attempts + 1):
+        resources = stack_resources(session, stack_id, region, cfn=cfn)
+        if resources is None:
+            raise StepFailed(f"could not read {stack}'s resources; delete the stack by hand and "
+                             f"deploy again")
+        for r in resources:
+            if r.get("ResourceType") != "AWS::S3::Bucket" or r.get("ResourceStatus") in GONE:
+                continue
+            logical, name = str(r.get("LogicalResourceId") or ""), str(r.get("PhysicalResourceId") or "")
+            if not name:
+                continue
+            if name in kept:
+                print(f"runner: not emptying {logical} ({name}): orchestrator.storage.retain keeps it",
+                      flush=True)
+                continue
+            if name not in names and not logs_bucket.fullmatch(name):
+                print(f"runner: not emptying {logical} ({name}): not one of this build's buckets",
+                      flush=True)
+                continue
+            n = empty_bucket(s3, name, account)
+            print(f"runner: emptied {name} ({n} object version(s))" if n is not None
+                  else f"runner: {name} does not exist; nothing to empty", flush=True)
+        print(f"runner: deleting {stack} (attempt {attempt} of {attempts})", flush=True)
+        cfn.delete_stack(StackName=stack_id)
         try:
             cfn.get_waiter("stack_delete_complete").wait(
-                StackName=stack, WaiterConfig={"Delay": 15, "MaxAttempts": 80})
-            return
-        except Exception:  # noqa: BLE001 - DELETE_FAILED: a resource was still settling
+                StackName=stack_id, WaiterConfig={"Delay": 15, "MaxAttempts": 80})
+            print(f"runner: {stack} deleted; deploying it again", flush=True)
+            return False
+        except Exception as e:  # noqa: BLE001 - DELETE_FAILED: a resource was still settling
+            print(f"runner: {stack} did not delete ({type(e).__name__}: {e}); "
+                  f"trying again in {pause:.0f}s", flush=True)
             time.sleep(pause)
-    raise RuntimeError(f"{stack} is still {status} after {attempts} deletes; delete it by hand "
-                       "and deploy again")
+    raise StepFailed(f"{stack} could not be deleted after {attempts} attempts; delete it by hand "
+                     "and deploy again")
 
 
 #: The one bucket a CDK build's destroy can find refilled: CloudFront's access logs
@@ -854,11 +999,12 @@ RUNTIME_TYPE = "AWS::BedrockAgentCore::Runtime"
 RUNTIME_DELETE_PAUSE = 60.0
 
 
-def stack_resources(session, stack: str, region: str) -> list[dict] | None:
+def stack_resources(session, stack: str, region: str, cfn=None) -> list[dict] | None:
     """Every resource of the stack, read with ListStackResources, paged: DescribeStackResources
     returns only the first 100, and a build's stack has more (seen live: 100 read, the failed
-    resource not among them). None when it cannot be read."""
-    cfn = session.client("cloudformation", region_name=region)
+    resource not among them). None when it cannot be read. `cfn`: a CloudFormation client to
+    read with instead of the session's (recover_failed_create's CDK deploy role)."""
+    cfn = cfn or session.client("cloudformation", region_name=region)
     try:
         return [r for page in cfn.get_paginator("list_stack_resources").paginate(StackName=stack)
                 for r in page.get("StackResourceSummaries") or []]
@@ -1018,7 +1164,10 @@ def empty_late_log_buckets(session, stack: str, region: str, resources: list[dic
 
 def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
                tags: dict | None = None, target: Target | None = None, signin: dict | None = None,
-               guard: dict | None = None) -> dict:
+               guard: dict | None = None, naming=None, meta: dict | None = None,
+               workflow: dict | None = None) -> dict:
+    """`naming(stack_exists) -> scheme`: how the stack's buckets are named, asked once the
+    stack's state is known (main's bucket naming); None = "legacy"."""
     env = env or {}
     cdk = ROOT / "cdk"
     run(["npm", "ci", "--no-fund", "--no-audit"], cdk, env)
@@ -1033,7 +1182,8 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
             run(["npx", "cdk", "bootstrap", f"aws://{target.account}/{target.region}",
                  *flags], cdk, env)
     if action == "destroy":
-        destroy = ["npx", "cdk", "destroy", stack, "--force", *flags]
+        destroy = ["npx", "cdk", "destroy", stack, "--force", *flags,
+                   *(["-c", f"bucketNaming={naming(True)}"] if naming else [])]
         region = target.region if target else env.get("AWS_REGION") or "us-east-1"
         for attempt in range(DESTROY_RETRIES + 1):
             if attempt:
@@ -1063,11 +1213,14 @@ def deploy_cdk(action: str, agent: str, gateway: bool, env: dict | None = None,
                     print(f"runner: waiting {RUNTIME_DELETE_PAUSE:.0f}s for the delete of "
                           f"{', '.join(runtimes)} to go on, then destroying {stack} again", flush=True)
                     time.sleep(RUNTIME_DELETE_PAUSE)
-    clear_failed_create(target.session() if target else local_session(), stack,
-                        target.region if target else env.get("AWS_REGION") or "us-east-1")
+    region = target.region if target else env.get("AWS_REGION") or "us-east-1"
+    exists = recover_failed_create(target.session() if target else local_session(), stack, region,
+                                   agent=agent, build_account=target.account if target else "",
+                                   meta=meta, workflow=workflow)
+    scheme = naming(exists) if naming else "legacy"
     out = WORK / "cdk-outputs.json"
     run(["npx", "cdk", "deploy", stack, "--require-approval", "never",
-         "--outputs-file", str(out), *flags], cdk, env)
+         "--outputs-file", str(out), *flags, "-c", f"bucketNaming={scheme}"], cdk, env)
     return {"stack": stack, **cdk_outputs(out, stack)}
 
 
@@ -1106,7 +1259,7 @@ def keep_retained_storage(tf: str, tf_dir: Path, sub_env: dict) -> list[str]:
 def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
                      sub_env: dict | None = None, tags: dict | None = None,
                      target: Target | None = None, signin: dict | None = None,
-                     guard: dict | None = None) -> dict:
+                     guard: dict | None = None, bucket_naming: str = "") -> dict:
     sub_env = sub_env or {}
     tf_dir = ROOT / "terraform"
     tf = ensure_terraform(env.get("TERRAFORM_VERSION") or "1.15.8")
@@ -1124,7 +1277,7 @@ def deploy_terraform(action: str, agent: str, gateway: bool, env: dict,
         + ('    profile = "console"\n' if target else "")
         + '  }\n}\n')
     (tf_dir / "builder.auto.tfvars.json").write_text(
-        json.dumps(tf_vars(agent, gateway, region, tags, signin, guard), indent=2))
+        json.dumps(tf_vars(agent, gateway, region, tags, signin, guard, bucket_naming), indent=2))
     run([tf, "init", "-input=false", "-no-color"], tf_dir, sub_env)
     # The UI build FIRST, on its own — for a destroy too. The files it emits are ui.tf's
     # `for_each`, and whenever the build step is not in state (a stack's first apply, or
@@ -1324,8 +1477,36 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
         guard.update(litellm_settings(env))
         # And its documentation links, for the build's own app.
         guard.update(docs_settings(env))
-        outputs = (deploy_cdk(action, agent, gateway, sub_env, tags, target, signin, guard) if tool == "cdk"
-                   else deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin, guard))
+        workflow = bundle.get("workflow") or {}
+        chosen: dict = {}
+
+        def naming(stack_exists: bool = False, state_exists: bool = False) -> str:
+            """How the build's buckets are named (bucket_naming), recorded on the build before
+            a deploy creates any of them. A destroy uses what is recorded and writes nothing."""
+            scheme, why = bucket_naming(meta, stack_exists=stack_exists, state_exists=state_exists)
+            if action == "deploy" and meta.get("bucketNaming") != scheme:
+                from botocore.exceptions import ClientError
+                try:
+                    buildstore.set_bucket_naming(table, bid, scheme)
+                except ClientError as e:
+                    if (e.response.get("Error") or {}).get("Code") != "ConditionalCheckFailedException":
+                        raise
+                    raise StepFailed("the build's bucket naming was recorded by another job while "
+                                     "this one ran; deploy again") from e
+            chosen["scheme"] = scheme
+            print(f"runner: bucket names: {scheme} ({why})", flush=True)
+            return scheme
+
+        if tool == "cdk":
+            outputs = deploy_cdk(action, agent, gateway, sub_env, tags, target, signin, guard,
+                                 naming, meta, workflow)
+        else:
+            # Terraform state under the build: something of it may be deployed.
+            listed = (s3.list_objects_v2(Bucket=bucket, Prefix=state, MaxKeys=1)
+                      if action == "deploy" else {"KeyCount": 1})
+            tf_naming = naming(state_exists=bool(listed.get("KeyCount") or listed.get("Contents")))
+            outputs = deploy_terraform(action, agent, gateway, env, sub_env, tags, target, signin, guard,
+                                       tf_naming)
 
         if action == "destroy":
             delete_leftover_logs(agent, session=remote())
@@ -1341,7 +1522,9 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
                 print(f"runner: build {bid} destroyed and deleted")
                 audit("succeeded", deleted=True)
             else:
-                buildstore.record_destroyed(table, bid)
+                # Storage kept past the destroy keeps its name, so the build keeps its scheme.
+                keep = bucket_naming(meta, stack_exists=True)[0] if storage_retained(workflow) else ""
+                buildstore.record_destroyed(table, bid, keep_naming=keep)
                 print(f"runner: build {bid} destroyed")
                 audit("succeeded")
             return 0
@@ -1363,7 +1546,8 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
                     "telemetryTable": f"{agent}_telemetry", "at": buildstore.now(),
                     "appUser": email if invited else "",
                     # What actually deployed it: the framework in this source zip.
-                    "frameworkVersion": buildstore.FRAMEWORK_VERSION, **outputs}
+                    "frameworkVersion": buildstore.FRAMEWORK_VERSION,
+                    **({"bucketNaming": chosen["scheme"]} if chosen.get("scheme") else {}), **outputs}
         buildstore.record_deployed(table, bid, deployed)
         print(f"runner: build {bid} v{version} deployed with {tool}: {json.dumps(outputs)}")
         audit("succeeded", uiUrl=str(outputs.get("uiUrl") or ""))

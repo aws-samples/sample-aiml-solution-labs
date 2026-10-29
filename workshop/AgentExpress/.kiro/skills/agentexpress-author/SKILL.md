@@ -105,7 +105,8 @@ A failure here means the customer's config is wrong, not that a test is stale.
   (`{name, description, statement}`), because the library entry itself is never edited.
 - **Denied topics** are matched on their definition: `name` 1–100 of letters, digits,
   spaces and `- _ ! ? .`; `definition` ≤ 200 characters; ≤ 5 `examples` of ≤ 100.
-- **Region.** `websearch` runs in us-east-1, eu-west-1 and ap-northeast-1 only; image agents
+- **Region.** `websearch` runs in us-east-1, us-east-2, us-west-2, eu-west-1, ap-southeast-2,
+  ap-northeast-1 and us-gov-west-1 only; image agents
   render where Bedrock serves the model (us-west-2 today): fine for a US deployment, refused
   elsewhere unless the agent sets `image.allowCrossRegion: true`.
 - **Capabilities follow the agent's settings.** An agent with `vision` needs a model that

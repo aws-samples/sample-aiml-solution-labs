@@ -197,7 +197,11 @@ describe("orchestrator.storage, synthesized", () => {
 
   it("matches the Terraform path", () => {
     const tf = fs.readFileSync(path.join(TF, "storage.tf"), "utf8");
-    for (const s of ['"${replace(var.agent_name, "_", "-")}-storage-${local.account_id}"', "force_destroy = !local.storage_retain",
+    // The name itself is terraform/bucket_names.tf's, held to lib/bucket-names.ts by
+    // test/bucket-names.test.ts and tests/test_bucket_names.py.
+    expect(fs.readFileSync(path.join(TF, "bucket_names.tf"), "utf8")).toContain(
+      '"${pre}${replace(var.agent_name, "_", "-")}-${k}-${local.account_id}"');
+    for (const s of ["storage_bucket_name = local.bucket_names.storage", "force_destroy = !local.storage_retain",
       '"agentexpress:code-tools" = "true"', 'status = "Enabled"', "block_public_acls       = true",
       "block_public_policy     = true", "ignore_public_acls      = true", "restrict_public_buckets = true",
       'local.storage_kms ? "aws:kms" : "AES256"', "aws_kms_key.data.arn", "bucket_key_enabled = local.storage_kms ? true : null",

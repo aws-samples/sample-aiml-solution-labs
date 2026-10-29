@@ -430,7 +430,7 @@
     }
   # aws_bedrockagentcore_gateway_target.websearch["websearch"] will be created
   + resource "aws_bedrockagentcore_gateway_target" "websearch" {
-      + description        = "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. us-east-1, eu-west-1, ap-northeast-1 only."
+      + description        = "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. Regional: a deploy outside its Regions is refused."
       + gateway_identifier = (known after apply)
       + name               = "websearch"
       + region             = (known after apply)
@@ -444,7 +444,7 @@
           + mcp {
               + connector {
                   + configuration {
-                      + description      = "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. us-east-1, eu-west-1, ap-northeast-1 only."
+                      + description      = "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. Regional: a deploy outside its Regions is refused."
                       + name             = "WebSearch"
                       + parameter_values = jsonencode({})
                     }

@@ -61,7 +61,8 @@ export function StorageSettings({ project, setProject, issues = [] }: {
             <Box variant="small" color="text-body-secondary" data-testid="storage-token">
               Tools reach it as <Box variant="code">{STORAGE_TOKEN}</Box>: for example <Box variant="code">{`${STORAGE_TOKEN}/templates/`}</Box> as
               a code tool&apos;s S3 grant, or <Box variant="code">{`${STORAGE_TOKEN}/kb/`}</Box> as a knowledge base&apos;s documents.
-              Its name is the build&apos;s name, then -storage- and the account. Private, HTTPS only, versioned, encrypted.
+              Its name is the build&apos;s name, then -storage-, the account and the Region (a build first deployed
+              earlier keeps its name, without the Region). Private, HTTPS only, versioned, encrypted.
             </Box>
           </SpaceBetween>
         ) : null}

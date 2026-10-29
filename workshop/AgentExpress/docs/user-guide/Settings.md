@@ -63,7 +63,7 @@ The **Storage** section makes the deploy create a private S3 bucket for this bui
 
 What the deploy creates:
 
-- A bucket named after the build: its name, then `-storage-` and the account.
+- A bucket named after the build: its name, then `-storage-`, the account and, for a build deployed from now on, its Region.
 - All public access blocked, HTTPS only, versioned, and encrypted with the build's own key.
 - A rule that deletes replaced versions after 30 days and aborts unfinished uploads after 7 days.
 - No access for anyone but the tools that name it. Each gets only the folder it names.

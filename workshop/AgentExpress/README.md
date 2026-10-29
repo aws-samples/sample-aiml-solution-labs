@@ -86,7 +86,7 @@ Every tool is a Gateway target with a Cedar permit generated from `workflow.json
 | Type | Reaches | Details |
 |---|---|---|
 | `kb` | Bedrock Knowledge Base: S3 Vectors by default; chunking and model parsing; your own vector store; web, Confluence, SharePoint and Salesforce sources; reranking | [DEPLOYMENT](DEPLOYMENT.md#knowledge-base-chunking-and-parsing) |
-| `websearch` | AgentCore Web Search (us-east-1, eu-west-1, ap-northeast-1) | [GETTING_STARTED](GETTING_STARTED.md#websearch-the-live-web) |
+| `websearch` | AgentCore Web Search (us-east-1, us-east-2, us-west-2, eu-west-1, ap-southeast-2, ap-northeast-1, us-gov-west-1) | [GETTING_STARTED](GETTING_STARTED.md#websearch-the-live-web) |
 | `mcp` | Any remote MCP server | [GETTING_STARTED](GETTING_STARTED.md#mcp-your-mcp-server) |
 | Hosted MCP server | `hosted`: your MCP server code, written, uploaded or linked, runs on its own AgentCore Runtime behind the Gateway | [DEPLOYMENT](DEPLOYMENT.md#hosted-mcp-servers) |
 | `openapi` | A REST API from an OpenAPI schema | [GETTING_STARTED](GETTING_STARTED.md#openapi-any-rest-api) |
@@ -210,7 +210,7 @@ Nine agents in four stages ([`workflow.json`](orchestrator/app/workflow.json)):
 The research agents use five tool types (KB, web search, MCP, Lambda, OpenAPI);
 `analysis` and `recommendation` are A2A agents served by a stand-in Lambda.
 A second example, [`examples/demo-everything/`](orchestrator/examples/demo-everything/), uses
-every tool type and AgentCore feature in one run.
+six of the seven tool types and most AgentCore features in one run.
 
 ## Architecture
 

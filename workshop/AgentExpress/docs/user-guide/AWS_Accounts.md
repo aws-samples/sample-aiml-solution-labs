@@ -51,6 +51,14 @@ The stack creates one IAM role in your account, `AgentExpressDeploy-…`:
 - The **Default region** is filled in when you pick the account under **Deploy to**. You can pick any other Region of the account: its deploy role works in all of them.
 - Changing the default later does not move a build already deployed. It stays in its Region.
 - The control plane refuses a Region that cannot run something the build uses, before the deploy starts.
+- One connection works in every Region of the account. Its deploy role is an IAM role, and IAM is global. You do not connect the account again, or create the role again, for another Region.
+
+## Move a build to another Region
+
+- Destroy the build first. Then pick the new Region under **Deploy to** and deploy it.
+- A build deployed from now on gets bucket names that end with its Region. It can move to another Region without a name clash.
+- A build deployed before this keeps its bucket names, so nothing in them is lost. If you destroy it and deploy it in another Region straight away, the deploy can fail with "A conflicting conditional operation is currently in progress". S3 is still releasing the old bucket names. Wait 30 to 60 minutes, then deploy again.
+- If a first deploy fails, deploy again: the failed stack, and the files it had uploaded, are removed first. A stack that deployed even once is never removed this way.
 
 ## Deploying there
 

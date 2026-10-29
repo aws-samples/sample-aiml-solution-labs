@@ -60,7 +60,7 @@ A `websearch` tool is AgentCore Web Search, for current public information. It n
 "websearch": { "type": "websearch", "maxResults": 10, "domains": { "include": ["docs.aws.amazon.com"] } }
 ```
 
-- Available in us-east-1, eu-west-1 and ap-northeast-1. A deploy to another Region is refused.
+- Available in us-east-1, us-east-2, us-west-2, eu-west-1, ap-southeast-2, ap-northeast-1 and us-gov-west-1. A deploy to another Region is refused.
 - `domains` is an allow list and a deny list the agent cannot see or widen. `maxResults` is 1 to 25.
 - `publishedFrom` and `publishedTo`: ISO-8601 dates. Results published before or after them are dropped, for questions where old guidance is worse than none. They need connector version 1.2.0, so they work with Terraform only: a CDK deploy refuses them.
 - `connectorVersion`: pins the managed web-search connector's version. Terraform pins 1.2.0 when it is left out. CDK cannot pin a version, so a CDK deploy refuses it.

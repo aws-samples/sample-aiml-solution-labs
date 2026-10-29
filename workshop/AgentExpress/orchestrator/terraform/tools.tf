@@ -870,7 +870,7 @@ resource "terraform_data" "tools_validation" {
       condition = length(local.websearch_tools) == 0 || contains(
         local.vocab.webSearchRegions.values, var.region
       )
-      error_message = "type=\"websearch\" (AgentCore Web Search) is only available in us-east-1, eu-west-1 and ap-northeast-1. Remove the entry or deploy in one of those regions."
+      error_message = "type=\"websearch\" (AgentCore Web Search) is only available in ${join(", ", local.vocab.webSearchRegions.values)} (got ${var.region}). Remove the entry or deploy in one of those regions."
     }
     precondition {
       condition     = alltrue([for n, t in local.tools : contains(local.vocab.toolListingModes.values, t.listing_mode)])
@@ -1265,7 +1265,7 @@ resource "aws_s3_bucket" "tool_schemas" {
   count = length(local.openapi_source_tools) > 0 ? 1 : 0
   # Same shape as the KB buckets in kb.tf, and dashed for the same reason: an S3
   # bucket name may not contain an underscore, which var.agent_name does.
-  bucket        = "agentcore-${replace(var.agent_name, "_", "-")}-schemas-${local.account_id}"
+  bucket        = local.bucket_names.schemas
   force_destroy = true
 }
 

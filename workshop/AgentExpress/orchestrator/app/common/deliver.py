@@ -51,7 +51,7 @@ import urllib.request
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
-from app.common import audit, branching, clock, netguard, task_template, vocabulary
+from app.common import audit, branching, clock, netguard, s3_presign, task_template, vocabulary
 
 TARGET_TYPES = vocabulary.values("deliverTargetTypes")
 
@@ -195,7 +195,8 @@ def _minutes(target: dict) -> int:
 
 
 def _link(f: dict, minutes: int) -> str:
-    return _client("s3").generate_presigned_url(
+    # The assets bucket is this runtime's own, in its Region: signed for that Region's host.
+    return s3_presign.client().generate_presigned_url(
         "get_object", Params={"Bucket": _assets_bucket(), "Key": f["key"]}, ExpiresIn=minutes * 60)
 
 

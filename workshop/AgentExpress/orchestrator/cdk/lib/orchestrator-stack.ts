@@ -51,6 +51,8 @@ import { harnessAgents } from "./harness";
 import { DEFAULT_DOCS_URL } from "./docs-default";
 // --- begin Track E storage ---
 import { addBuildStorage, resolveStorage, storageEnv, storageOf } from "./storage";
+import { deployAfterAutoDelete } from "./auto-delete";
+import { bucketName, BucketNaming } from "./bucket-names";
 // --- end Track E storage ---
 
 /** Regions where the managed AgentCore Web Search connector is available. */
@@ -1483,6 +1485,10 @@ export interface OrchestratorStackProps extends cdk.StackProps {
   acmCertificateArn?: string;
   enableWaf?: boolean;
   wafRateLimit?: number;
+  /** How the stack's own buckets are named (lib/bucket-names.ts, `-c bucketNaming`):
+   *  "legacy" (default) keeps the names every deployment had; "regional" ends each name
+   *  with the Region. Never switch a deployed stack: a renamed bucket is REPLACED. */
+  bucketNaming?: BucketNaming;
 }
 
 // Repo layout: this file is orchestrator/cdk/lib/, so orchestrator/ is two levels up.
@@ -1520,6 +1526,7 @@ export class OrchestratorStack extends cdk.Stack {
     });
 
     const { agentName, memoryEventExpiryDays } = props;
+    const bucketNaming: BucketNaming = props.bucketNaming ?? "legacy";
     // ---- What this deployment is --------------------------------------------
     // "builder": a control-plane console. It designs, builds and deploys, and runs no
     // workflow of its own: no image, runtime, memory, guardrail, Gateway, Knowledge Base,
@@ -1566,7 +1573,7 @@ export class OrchestratorStack extends cdk.Stack {
     // ${storage} token is resolved only where it is read (storageWorkflow, for the tools,
     // interceptors and deliver targets); a workflow that does not use it is the same object,
     // untouched.
-    const storage = workflowPlane ? storageOf(workflow, agentName, cdk.Stack.of(this).account) : null;
+    const storage = workflowPlane ? storageOf(workflow, agentName, cdk.Stack.of(this).account, cdk.Stack.of(this).region, bucketNaming) : null;
     const storageWorkflow = resolveStorage(workflow, storage);
     // --- end Track E storage ---
     const agents: Record<string, any> = workflow.agents;
@@ -2292,7 +2299,7 @@ export class OrchestratorStack extends cdk.Stack {
       // ... or when the workflow keeps the files runs make (orchestrator.files, lib/run-files.ts).
       const keepDays = filesRetentionDays(workflow);
       const assetsBucket = imageAgents.length || fileAgents.length || keepDays !== null ? new s3.Bucket(this, "AssetsBucket", {
-        bucketName: `agentcore-${agentName.replace(/_/g, "-")}-assets-${this.account}`,
+        bucketName: bucketName("assets", agentName, this.account, this.region, bucketNaming),
         blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
         encryption: s3.BucketEncryption.S3_MANAGED,
         enforceSSL: true,
@@ -2419,6 +2426,7 @@ export class OrchestratorStack extends cdk.Stack {
       const toolPlane = enableGateway
         ? new ToolPlane(this, "ToolPlane", {
             agentName,
+            bucketNaming,
             tools: declaredTools,
             toolApiKeys: inherited.toolApiKeys,
             // Only used by the built-in `source: "pricing"` demo function, which
@@ -3535,7 +3543,7 @@ export class OrchestratorStack extends cdk.Stack {
 
     // ---- Static UI: private S3 + CloudFront (OAC) --------------------------
     const uiBucket = new s3.Bucket(this, "UiBucket", {
-      bucketName: `agentcore-${agentName.replace(/_/g, "-")}-ui-${this.account}-${this.region}`,
+      bucketName: bucketName("ui", agentName, this.account, this.region, bucketNaming),
       blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
@@ -3676,7 +3684,7 @@ export class OrchestratorStack extends cdk.Stack {
       `};\n`;
     this.authConfigJs = authConfigJs;
 
-    new s3deploy.BucketDeployment(this, "UiDeploy", {
+    const uiDeploy = new s3deploy.BucketDeployment(this, "UiDeploy", {
       // The CDK framework Lambda behind this construct also leaves a never-expire log
       // group behind on destroy unless we own it.
       logGroup: new logs.LogGroup(this, "UiDeployLogGroup", {
@@ -3765,6 +3773,9 @@ export class OrchestratorStack extends cdk.Stack {
       cacheControl: [s3deploy.CacheControl.fromString("no-cache")],
       prune: true,
     });
+    // The files land only once the bucket's emptier exists, so a failed first create can
+    // always delete the bucket again (lib/auto-delete.ts).
+    deployAfterAutoDelete(uiDeploy, uiBucket);
 
     // Only where runtimes emit spans: not on a control-plane console.
     if (workflowPlane) {

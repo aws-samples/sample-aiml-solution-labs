@@ -546,6 +546,8 @@ def _upload(e, name, body, bid="pclaims01"):
     status, post = call(e, "POST /api/builds/{id}/design/attachments", params={"id": bid},
                         body={"name": name})
     assert status == 200 and post["key"].startswith(f"builds/{bid}/attachments/")
+    # Posted to the bucket's regional host, never the global one (bff/s3_presign.py).
+    assert post["url"] == "https://console-builds.s3.us-east-1.amazonaws.com/"
     e.s3.put_object(Bucket="console-builds", Key=post["key"], Body=body)
     return {"key": post["key"], "name": post["name"]}
 

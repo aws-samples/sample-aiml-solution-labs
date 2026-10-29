@@ -2134,7 +2134,7 @@
       "CredentialProviderType": "GATEWAY_IAM_ROLE"
      }
     ],
-    "Description": "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. us-east-1, eu-west-1, ap-northeast-1 only.",
+    "Description": "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. Regional: a deploy outside its Regions is refused.",
     "GatewayIdentifier": {
      "Fn::GetAtt": [
       "ToolPlaneGatewayF4D3F8F1",
@@ -2147,7 +2147,7 @@
       "Connector": {
        "Configurations": [
         {
-         "Description": "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. us-east-1, eu-west-1, ap-northeast-1 only.",
+         "Description": "AgentCore Web Search - a managed built-in Gateway connector. No API keys, no infrastructure, queries never leave AWS. Regional: a deploy outside its Regions is refused.",
          "Name": "WebSearch",
          "ParameterValues": {}
         }

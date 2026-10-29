@@ -23,6 +23,7 @@ import re
 import boto3
 import buildstore
 import codecheck
+import s3_presign
 import validate_build
 import workflow as wf_mod
 from boto3.dynamodb.conditions import Attr, Key
@@ -813,7 +814,7 @@ def _doc_key(build_id: str, corpus: str, name: str) -> str:
 def doc_upload(build_id: str, owner: str, corpus: str, name: str) -> dict:
     _meta(build_id, owner)
     key = _doc_key(build_id, corpus, name)
-    post = _s3.generate_presigned_post(
+    post = s3_presign.client(REGION).generate_presigned_post(
         Bucket=BUILDS_BUCKET, Key=key, ExpiresIn=900,
         Conditions=[["content-length-range", 1, DOC_MAX_BYTES]])
     return {"url": post["url"], "fields": post["fields"], "maxBytes": DOC_MAX_BYTES}
@@ -949,6 +950,10 @@ def target(build_id: str, owner: str | None = None) -> dict:
     raw = _version_workflow(build_id, version)
     return {"build": build_id, "name": item.get("name", ""), "version": version,
             "agentName": item.get("agentName", ""),
+            # Where it is, and how its buckets are named (bff/bucket_names.py): a deploy
+            # from before the scheme was recorded has the legacy names.
+            "region": deployed.get("region") or REGION,
+            "bucketNaming": deployed.get("bucketNaming") or "legacy",
             "runtimeArn": deployed["runtimeArn"], "statusTable": deployed["statusTable"],
             "eventsTable": deployed["eventsTable"],
             "telemetryTable": deployed["telemetryTable"],

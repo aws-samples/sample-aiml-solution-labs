@@ -33,6 +33,7 @@ import * as kms from "aws-cdk-lib/aws-kms";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 
+import { bucketName, BucketNaming } from "./bucket-names";
 import { keyDefault } from "./defaults";
 import { CODE_GRANTABLE_TAG } from "./tool-plane";
 import { extra, values } from "./vocabulary";
@@ -53,16 +54,19 @@ export interface StorageSpec {
   retain: boolean;
 }
 
-/** `<build name>-storage-<account>`, dashed like the build's other buckets (an S3 bucket name
+/** `<build name>-storage-<account>` (legacy) or `<build name>-storage-<account>-<region>`
+ *  (regional, lib/bucket-names.ts), dashed like the build's other buckets (an S3 bucket name
  *  takes no underscore). Not agentcore-*: that prefix is the framework's own, which every code
  *  tool's boundary denies. */
-export function storageBucketName(agentName: string, account: string): string {
-  return `${agentName.replace(/_/g, "-")}-storage-${account}`;
+export function storageBucketName(agentName: string, account: string, region = "",
+                                  scheme: BucketNaming = "legacy"): string {
+  return bucketName("storage", agentName, account, region, scheme);
 }
 
 /** The build's storage, or null when the workflow does not set orchestrator.storage.create.
  *  Throws at synth for a value the validators refuse. */
-export function storageOf(workflow: any, agentName: string, account: string): StorageSpec | null {
+export function storageOf(workflow: any, agentName: string, account: string, region = "",
+                          scheme: BucketNaming = "legacy"): StorageSpec | null {
   const st = workflow?.orchestrator?.storage;
   if (st === undefined || st === null) return null;
   const defaults = keyDefault<{ create: boolean; retain: boolean }>("orchestrator", "storage");
@@ -72,7 +76,7 @@ export function storageOf(workflow: any, agentName: string, account: string): St
     throw new Error("orchestrator.storage.create and orchestrator.storage.retain must be true or false.");
   }
   if (!create) return null;
-  const bucketName = storageBucketName(agentName, account);
+  const bucketName = storageBucketName(agentName, account, region, scheme);
   // https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html: 3 to 63.
   if (!cdk.Token.isUnresolved(account) && bucketName.length > 63) {
     throw new Error(`orchestrator.storage: the bucket name ${bucketName} is over S3's 63 characters; use a shorter agent name.`);

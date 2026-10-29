@@ -15,6 +15,16 @@ variable "agent_name" {
   default     = "multiagent_orchestrator"
 }
 
+variable "bucket_naming" {
+  description = "How this stack's S3 buckets are named (bucket_names.tf): \"legacy\" (default) keeps the names every deployment had; \"regional\" ends each name with the Region, so the same agent can be deployed again in another Region straight after a destroy. Choose it at the first apply and never change it: a renamed bucket is REPLACED, with what it holds. Mirrors CDK -c bucketNaming."
+  type        = string
+  default     = "legacy"
+  validation {
+    condition     = contains(["legacy", "regional"], var.bucket_naming)
+    error_message = "bucket_naming must be \"legacy\" or \"regional\"."
+  }
+}
+
 variable "model_id" {
   description = "Default model for agents that name none. Empty: the workflow's orchestrator.defaultModel, else the framework default (app/defaults.json). Moved to this region's inference-profile geography either way (models.tf)."
   type        = string

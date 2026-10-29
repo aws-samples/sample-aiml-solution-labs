@@ -2,6 +2,7 @@
 import * as cdk from "aws-cdk-lib";
 import { AwsSolutionsChecks } from "cdk-nag";
 import { acknowledgeNagFindings } from "../lib/nag";
+import { bucketNamingOf } from "../lib/bucket-names";
 import { OrchestratorStack } from "../lib/orchestrator-stack";
 
 const app = new cdk.App();
@@ -197,6 +198,11 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   acmCertificateArn: ctx("acmCertificateArn", ""),
   enableWaf: String(ctx("enableWaf", "false")) === "true",
   wafRateLimit: Number(ctx("wafRateLimit", "2000")),
+  // How the stack's buckets are named (lib/bucket-names.ts): "legacy" (default) or
+  // "regional" (the Region ends each name). Choose it at a stack's first deploy and never
+  // change it: a renamed bucket is replaced, with what it holds. The console's deploy
+  // runner sets it per build.
+  bucketNaming: bucketNamingOf(ctx("bucketNaming", "legacy")),
 });
 
 function parseA2aIdentity(raw: string) {

@@ -35,8 +35,31 @@ def test_a_build_name_fits_every_aws_limit_it_feeds():
     characters, in the longest-named commercial region."""
     name = buildstore.new_agent_name().replace("_", "-")
     assert len(f"agentcore-{name}-ui-123456789012-ap-southeast-2") <= 63
+    # Every bucket a build has, in both naming schemes and the longest Region codes, fits
+    # without the digest fallback (bff/bucket_names.py).
+    import bucket_names
+    agent = buildstore.new_agent_name()
+    for region in ("us-isof-south-1", "ap-southeast-3", "cn-northwest-1", "us-gov-west-1"):
+        for kind in bucket_names.KINDS:
+            for scheme in bucket_names.SCHEMES:
+                for tool in ("cdk", "terraform"):
+                    n = bucket_names.name(kind, agent, "123456789012", region, scheme, tool)
+                    assert len(n) <= 63 and agent.replace("_", "-") in n, n
     assert len(f"{buildstore.new_agent_name()}_semantic") <= 48       # AgentCore Memory
     assert len(f"AgentCoreSubagent-{buildstore.new_agent_name()}-") <= 64 - 20  # leaves 20 for an id
+
+
+def test_the_bucket_naming_switch_is_declared_on_both_paths_and_defaults_to_legacy():
+    """The runner passes -c bucketNaming / bucket_naming (deployer/runner.py); unset, both
+    paths keep the names every deployment had, so upgrading renames no bucket."""
+    assert 'bucketNaming: bucketNamingOf(ctx("bucketNaming", "legacy"))' in BIN
+    block = re.search(r'variable "bucket_naming" \{(.*?)\n\}', VARIABLES, re.DOTALL).group(1)
+    assert 'default     = "legacy"' in block and 'contains(["legacy", "regional"], var.bucket_naming)' in block
+    assert runner.tf_vars("ax_12345678", False, "us-east-1", bucket_naming="regional")["bucket_naming"] == "regional"
+    # The console BFF reads a build's images under either name (bff/handler.py _image_link).
+    assets = 'arn:aws:s3:::agentcore-${replace(local.build_agent_prefix, "_", "-")}*-assets-${local.account_id}'
+    assert f'"{assets}/runs/*"' in TF and f'"{assets}-${{var.region}}/runs/*"' in TF
+    assert "resources: [`${assets}/runs/*`, `${assets}-${stack.region}/runs/*`]" in TS
 
 
 def test_the_terraform_version_is_pinned_once():

@@ -79,8 +79,12 @@ MAX_NAME_TRIES = 50
 MAX_REPLACE_TRIES = 3
 _TAKEN = ("PreconditionFailed", "ConditionalRequestConflict")
 
+# The link it returns is opened by a browser: signed for the Region's own virtual-hosted host
+# (<bucket>.s3.<region>.amazonaws.com), never the global one, which S3 can answer with a 307
+# a browser does not follow (app/common/s3_presign.py; this Lambda ships alone, so inline).
 _s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION") or "us-east-1",
-                   config=Config(signature_version="s3v4", retries={"total_max_attempts": 2}))
+                   config=Config(signature_version="s3v4", retries={"total_max_attempts": 2},
+                                 s3={"addressing_style": "virtual", "us_east_1_regional_endpoint": "regional"}))
 
 
 class Refused(ValueError):

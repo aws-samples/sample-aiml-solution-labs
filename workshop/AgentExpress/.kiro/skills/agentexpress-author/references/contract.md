@@ -18,7 +18,7 @@ the rest.
 | type | Keys used | Reaches |
 |---|---|---|
 | `kb` | `corpora`, `maxResults`, `policy`, or `s3Uri` / `knowledgeBaseId`; optional `chunking`, `parsing`, `rerank`, `vectorStore` (your own store), `dataSource` (web, Confluence, SharePoint, Salesforce; needs an OpenSearch Serverless store) | A Bedrock Knowledge Base. Each top-level folder in `kb_docs/` is a corpus |
-| `websearch` | `maxResults`, `domains` | Web search (us-east-1, eu-west-1, ap-northeast-1 only) |
+| `websearch` | `maxResults`, `domains` | Web search (us-east-1, us-east-2, us-west-2, eu-west-1, ap-southeast-2, ap-northeast-1, us-gov-west-1 only) |
 | `mcp` | `endpoint` **or** `hosted` (`code`, `network`), `call`, `arg`, `args`, `listingMode`, `auth` / `identity` | An existing MCP server, or one the build hosts on its own AgentCore Runtime |
 | `openapi` | `schema` (inline), `schemaS3Uri` or `source`, `call`, `arg`, `auth` / `identity`, `rowFields`, `rowPath` | A REST API |
 | `lambda` | `code` **or** `lambdaArn` **or** `source`, `call`, `arg`, `toolSchema`, `rowFields` | Anything else |
@@ -313,7 +313,8 @@ Defined once, used by name:
   the key; `send.content` off by default). Set it on the Builder's Settings → Export.
 <!-- begin Track E storage -->
 - `orchestrator.storage`: `{"create": true}` makes the deploy create the build's own private, versioned,
-  encrypted bucket, `<build name>-storage-<account>`; `"retain": true` keeps it (S3-managed keys) when the
+  encrypted bucket, `<build name>-storage-<account>-<region>` (`<build name>-storage-<account>` for a build first
+  deployed before bucket names carried the Region); `"retain": true` keeps it (S3-managed keys) when the
   build is destroyed, otherwise it is emptied and deleted. Tools name it with the token `${storage}`
   (`s3://<the bucket>`), at the start of the value: a code tool's or interceptor's `code.grants.s3Prefix`
   (`"${storage}/templates/"`), a `kb` tool's `s3Uri` (`"${storage}/kb/"`), a Document generator's

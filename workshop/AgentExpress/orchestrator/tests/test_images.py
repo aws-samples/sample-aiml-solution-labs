@@ -126,3 +126,23 @@ def test_a_builds_image_comes_from_that_builds_own_bucket(env):
                         qs={"key": f"runs/{sid}/hero/1.png"})
     assert status == 200
     assert f"agentcore-{agent.replace('_', '-')}-assets-1" in body["url"]
+    # Signed for the bucket's regional host, never the global one (bff/s3_presign.py).
+    assert urllib.parse.urlparse(body["url"]).netloc == \
+        f"agentcore-{agent.replace('_', '-')}-assets-1.s3.us-east-1.amazonaws.com"
+
+
+def test_a_regionally_named_builds_image_comes_from_its_regional_bucket(env):
+    """A build whose deploy recorded bucketNaming "regional" has the Region in its bucket's
+    name (bff/bucket_names.py), and its link is signed for that Region."""
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    agent = mark_deployed(env, "pclaims01")
+    item = env.table.get_item(Key={"pk": "BUILD#pclaims01", "sk": "META"})["Item"]
+    env.builds.buildstore.record_deployed(env.table, "pclaims01", {
+        **item["deployed"], "region": "us-west-2", "bucketNaming": "regional"})
+    sid = call(env, "POST /api/sessions", body={"build": "pclaims01"})[1]["session_id"]
+    status, body = call(env, "GET /api/images", path="/api/images",
+                        qs={"key": f"runs/{sid}/hero/1.png"})
+    assert status == 200
+    bucket = f"agentcore-{agent.replace('_', '-')}-assets-1-us-west-2"
+    assert urllib.parse.urlparse(body["url"]).netloc == f"{bucket}.s3.us-west-2.amazonaws.com"

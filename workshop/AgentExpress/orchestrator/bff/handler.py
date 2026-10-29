@@ -95,6 +95,7 @@ import asks
 import audit
 import authz
 import boto3
+import bucket_names
 import builds
 import cache_insights
 import chatbot
@@ -113,6 +114,7 @@ import registry
 import runartifacts
 import runfiles
 import runshares
+import s3_presign
 import sharing
 import suiteruns
 import suites
@@ -231,7 +233,6 @@ def _session_target(session_id: str) -> dict:
 #: the AssetsBucket in cdk/lib/orchestrator-stack.ts); "" when no agent draws.
 ASSETS_BUCKET = os.environ.get("ASSETS_BUCKET", "")
 IMAGE_KEY_RE = re.compile(r"^runs/([A-Za-z0-9_-]{6,64})/[A-Za-z][A-Za-z0-9_]*/\d+\.(png|jpg)$")
-_s3_client = None
 
 
 def _image_link(event: dict, key: str) -> dict:
@@ -239,24 +240,26 @@ def _image_link(event: dict, key: str) -> dict:
 
     The key names the run (runs/<session>/<agent>/<n>.<ext>, app/common/images.py), so
     the check is the same one every run route makes. A run of a Builder build in this
-    account reads from that build's bucket, named like this deployment's own."""
-    global _s3_client
+    account reads from that build's bucket, named as the build's buckets are
+    (bff/bucket_names.py, the scheme its deploy recorded) in the Region it is deployed in;
+    the link is signed for that Region's host (bff/s3_presign.py)."""
     m = IMAGE_KEY_RE.match(str(key or ""))
     if not m:
         raise builds.BuildError(400, "invalid image key")
     target = _own_session(event, m.group(1), read=True)
+    region = REGION
     if target["build"]:
         account = str(target.get("runtimeArn") or "").split(":")[4:5]
-        bucket = (f"agentcore-{str(target.get('agentName') or '').replace('_', '-')}-assets-"
-                  f"{account[0] if account else ''}")
+        region = str(target.get("region") or REGION)
+        bucket = bucket_names.name("assets", str(target.get("agentName") or ""),
+                                   account[0] if account else "", region,
+                                   str(target.get("bucketNaming") or "legacy"))
     else:
         bucket = ASSETS_BUCKET
     if not bucket:
         raise builds.BuildError(404, "this deployment stores no images")
-    if _s3_client is None:
-        _s3_client = boto3.client("s3", region_name=REGION)
-    url = _s3_client.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key},
-                                            ExpiresIn=900)
+    url = s3_presign.client(region).generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key},
+                                                           ExpiresIn=900)
     return {"url": url, "expiresIn": 900}
 
 

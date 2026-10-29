@@ -97,7 +97,7 @@ def test_the_form_is_offered_files_only_when_an_agent_reads_them(app):
 def test_an_upload_is_a_presigned_post_into_the_callers_own_folder(app):
     status, post = call(app, "POST /api/sessions/attachments", {"name": "../../brief.pdf"})
     assert status == 200 and post["key"].startswith("uploads/") and post["key"].endswith("-brief.pdf")
-    assert post["url"] and post["fields"]["key"] == post["key"]
+    assert post["url"] == f"https://{ASSETS}.s3.us-east-1.amazonaws.com/" and post["fields"]["key"] == post["key"]
     other = call(app, "POST /api/sessions/attachments", {"name": "brief.pdf"}, sub="u2")[1]
     assert other["key"].split("/")[1] != post["key"].split("/")[1]
     assert call(app, "POST /api/sessions/attachments", {"name": "tool.exe"})[0] == 400

@@ -22,6 +22,8 @@ import { kbIngestion, type KbChunking, type KbParsing } from "./kb-ingestion";
 import { kbVectorStore, kbVectorStoreName, validateKbVectorStore, type KbVectorStore } from "./kb-vector-store";
 import { kbConnector, validateKbConnector, type KbConnector } from "./kb-data-source";
 import { BROWSER_SOURCE, browserToolFunction } from "./browser-tool";
+import { deployAfterAutoDelete } from "./auto-delete";
+import { bucketName, BucketNaming } from "./bucket-names";
 import { DOCGEN_SOURCE, docgenToolFunction, withDocgenArgs } from "./docgen-tool"; // Track B docgen
 import { HOSTED_MCP_METADATA, hostedMcpRuntime, type HostedMcp } from "./hosted-mcp";
 
@@ -404,6 +406,8 @@ export interface ToolSpec {
 
 export interface ToolPlaneProps {
   agentName: string;
+  /** How its buckets are named (lib/bucket-names.ts); default "legacy". */
+  bucketNaming?: BucketNaming;
   /** orchestrator.interceptors, as interceptorsOf returned it. */
   interceptors?: Partial<Record<InterceptionPoint, InterceptorSpec>>;
   /** The parsed `tools` block from workflow.json. */
@@ -872,7 +876,7 @@ export class ToolPlane extends Construct {
       let docsDeployment: s3deploy.BucketDeployment | undefined;
       if (kbSource === "upload") {
         const docsBucket = new s3.Bucket(this, "KbDocsBucket", {
-          bucketName: `agentcore-${dashName}-kbdocs-${account}`,
+          bucketName: bucketName("kbdocs", agentName, account, region, props.bucketNaming ?? "legacy"),
           blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
           encryption: s3.BucketEncryption.S3_MANAGED,
           enforceSSL: true,
@@ -904,6 +908,8 @@ export class ToolPlane extends Construct {
             ...sidecars,
           ],
         });
+        // Uploaded only once the bucket's emptier exists (lib/auto-delete.ts).
+        deployAfterAutoDelete(docsDeployment, docsBucket);
       } else if (kbSource === "s3") {
         const loc = parseS3Location(String(kbSpec.s3Uri));
         docsBucketArn = `arn:aws:s3:::${loc.bucket}`;
@@ -1150,9 +1156,10 @@ export class ToolPlane extends Construct {
       const schemaBucket = new s3.Bucket(this, "ToolSchemasBucket", {
         // Same shape as the KB buckets: `agentcore-<dashed agent name>-<what>-<account>`.
         // The agent name is dashed because an S3 bucket name may not contain an
-        // underscore, and the region is NOT in it because the first version of this
-        // name was 64 characters — one over the limit — which fails at synth.
-        bucketName: `agentcore-${dashName}-schemas-${account}`,
+        // underscore. The legacy name has no Region: its first version was 64 characters,
+        // one over the limit. The regional one cuts a long agent name to fit
+        // (lib/bucket-names.ts).
+        bucketName: bucketName("schemas", agentName, account, region, props.bucketNaming ?? "legacy"),
         blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
         encryption: s3.BucketEncryption.S3_MANAGED,
         enforceSSL: true,
@@ -1176,6 +1183,8 @@ export class ToolPlane extends Construct {
           ],
           prune: false,
         });
+        // Uploaded only once the bucket's emptier exists (lib/auto-delete.ts).
+        deployAfterAutoDelete(schemaUploads[name], schemaBucket);
         this.uploadedSchemaUris[name] = schemaBucket.s3UrlForObject(`${name}/openapi.json`);
       }
     }

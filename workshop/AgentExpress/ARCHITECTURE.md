@@ -426,7 +426,8 @@ Table names are `<agentName>_<suffix>`; a build's `agentName` is `ax_` + 8 hex.
   Document generator's, each with `x-amz-meta-agent`, which a deliver target's `producedBy` reads)
   and `code/`, expired after `retentionDays`; uploads under `uploads/<owner digest>/`, expired after
   a day. Also UI, KB documents and tool schema buckets.
-- Build storage (`orchestrator.storage.create`): `<agent name with _ as ->-storage-<account>`,
+- Build storage (`orchestrator.storage.create`): `<agent name with _ as ->-storage-<account>`
+  (`-<region>` after it with regional bucket names, DEPLOYMENT.md "Bucket names and Regions"),
   private, versioned, encrypted with the build's key (S3-managed with `retain`); its layout is
   whatever the tools name with `${storage}/<folder>/`.
 

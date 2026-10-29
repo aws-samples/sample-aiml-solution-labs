@@ -1,5 +1,5 @@
-"""examples/demo-everything: the one build whose single run shows every tool type and
-AgentCore feature. The owner deploys it from the Builder console, so it must pass the
+"""examples/demo-everything: the one build whose single run shows six of the seven tool types
+and most AgentCore features. The owner deploys it from the Builder console, so it must pass the
 check the BFF runs before a deploy (bff/validate_build.py, and the code tools' static
 check), keep showing what its README says it shows, and stay what make_project.py
 writes. The page's validator runs the same files in web/src/builder/demoEverything.test.ts.

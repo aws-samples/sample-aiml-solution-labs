@@ -246,9 +246,11 @@ X-Ray calls for Transaction Search. `EvaluatorJudgeModel` allows `bedrock:Invoke
 foundation models and inference profiles: creating a custom evaluator checks the caller can
 invoke its judge model. `S3ManageBuildStorage` creates, configures, empties and deletes a build's
 own bucket ([build storage](#storage-created-for-a-build)) on `arn:aws:s3:::ax-*-storage-*` only,
-the names builds get; it grants no object read or write. A stack with another `agent_name` that
-sets `orchestrator.storage` needs the same actions on `<agent name>-storage-<account>`. CDK uses
-the bootstrap execution role instead; there is no policy file.
+the names builds get, with or without the Region at the end ([bucket names](#bucket-names-and-regions));
+it grants no object read or write. A stack with another `agent_name` that sets
+`orchestrator.storage` needs the same actions on `<agent name>-storage-<account>` (and
+`<agent name>-storage-<account>-<region>` with `bucket_naming = "regional"`). CDK uses the
+bootstrap execution role instead; there is no policy file.
 
 ## Organisation guardrails
 
@@ -504,7 +506,7 @@ app links to the same documentation.
 
 **Where the links go: `docsUrl`.** By default, the public [user guide](docs/user-guide/README.md) on
 GitHub, pinned to the release's tag:
-`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.9/workshop/AgentExpress/docs/user-guide/`.
+`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.10/workshop/AgentExpress/docs/user-guide/`.
 A section's link is `<docsUrl><page>.md#<slug>`, GitHub's id for the heading (lower case, punctuation
 but `-` and `_` removed, spaces as `-`, a repeated heading `-1`, `-2`). An organisation that keeps the
 guide in an XWiki space, typically for internal or production deployments, points `docsUrl` at that
@@ -957,9 +959,21 @@ agent name, with the tool the user picked:
   password. With Okta, Entra ID or Auth0 there is no invite: people sign in with the provider
 - A CDK build in the console's own account needs that account and region CDK-bootstrapped; a
   connected account with no bootstrap is bootstrapped on its first deploy
-- A CDK build stack whose first create failed (`ROLLBACK_COMPLETE`, `ROLLBACK_FAILED`,
-  `DELETE_FAILED`) is deleted through the CDK deploy role and created again. A stack that ever
-  deployed is never deleted this way
+- A CDK build stack whose first create failed (`ROLLBACK_COMPLETE`, `ROLLBACK_FAILED`, or
+  `DELETE_FAILED` after one) is cleared before the deploy and created again. The runner first proves
+  the stack never deployed: its whole event history (read by StackId) starts with its create, shows a
+  rollback, and has no `CREATE_COMPLETE`, `UPDATE_*` or `IMPORT_*`, and the build has no deploy on
+  record in that account and Region. Then it empties only that stack's own framework buckets (an
+  `AWS::S3::Bucket` of the stack whose name is one of the build's bucket names, or its UI logs
+  bucket), with `ExpectedBucketOwner`, deletes the stack through the CDK deploy role and waits, and
+  tries again if the delete ends `DELETE_FAILED`. Storage kept with `retain` is not emptied. Each
+  step is a `runner:` line in the deploy log. A stack that ever deployed, or whose history cannot be
+  read, is never emptied or deleted this way: the deploy fails and says to destroy the build or
+  clear the stack by hand
+- The UI, Knowledge Base documents and tool schema uploads each wait for their bucket's
+  auto-delete resource, so a rollback can always empty and delete those buckets
+  (`cdk/lib/auto-delete.ts`). Terraform does not roll back: a failed apply keeps its state, the
+  next apply carries on from it, and every bucket there already has `force_destroy`
 
 ### Code from files, git or S3 (code sources)
 A Lambda tool written in the build, a Gateway interceptor written in it, a Run code step and a
@@ -1039,6 +1053,48 @@ execution role, which is AdministratorAccess unless the account was bootstrapped
 `--cloudformation-execution-policies`; bootstrap it yourself with a narrower policy first if that
 matters. Terraform builds run with the role's own permissions. Verifying assumes the role once and shows the STS reason on failure (no such
 role, trust or External ID mismatch, an SCP). Terraform state stays in the console's account.
+
+One connection works in every Region of the account: the deploy role is an IAM role, and IAM is
+global. A deploy picks its Region per build; nothing is connected again for another Region. To
+move a build to another Region, destroy it, then deploy it in the new Region. A build deployed
+from now on has the Region in its bucket names, so the new deploy never meets its old names. A
+build deployed before keeps its names; deployed in another Region straight after its destroy, its
+deploy can fail with `A conflicting conditional operation is currently in progress (409)` while S3
+releases the old names. Wait 30 to 60 minutes and deploy again.
+
+#### Bucket names and Regions
+A general purpose bucket name is unique across a partition, and a deleted name may not be free
+again at once ([bucket naming rules](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html)).
+So the names a stack gives its own buckets come in two schemes, chosen with `-c bucketNaming`
+(CDK) or `bucket_naming` (Terraform):
+
+| Bucket | `legacy` (default) | `regional` |
+|---|---|---|
+| Assets (images, run files) | `agentcore-<name>-assets-<account>` | `agentcore-<name>-assets-<account>-<region>` |
+| Build storage | `<name>-storage-<account>` | `<name>-storage-<account>-<region>` |
+| Knowledge Base documents | `agentcore-<name>-kbdocs-<account>` | `agentcore-<name>-kbdocs-<account>-<region>` |
+| Tool schemas | `agentcore-<name>-schemas-<account>` | `agentcore-<name>-schemas-<account>-<region>` |
+| UI (CDK) | `agentcore-<name>-ui-<account>-<region>` | the same |
+| UI and UI logs (Terraform) | `agentcore-<name>-ui-<account>`, `...-ui-logs-<account>` | with `-<region>` at the end |
+
+`<name>` is the agent name with `_` as `-`, lower-cased in the regional scheme. A regional name
+over 63 characters keeps its prefix, `-<kind>-<account>-<region>` and the first 8 hex digits of
+the agent name's SHA-256, and cuts the agent name to fit: `agentcore-<cut name>-<digest>-<kind>-<account>-<region>`.
+A console build's name (`ax_` and 8 hex digits) always fits whole, even in the longest Region
+codes. A name S3 reserves (`xn--`, `sthree-`) fails the synth or plan. The three implementations
+(`cdk/lib/bucket-names.ts`, `terraform/bucket_names.tf`, `bff/bucket_names.py`) are held to the
+same vectors (`tests/fixtures/bucket_names.json`).
+
+Never change the scheme of a deployed stack: CloudFormation and Terraform replace a bucket whose
+name changes, and what it holds goes with it. That is why `legacy` is the default, and why
+upgrading the framework renames nothing. The console's deploy runner records the scheme on the
+build (`bucketNaming` on its record) the first time it deploys it, and passes it on every later
+deploy and destroy: `regional` when nothing of the build is deployed, `legacy` when the build
+has a deploy on record from before schemes were recorded, its CDK stack still exists, or it has
+Terraform state. A destroy forgets the scheme, unless storage was kept with `retain` (its bucket
+keeps its name). Self-deployers opt in on a new stack with `-c bucketNaming=regional` or
+`bucket_naming = "regional"`. The IAM patterns in `deploy-role-policy.json` and the connected
+account's role match both schemes; the console BFF's read of a build's images names both.
 
 ### Moving a build out of a console
 
@@ -1254,7 +1310,8 @@ kind `deliverSecrets` ([Secrets](#secrets)).
 ## Storage created for a build
 `"orchestrator": {"storage": {"create": true}}` (in the Builder: **Settings → Storage → Create
 storage for this build**) makes the deploy create a bucket for the build,
-`<agent name with _ as ->-storage-<account>`. Without it nothing is created, and the deploy is the
+`<agent name with _ as ->-storage-<account>`, with `-<region>` at the end for a build deployed with
+[regional bucket names](#bucket-names-and-regions). Without it nothing is created, and the deploy is the
 same as before (`cdk/test/storage-identity.test.ts`, `tests/test_v139_identity.py`).
 
 - The bucket: all four Block Public Access settings on, a policy refusing plain HTTP, versioned,

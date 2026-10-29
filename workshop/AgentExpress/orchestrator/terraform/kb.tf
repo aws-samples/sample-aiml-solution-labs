@@ -129,7 +129,7 @@ resource "aws_s3vectors_index" "kb" {
 
 resource "aws_s3_bucket" "kb_docs" {
   count         = local.kb_upload ? 1 : 0
-  bucket        = "agentcore-${replace(var.agent_name, "_", "-")}-kbdocs-${local.account_id}"
+  bucket        = local.bucket_names.kbdocs
   force_destroy = true
 }
 

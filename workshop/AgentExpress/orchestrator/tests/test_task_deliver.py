@@ -103,7 +103,7 @@ class FakeS3:
 
     def generate_presigned_url(self, op, Params, ExpiresIn):  # boto3's names
         assert op == "get_object"
-        return f"https://assets.s3.amazonaws.com/{Params['Key']}?X-Amz-Expires={ExpiresIn}"
+        return f"https://assets.s3.us-east-1.amazonaws.com/{Params['Key']}?X-Amz-Expires={ExpiresIn}"
 
 
 class FakeSES:
@@ -149,6 +149,8 @@ def aws(monkeypatch):
             return ses
         return s3
     monkeypatch.setattr(deliver, "_client", client)
+    # Links are signed by the regional presigning client (app/common/s3_presign.py).
+    monkeypatch.setattr(deliver.s3_presign, "client", lambda region="": s3)
     monkeypatch.setenv("ASSETS_BUCKET", "agentcore-app-assets-111122223333")
     events: list[tuple] = []
     monkeypatch.setattr(audit, "run_event", lambda sid, action, detail: events.append((sid, action, detail)))

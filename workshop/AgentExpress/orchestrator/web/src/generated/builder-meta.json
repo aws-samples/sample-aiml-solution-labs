@@ -2009,7 +2009,7 @@
      "properties": {
       "create": {
        "type": "boolean",
-       "doc": "true: the deploy creates the build's own S3 bucket, <build name>-storage-<account>: private (all four Block Public Access settings), HTTPS only, versioned (old versions kept 30 days), encrypted with the build's KMS key, tagged agentexpress:code-tools=true with ABAC on so code tool grants reach it. Default false."
+       "doc": "true: the deploy creates the build's own S3 bucket, <build name>-storage-<account>-<region> (without -<region> for a build first deployed before bucket names carried the Region): private (all four Block Public Access settings), HTTPS only, versioned (old versions kept 30 days), encrypted with the build's KMS key, tagged agentexpress:code-tools=true with ABAC on so code tool grants reach it. Default false."
       },
       "retain": {
        "type": "boolean",
@@ -2748,11 +2748,15 @@
    "fallback": "global"
   },
   "webSearchRegions": {
-   "$comment": "Where the managed AgentCore Web Search connector is available.",
+   "$comment": "Where the managed AgentCore Web Search connector is available: the connector's Availability list in the AgentCore Developer Guide (https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-target-connector-web-search-tool.html), which the Supported AWS Regions table (agentcore-regions.html) matches.",
    "values": [
     "us-east-1",
+    "us-east-2",
+    "us-west-2",
     "eu-west-1",
-    "ap-northeast-1"
+    "ap-southeast-2",
+    "ap-northeast-1",
+    "us-gov-west-1"
    ]
   },
   "guardrailFilterStrengths": {
@@ -3895,5 +3899,5 @@
    "scope": "user"
   }
  },
- "frameworkVersion": "1.3.9"
+ "frameworkVersion": "1.3.10"
 }

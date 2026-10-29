@@ -929,7 +929,8 @@ instead, hybrid becomes real and the key comes back.
 
 ### `type: "websearch"`
 
-One per deployment, and only in `us-east-1`, `eu-west-1`, `ap-northeast-1`.
+One per deployment, and only in `us-east-1`, `us-east-2`, `us-west-2`, `eu-west-1`, `ap-southeast-2`,
+`ap-northeast-1`, `us-gov-west-1`.
 
 **Domain filtering is one key**, applied on the Gateway target:
 

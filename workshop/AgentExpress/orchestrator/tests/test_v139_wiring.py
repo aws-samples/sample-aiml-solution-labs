@@ -166,7 +166,7 @@ class RunFiles:
                                                    "meta": kw.get("Metadata") or {}}
 
     def generate_presigned_url(self, op, Params, ExpiresIn):
-        return f"https://{Params['Bucket']}.s3.amazonaws.com/{Params['Key']}"
+        return f"https://{Params['Bucket']}.s3.us-east-1.amazonaws.com/{Params['Key']}"
 
     def list_objects_v2(self, **kw):
         return {"Contents": [{"Key": k, "Size": len(o["body"])} for (b, k), o in sorted(self.objects.items())
@@ -186,6 +186,7 @@ def test_a_file_the_document_generator_saves_is_what_a_deliver_step_sends(dg, mo
     s3 = RunFiles()
     dg._s3 = s3
     monkeypatch.setattr(deliver, "_client", lambda service, region="": s3)
+    monkeypatch.setattr(deliver.s3_presign, "client", lambda region="": s3)
     monkeypatch.setenv("STORAGE_BUCKET", BUCKET)
     made = dg.generate_document({"format": "pdf", "data": {"title": "Quarterly report"}, "fileName": "report",
                                  "runId": SID, "agent": "pdf_writer"})

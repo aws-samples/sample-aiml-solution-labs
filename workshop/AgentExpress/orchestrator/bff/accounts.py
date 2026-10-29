@@ -31,6 +31,7 @@ from pathlib import Path
 
 import boto3
 import buildstore
+import s3_presign
 from boto3.dynamodb.conditions import Key
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
@@ -217,11 +218,14 @@ def list_accounts(owner: str) -> list[dict]:
                    for i in items), key=lambda a: (a.get("label") or "~", a["accountId"]))
 
 
-def _launch(item: dict, s3, bucket: str) -> dict:
-    """A fresh CloudFormation quick-create link for a pending connection."""
+def _launch(item: dict, bucket: str) -> dict:
+    """A fresh CloudFormation quick-create link for a pending connection. The template is
+    in this console's builds bucket, so the link is signed for THIS console's Region,
+    whatever Region the connection targets: CreateStack takes a TemplateURL in any Region
+    (https://docs.aws.amazon.com/AWSCloudFormation/latest/APIReference/API_CreateStack.html)."""
     key = f"connect/{item['externalId']}.json"
-    url = s3.generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key},
-                                    ExpiresIn=3600)
+    url = s3_presign.client(REGION).generate_presigned_url(
+        "get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600)
     region = item["region"]
     q = urllib.parse.urlencode({"templateURL": url, "stackName": item["stackName"]})
     launch = (f"https://{region}.console.aws.amazon.com/cloudformation/home?region={region}"
@@ -257,7 +261,7 @@ def connect(owner: str, account: str, region: str, label: str = "") -> dict:
     s3.put_object(Bucket=bucket, Key=f"connect/{external_id}.json",
                   Body=json.dumps(template(external_id), indent=2).encode(),
                   ContentType="application/json")
-    return _launch(item, s3, bucket)
+    return _launch(item, bucket)
 
 
 def launch_link(owner: str, account: str) -> dict:
@@ -271,7 +275,7 @@ def launch_link(owner: str, account: str) -> dict:
     s3.put_object(Bucket=bucket, Key=f"connect/{item['externalId']}.json",
                   Body=json.dumps(template(item["externalId"]), indent=2).encode(),
                   ContentType="application/json")
-    return _launch(item, s3, bucket)
+    return _launch(item, bucket)
 
 
 def update(owner: str, account: str, label=None, region=None) -> dict:

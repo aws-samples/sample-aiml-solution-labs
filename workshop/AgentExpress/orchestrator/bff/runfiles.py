@@ -25,6 +25,7 @@ import secrets
 import attachments as _att
 import boto3
 import builds
+import s3_presign
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 #: The assets bucket (terraform/images.tf, the AssetsBucket in orchestrator-stack.ts),
@@ -77,8 +78,8 @@ def upload(owner: str, name: str) -> dict:
     if why:
         raise builds.BuildError(400, why)
     key = f"{_folder(owner)}{secrets.token_hex(4)}-{name}"
-    post = _s3().generate_presigned_post(Bucket=bucket, Key=key, ExpiresIn=UPLOAD_TTL_S,
-                                         Conditions=[["content-length-range", 1, _att.DOC_MAX_BYTES]])
+    post = s3_presign.client(REGION).generate_presigned_post(
+        Bucket=bucket, Key=key, ExpiresIn=UPLOAD_TTL_S, Conditions=[["content-length-range", 1, _att.DOC_MAX_BYTES]])
     return {"url": post["url"], "fields": post["fields"], "key": key, "name": name,
             "maxBytes": _att.DOC_MAX_BYTES}
 

@@ -2005,7 +2005,7 @@
         "properties": {
           "create": {
             "type": "boolean",
-            "doc": "true: the deploy creates the build's own S3 bucket, <build name>-storage-<account>: private (all four Block Public Access settings), HTTPS only, versioned (old versions kept 30 days), encrypted with the build's KMS key, tagged agentexpress:code-tools=true with ABAC on so code tool grants reach it. Default false."
+            "doc": "true: the deploy creates the build's own S3 bucket, <build name>-storage-<account>-<region> (without -<region> for a build first deployed before bucket names carried the Region): private (all four Block Public Access settings), HTTPS only, versioned (old versions kept 30 days), encrypted with the build's KMS key, tagged agentexpress:code-tools=true with ABAC on so code tool grants reach it. Default false."
           },
           "retain": {
             "type": "boolean",

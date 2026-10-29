@@ -16,6 +16,12 @@
  * is the one expected difference, and only on the console: it must be allowed to create a
  * build's storage. A build's own stack (builder=false, what deployer/runner.py deploys)
  * has no deploy role and is compared whole.
+ *
+ * The region fixes add two more expected differences, removed by `withoutRegionFixes` and
+ * nothing else: each Custom::CDKBucketDeployment depends on its bucket's
+ * Custom::S3AutoDeleteObjects (lib/auto-delete.ts), and the console BFF may read a build's
+ * images under the regional bucket name too (lib/builder-plane.ts). Every bucket name is
+ * unchanged: the default bucketNaming is "legacy" (lib/bucket-names.ts), which renames nothing.
  */
 import * as cdk from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
@@ -93,6 +99,24 @@ function withoutDeployPolicies(template: any): any {
   return out;
 }
 
+/** The region fixes' two intended changes, taken back out (see the header); nothing else. */
+function withoutRegionFixes(template: any): any {
+  const out = JSON.parse(JSON.stringify(template));
+  for (const r of Object.values<any>(out.Resources ?? {})) {
+    if (r.Type === "Custom::CDKBucketDeployment" && Array.isArray(r.DependsOn)) {
+      r.DependsOn = r.DependsOn.filter((d: string) => !/AutoDeleteObjectsCustomResource[0-9A-F]{8}$/.test(d));
+      if (!r.DependsOn.length) delete r.DependsOn;
+    }
+    for (const s of r.Type === "AWS::IAM::Policy" ? r.Properties.PolicyDocument.Statement : []) {
+      const regional = /^arn:aws:s3:::agentcore-ax-\*-assets-\d{12}-[a-z0-9-]+\/runs\/\*$/;
+      if (s.Action === "s3:GetObject" && Array.isArray(s.Resource) && s.Resource.length === 2 && regional.test(s.Resource[1])) {
+        s.Resource = s.Resource[0];
+      }
+    }
+  }
+  return out;
+}
+
 describe("a workflow without orchestrator.storage", () => {
   beforeAll(() => {
     fs.mkdirSync(CODE_DIR, { recursive: true });
@@ -103,7 +127,8 @@ describe("a workflow without orchestrator.storage", () => {
   for (const [name, c] of Object.entries(CASES)) {
     it(`synthesizes byte-identically to v1.3.8: ${name}`, () => {
       const file = path.join(GOLDEN, `${name}.json`);
-      const got = synth(c.workflow, c.props);
+      const raw = synth(c.workflow, c.props);
+      const got = WRITE ? raw : withoutRegionFixes(raw);
       if (WRITE) {
         fs.mkdirSync(GOLDEN, { recursive: true });
         fs.writeFileSync(file, normalized(got));

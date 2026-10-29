@@ -28,8 +28,9 @@ locals {
   storage_retain = try(local.storage_cfg.retain, local.key_defaults.orchestrator.storage.retain) == true
   storage_token  = local.vocab.storageToken.values[0]
   # Dashed like the build's other buckets (no underscore in a bucket name); not agentcore-*,
-  # the framework's own prefix, which every code tool's boundary denies.
-  storage_bucket_name = "${replace(var.agent_name, "_", "-")}-storage-${local.account_id}"
+  # the framework's own prefix, which every code tool's boundary denies. bucket_names.tf:
+  # <name>-storage-<account>, with -<region> after it under bucket_naming = "regional".
+  storage_bucket_name = local.bucket_names.storage
   # What the token stands for. Without storage it stands for itself, so a value carrying it
   # is left as written, and terraform_data.storage_token refuses it.
   storage_uri = local.storage_on ? "s3://${local.storage_bucket_name}" : local.storage_token

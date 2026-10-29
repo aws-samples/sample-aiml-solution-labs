@@ -1,7 +1,7 @@
 # Demo: everything in one run
 
-One build, one run: an Acme warehouse robot warranty claim, handled with every tool type and
-AgentCore feature this framework deploys. It deploys from the Builder console with CDK or with
+One build, one run: an Acme warehouse robot warranty claim, handled with six of the seven tool
+types and most AgentCore features this framework deploys ([what is left out](#also-available-not-in-this-demo)). It deploys from the Builder console with CDK or with
 Terraform, in us-east-1, and needs no account outside the dev AWS account.
 
 The short talk track is in [DEMO_SCRIPT.md](DEMO_SCRIPT.md).

@@ -29,6 +29,7 @@ import re
 import urllib.parse
 
 import boto3
+import s3_presign
 
 REGION = os.environ.get("AWS_REGION", "us-east-1")
 ASSETS_BUCKET = os.environ.get("ASSETS_BUCKET", "")
@@ -157,7 +158,7 @@ def link(session_id: str, key: str, bucket: str | None = None) -> dict:
         raise FilesError(400, "not a file of this run")
     ctype, preview = kind_of(key)
     d = describe(session_id, key)
-    url = _s3().generate_presigned_url("get_object", ExpiresIn=LINK_TTL_S, Params={
+    url = s3_presign.client(REGION).generate_presigned_url("get_object", ExpiresIn=LINK_TTL_S, Params={
         "Bucket": bucket, "Key": key, "ResponseContentType": ctype,
         "ResponseContentDisposition": _disposition(d["name"], preview in INLINE)})
     return {"url": url, "expiresIn": LINK_TTL_S, "type": ctype, "preview": preview, "name": d["name"]}
