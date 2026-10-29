@@ -4,7 +4,7 @@ variable "region" {
 }
 
 variable "tags" {
-  description = "Tags on every resource the AWS provider creates, on top of agentexpress:app. The deploy runner adds agentexpress:build / :version / :owner for a build. Mirrors CDK -c tags='{...}'."
+  description = "Tags on every resource this stack creates, on top of agentexpress:app. On a console they tag the console only: the builds it deploys get agentexpress:build / :version / :owner / :console from the deploy runner, plus build_tags. Mirrors CDK -c tags='{...}'."
   type        = map(string)
   default     = {}
 }

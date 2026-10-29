@@ -259,15 +259,81 @@ def bucket_naming(meta: dict, *, stack_exists: bool = False, state_exists: bool 
     return "regional", "nothing of the build is deployed"
 
 
-def build_tags(bid: str, version: int, owner: str, email: str, console: str) -> dict:
+#: The console's extra tags for every build it deploys (-c buildTags / var.build_tags), a JSON
+#: object on the deploy project. The same rules as cdk/lib/build-tags.ts and var.build_tags in
+#: terraform/builder.tf: ASCII only, because Amazon Bedrock's tag pattern is, and a tag one
+#: resource refuses fails the whole deploy.
+BUILD_TAGS_ENV = "BUILD_EXTRA_TAGS"
+MAX_BUILD_TAGS = 40
+RESERVED_TAG_PREFIXES = ("aws:", "agentexpress:")
+TAG_CHARS = re.compile(r"^[A-Za-z0-9 _.:/=+\-@]*$")
+_TAG_CHARS_RULE = "may use only letters A-Z a-z, digits, spaces and _ . : / = + - @"
+
+
+def tag_problem(key: str, value) -> str:
+    """Why an extra build tag cannot be used, or "" when it can."""
+    if not isinstance(value, str):
+        return "the value is not a string"
+    if not TAG_CHARS.match(key):
+        return f"the key {_TAG_CHARS_RULE}"
+    if not 1 <= len(key) <= 128:
+        return "the key must be 1 to 128 characters"
+    if key.lower().startswith(RESERVED_TAG_PREFIXES):
+        return "the key starts with a reserved prefix (aws: or agentexpress:)"
+    if not TAG_CHARS.match(value):
+        return f"the value {_TAG_CHARS_RULE}"
+    if len(value) > 256:
+        return "the value must be at most 256 characters"
+    return ""
+
+
+def extra_build_tags(env: dict) -> dict:
+    """The console's extra tags for this build, from BUILD_EXTRA_TAGS. CDK and Terraform
+    refuse an invalid one at synth and plan; the project's environment can still be edited
+    by hand, so here an invalid entry is skipped and printed (its key, never its value),
+    and a deploy never fails for a tag."""
+    raw = str(env.get(BUILD_TAGS_ENV) or "").strip()
+    if not raw:
+        return {}
+    try:
+        given = json.loads(raw)
+    except ValueError:
+        given = None
+    if not isinstance(given, dict):
+        print(f"runner: {BUILD_TAGS_ENV} is not a JSON object of tag key -> value; no extra tags added")
+        return {}
+    out: dict = {}
+    seen: dict = {}
+    for key in sorted(given):           # JSON object keys are strings
+        value = given[key]
+        why = tag_problem(key, value)
+        if not why and key.lower() in seen:
+            why = f"the key differs only in case from {seen[key.lower()]}"
+        if not why and len(out) >= MAX_BUILD_TAGS:
+            why = f"over the limit of {MAX_BUILD_TAGS} extra tags"
+        if why:
+            print(f"runner: extra build tag {key[:130]!r} skipped: {why}")
+            continue
+        seen[key.lower()] = key
+        out[key] = value
+    if out:
+        print(f"runner: adding {len(out)} extra tag(s) from the console to this build: "
+              f"{', '.join(sorted(out))}")
+    return out
+
+
+def build_tags(bid: str, version: int, owner: str, email: str, console: str,
+               extra: dict | None = None) -> dict:
     """What every resource of a build is tagged with, so a bill or an inventory can say
-    which build, version, user and console it came from."""
+    which build, version, user and console it came from, plus the console's `extra` tags
+    (extra_build_tags). The framework's agentexpress:* keys always win over an extra one."""
     tags = {"agentexpress:build": bid, "agentexpress:version": str(version),
             "agentexpress:owner": email or owner}
     if console:
         tags["agentexpress:console"] = console
     # A tag value allows letters, digits, spaces and _ . : / = + - @ only.
-    return {k: re.sub(r"[^\w .:/=+\-@]", "_", v)[:256] for k, v in tags.items()}
+    framework = {k: re.sub(r"[^\w .:/=+\-@]", "_", v)[:256] for k, v in tags.items()}
+    return {**(extra or {}), **framework}
 
 
 # --- where the build goes ---------------------------------------------------------------
@@ -1466,8 +1532,10 @@ def main(env: dict | None = None, table=None, s3=None) -> int:
             stand_in_corpora(bundle.get("workflow") or {})
         gateway = buildstore.needs_gateway(bundle.get("workflow") or {})
         sub_env.update(read_secrets(env, bid))
+        # The console's extra tags (-c buildTags / var.build_tags), in any account.
+        extra = extra_build_tags(env)
         tags = build_tags(bid, version, owner, str(meta.get("ownerEmail") or ""),
-                          env.get("CONSOLE_NAME", ""))
+                          env.get("CONSOLE_NAME", ""), extra)
 
         buildstore.set_job(table, bid, phase="destroying" if action == "destroy" else "deploying")
         signin = sign_in(bundle.get("workflow") or {})

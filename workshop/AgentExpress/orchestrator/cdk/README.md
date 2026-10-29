@@ -205,7 +205,8 @@ Set in `cdk.json` or via `-c key=value`:
 | `demoVideoUrl` | `""` | An `https://` link to a demo video, shown in the About panel and first-run view of a `consoleMode=builder` console; empty shows none. Any other value fails the synth |
 | `docsUrl` | the public user guide on GitHub at the release tag (`../docs_default.json`) | The `https://` documentation a **Documentation** link in the top bar and an info icon beside each feature link to (`web/src/docs/docsLinks.ts`): the GitHub guide (`<page>.md#<slug>`) or an XWiki copy (a `/bin/view/` path: `<page>#H<heading>`). On any console mode and passed on to every build this console deploys; empty shows none. Any other value fails the synth |
 | `docsLinks` | `true` | `false`: no info icon and no Documentation link anywhere, on this console and every build it deploys |
-| `tags` | `""` | JSON object of extra tags for every resource, beside `agentexpress:app` |
+| `tags` | `""` | JSON object of extra tags for every resource of this stack, beside `agentexpress:app`. On a console it tags the console only; builds get `buildTags` |
+| `buildTags` | `""` | JSON object of extra tags on every build this console deploys (own or connected account), beside the framework's `agentexpress:*` tags, which win. Checked at synth (`lib/build-tags.ts`) ([Tags on the builds a console deploys](../../DEPLOYMENT.md#tags-on-the-builds-a-console-deploys)) |
 | `allowUnauthenticated` | `false` | Required (`true`) with `idp=none`: the acknowledgement that the console has no sign-in |
 | `extraCallbackUrls` | `""` | Further Hosted UI callback/logout URLs (comma-separated), e.g. for local development |
 | `hostedUiProviders` | `""` (COGNITO) | Sign-in options on the Hosted UI, comma-separated: `COGNITO` and/or a federated IdP you added to the pool |

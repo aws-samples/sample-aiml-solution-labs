@@ -86,6 +86,39 @@ variable "code_source_buckets" {
     error_message = "code_source_buckets must be bucket names (no s3://, no prefix)."
   }
 }
+# Extra tags for every build this console deploys, passed to the deploy runner as
+# BUILD_EXTRA_TAGS (deployer/runner.py extra_build_tags). The same rules as
+# cdk/lib/build-tags.ts: ASCII only, because Amazon Bedrock's tag pattern is.
+# Mirrors -c buildTags in cdk/bin/orchestrator.ts.
+variable "build_tags" {
+  description = "Extra tags on every build this console deploys, in this account or a connected one, beside the framework's agentexpress:* tags (which always win). var.tags tags this console only. Mirrors CDK -c buildTags."
+  type        = map(string)
+  default     = {}
+  validation {
+    condition     = length(var.build_tags) <= 40
+    error_message = "build_tags may hold at most 40 tags (a resource takes 50 and the framework sets its own)."
+  }
+  validation {
+    condition     = alltrue([for k in keys(var.build_tags) : length(k) >= 1 && length(k) <= 128])
+    error_message = "build_tags keys must be 1 to 128 characters."
+  }
+  validation {
+    condition     = alltrue([for v in values(var.build_tags) : length(v) <= 256])
+    error_message = "build_tags values must be at most 256 characters."
+  }
+  validation {
+    condition     = alltrue([for s in concat(keys(var.build_tags), values(var.build_tags)) : can(regex("^[A-Za-z0-9 _.:/=+\\-@]*$", s))])
+    error_message = "build_tags keys and values may use only letters A-Z a-z, digits, spaces and _ . : / = + - @."
+  }
+  validation {
+    condition     = alltrue([for k in keys(var.build_tags) : !startswith(lower(k), "aws:") && !startswith(lower(k), "agentexpress:")])
+    error_message = "build_tags keys may not start with \"aws:\" or \"agentexpress:\" (in any case): AWS reserves the first and the framework sets the second."
+  }
+  validation {
+    condition     = length(distinct([for k in keys(var.build_tags) : lower(k)])) == length(var.build_tags)
+    error_message = "build_tags keys must differ by more than case: IAM treats Team and team as one tag."
+  }
+}
 variable "designer_s3_buckets" {
   description = "Buckets (or bucket/prefix) the AgentExpress Assistant may read files from when a message names s3://... Empty: none."
   type        = list(string)
@@ -208,6 +241,10 @@ locals {
   # (DOCS_LINKS=false) with docs_links = false or an empty docs_url. Mirrors docsEnv in
   # cdk/lib/orchestrator-stack.ts and cdk/lib/builder-plane.ts.
   docs_env = var.docs_links && local.docs_url != "" ? { DOCS_URL = local.docs_url } : { DOCS_LINKS = "false" }
+  # Extra tags for every build this console deploys, on the deploy project; nothing when
+  # there are none. jsonencode sorts the keys, as buildTagsEnv in cdk/lib/build-tags.ts
+  # does. Read by deployer/runner.py extra_build_tags.
+  build_tags_env = length(var.build_tags) == 0 ? {} : { BUILD_EXTRA_TAGS = jsonencode(var.build_tags) }
 }
 
 variable "keep_builds_table_protected" {
@@ -627,6 +664,14 @@ resource "aws_codebuild_project" "deploy" {
     # This console's documentation links, for every build's app (local.docs_env).
     dynamic "environment_variable" {
       for_each = local.docs_env
+      content {
+        name  = environment_variable.key
+        value = environment_variable.value
+      }
+    }
+    # Extra tags for every build this console deploys (var.build_tags; runner.py extra_build_tags).
+    dynamic "environment_variable" {
+      for_each = local.build_tags_env
       content {
         name  = environment_variable.key
         value = environment_variable.value

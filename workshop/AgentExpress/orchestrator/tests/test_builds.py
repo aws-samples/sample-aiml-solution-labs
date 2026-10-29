@@ -897,6 +897,53 @@ def test_every_build_resource_is_tagged_with_its_build_version_and_owner(runner)
     assert json.loads(flags[flags.index("-c", len(flags) - 2) + 1][len("tags="):]) == tags
 
 
+FRAMEWORK_TAG_KEYS = ("agentexpress:build", "agentexpress:version", "agentexpress:owner", "agentexpress:console")
+
+
+def test_the_consoles_extra_tags_reach_every_build_and_cannot_override_the_framework(env, runner, monkeypatch):
+    """BUILD_EXTRA_TAGS on the deploy project (-c buildTags / var.build_tags) reaches a CDK
+    build in the console's own account; an invalid key is skipped, the framework's win."""
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "cdk"})
+    monkeypatch.setattr(runner, "run", lambda *a, **k: None)
+    seen: dict = {}
+    monkeypatch.setattr(runner, "deploy_cdk", lambda action, agent, gw, sub_env, tags, *a:
+                        seen.update(tags=tags) or {"uiUrl": "https://ui"})
+    renv = {**runner_env(env), "CONSOLE_NAME": "agentexpress",
+            "BUILD_EXTRA_TAGS": '{"team":"data","aws:x":"y","agentexpress:build":"evil"}'}
+    assert runner.main(renv, env.table, env.s3) == 0
+    tags = seen["tags"]
+    assert tags["team"] == "data" and "aws:x" not in tags
+    assert all(k in tags for k in FRAMEWORK_TAG_KEYS)
+    assert tags["agentexpress:build"] == "pclaims01" and tags["agentexpress:version"] == "1"
+    assert tags["agentexpress:console"] == "agentexpress"
+
+
+def test_a_build_in_a_connected_account_gets_the_consoles_extra_tags_too(env, runner, monkeypatch):
+    """The runner runs in the console's account and deploys into a connected one through a
+    profile; the tags travel with the deploy (tfvars here), whatever the target."""
+    save(env)
+    call(env, "POST /api/builds/{id}/deploy", params={"id": "pclaims01"}, body={"tool": "terraform"})
+    target = runner.Target("444455556666", "eu-west-1", "arn:aws:iam::444455556666:role/AgentExpressDeploy-x",
+                           "ext", "pclaims01")
+    monkeypatch.setattr(runner, "resolve_target", lambda *a: target)
+
+    class Session:
+        def client(self, name, region_name=None):
+            return type("C", (), {"get_caller_identity": lambda self: {"Account": "444455556666"}})()
+    monkeypatch.setattr(runner.Target, "session", lambda self: Session())
+    monkeypatch.setattr(runner, "agentcore_available", lambda *a: None)
+    monkeypatch.setattr(runner, "invite_owner", lambda *a, **k: "")
+    monkeypatch.setattr(runner, "run", lambda *a, **k: None)
+    seen: dict = {}
+    monkeypatch.setattr(runner, "deploy_terraform", lambda action, agent, gw, e, sub_env, tags, tgt, *a:
+                        seen.update(tags=tags, target=tgt) or {"uiUrl": "https://ui"})
+    renv = {**runner_env(env, tool="terraform"), "BUILD_EXTRA_TAGS": '{"cost-center":"1234"}'}
+    assert runner.main(renv, env.table, env.s3) == 0
+    assert seen["target"].account == "444455556666"
+    assert seen["tags"]["cost-center"] == "1234" and seen["tags"]["agentexpress:build"] == "pclaims01"
+
+
 def test_the_deploy_log_never_shows_the_owners_email(runner, monkeypatch, capsys):
     tags = runner.build_tags("pclaims01", 3, "sub-1", "me@example.com", "agentexpress")
     cmd = ["npx", "cdk", "deploy", *runner.cdk_context("ax_12345678", False, tags)]

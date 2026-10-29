@@ -57,9 +57,10 @@ terraform {
 
 provider "aws" {
   region = var.region
-  # Every resource: agentexpress:app always, plus var.tags (a build's are set by the
-  # deploy runner). Mirrors cdk/bin/orchestrator.ts. The awscc provider has no default
-  # tags, so the AgentCore runtimes and memories are the exception.
+  # Every resource: agentexpress:app always, plus var.tags (on a console, the console only;
+  # a build's come from the deploy runner, with var.build_tags). Mirrors
+  # cdk/bin/orchestrator.ts. The awscc provider has no default tags, so the AgentCore
+  # runtimes and memories are the exception.
   default_tags {
     tags = merge({ "agentexpress:app" = var.agent_name }, var.tags)
   }

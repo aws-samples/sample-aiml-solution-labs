@@ -33,6 +33,7 @@ import {
 } from "./tool-plane";
 import { A2aIdentity, addA2aServer } from "./a2a-server";
 import { BuilderPlane } from "./builder-plane";
+import { buildTagsOf } from "./build-tags";
 import * as hardening from "./hardening";
 import * as vocab from "./vocabulary";
 import { runtimeNetwork, validateAgentNetworks } from "./runtime-network";
@@ -1444,6 +1445,10 @@ export interface OrchestratorStackProps extends cdk.StackProps {
    *  console's own account; empty (the default): S3 code sources need a connected account.
    *  `-c codeSourceBuckets=a,b`. Mirrors var.code_source_buckets in terraform/builder.tf. */
   codeSourceBuckets?: string[];
+  /** Extra tags on every build this console deploys, in its own account or a connected
+   *  one: `-c buildTags='{"k":"v"}'` (lib/build-tags.ts). `-c tags` tags this stack only.
+   *  Mirrors var.build_tags in terraform/builder.tf. */
+  buildTags?: string | Record<string, unknown>;
   /** The AgentExpress Assistant's model (`-c designerModel`) and its conversation-summary
    *  model (`-c designerSummaryModel`). Empty = bff/designer.py's defaults. Mirrors
    *  Terraform's designer_model / designer_summary_model. */
@@ -1559,6 +1564,7 @@ export class OrchestratorStack extends cdk.Stack {
     const enableGateway = props.enableGateway && workflowPlane;
     // Checked here, before anything is made from them (lib/hardening.ts).
     const guardrails = hardening.hardeningOf(props, cdk.Stack.of(this).region);
+    const buildTags = buildTagsOf(props.buildTags);
 
     // ---- workflow.json: the single source of truth for agents + topology ----
     // Overridable so the stack is a pure function of its props, like every other
@@ -3158,6 +3164,7 @@ export class OrchestratorStack extends cdk.Stack {
         litellmEnv: bffLitellm.env,
         docsEnv,
         codeSourceBuckets: props.codeSourceBuckets,
+        buildTags,
       });
     // The same list for the deploy check (bff/builds.py deploy).
     if (builderPlane) bff.addEnvironment("CODE_SOURCE_BUCKETS", (props.codeSourceBuckets ?? []).join(","));

@@ -32,6 +32,7 @@ import {
   custom_resources as cr,
 } from "aws-cdk-lib";
 import { boundaryEnforcementStatements, buildGuardrailEnv } from "./hardening";
+import { buildTagsEnv } from "./build-tags";
 
 /** Every build's resources are named `ax_xxxxxxxx` (bff/buildstore.py AGENT_PREFIX). */
 export const BUILD_AGENT_PREFIX = "ax_";
@@ -104,6 +105,9 @@ export interface BuilderPlaneProps {
   docsEnv?: Record<string, string>;
   /** Buckets an S3 code source may name in this console's own account (deployer/runner.py). */
   codeSourceBuckets?: string[];
+  /** Extra tags for every build this console deploys (-c buildTags), passed to the runner
+   *  as BUILD_EXTRA_TAGS. Mirrors var.build_tags. */
+  buildTags?: Record<string, string>;
 }
 
 export class BuilderPlane extends Construct {
@@ -221,6 +225,8 @@ export class BuilderPlane extends Construct {
         ...Object.fromEntries(Object.entries(props.litellmEnv ?? {}).map(([k, v]) => [k, { value: v }])),
         // This console's documentation links, for every build's app (runner.py docs_settings).
         ...Object.fromEntries(Object.entries(props.docsEnv ?? {}).map(([k, v]) => [k, { value: v }])),
+        // Extra tags for every build this console deploys (runner.py extra_build_tags).
+        ...Object.fromEntries(Object.entries(buildTagsEnv(props.buildTags ?? {})).map(([k, v]) => [k, { value: v }])),
       },
       timeout: cdk.Duration.hours(2),
       logging: {

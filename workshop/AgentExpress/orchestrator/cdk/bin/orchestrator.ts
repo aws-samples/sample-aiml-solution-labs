@@ -44,8 +44,9 @@ function parseSecretMap(envName: string, keyedBy: string, raw?: string): Record<
   return parsed as Record<string, string>;
 }
 
-// Tags on every resource: `agentexpress:app` always, plus any from `-c tags='{"k":"v"}'`
-// (the deploy runner adds agentexpress:build / :version / :owner for a build).
+// Tags on every resource of THIS stack: `agentexpress:app` always, plus any from
+// `-c tags='{"k":"v"}'`. On a console they tag the console only; the builds it deploys get
+// agentexpress:build / :version / :owner / :console from the deploy runner, plus -c buildTags.
 const tags: Record<string, string> = { "agentexpress:app": agentName, ...parseTags(ctx("tags", "")) };
 for (const [k, v] of Object.entries(tags)) cdk.Tags.of(app).add(k, v);
 
@@ -156,6 +157,10 @@ const stack = new OrchestratorStack(app, `${agentName.replace(/_/g, "-")}-stack`
   designerS3Buckets: String(ctx("designerS3Buckets", "")).split(",").map((s) => s.trim()).filter(Boolean),
   // S3 code sources a build in this console's own account may read (bff/code_source.py).
   codeSourceBuckets: String(ctx("codeSourceBuckets", "")).split(",").map((s) => s.trim()).filter(Boolean),
+  // Extra tags for every build this console deploys, in this account or a connected one:
+  // -c buildTags='{"cost-center":"1234"}'. Checked at synth (lib/build-tags.ts). Mirrors
+  // var.build_tags.
+  buildTags: ctx("buildTags", ""),
   // The AgentExpress Assistant's model and the small model that condenses long
   // conversations. Empty = bff/designer.py's defaults (Claude Sonnet 5.5; the deployment's
   // default model), in the console region's inference-profile geography.

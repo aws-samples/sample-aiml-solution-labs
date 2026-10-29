@@ -405,7 +405,8 @@ telemetry still work.
 | `demoVideoUrl` | empty | An `https://` link to a demo video, shown in a Builder console's About panel and first-run view; empty shows none (Terraform `demo_video_url`) |
 | `docsUrl` | the public [user guide](docs/user-guide/README.md) on GitHub at the release tag | The documentation the top bar's **Documentation** link and each feature's info icon link to ([In-product documentation links](#in-product-documentation-links)): the GitHub guide, or an XWiki copy of it. A console passes it on to the builds it deploys. Empty shows no documentation link anywhere (Terraform `docs_url`) |
 | `docsLinks` | `true` | `false` shows no info icon and no Documentation link anywhere, on the console and on every build it deploys (Terraform `docs_links`) |
-| `tags` | | JSON object of extra tags |
+| `tags` | | JSON object of extra tags on this stack's own resources only; the builds a console deploys do not get them (use `buildTags`) (Terraform `tags`) |
+| `buildTags` | | JSON object of extra tags on every build this console deploys, in its own account or a connected one ([Tags on the builds a console deploys](#tags-on-the-builds-a-console-deploys)) (Terraform `build_tags`) |
 | Others | off | [Organisation guardrails](#organisation-guardrails), [A2A](#serving-the-workflow-over-a2a), [Export to Langfuse, Datadog and others](#send-runs-to-langfuse-datadog-and-others), [OTLP](#sending-traces-to-another-otlp-backend), [LiteLLM](#using-non-bedrock-models-through-litellm), [teardown](#tear-down); every flag is in [cdk/README.md](orchestrator/cdk/README.md#configuration-context-keys) |
 
 Outputs: `uiUrl`, `apiEndpoint`, `idp`, `authEnabled`, `consoleMode`; `cognitoUserPoolId` and
@@ -506,7 +507,7 @@ app links to the same documentation.
 
 **Where the links go: `docsUrl`.** By default, the public [user guide](docs/user-guide/README.md) on
 GitHub, pinned to the release's tag:
-`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.10/workshop/AgentExpress/docs/user-guide/`.
+`https://github.com/aws-samples/sample-aiml-solution-labs/blob/agentexpress-v1.3.11/workshop/AgentExpress/docs/user-guide/`.
 A section's link is `<docsUrl><page>.md#<slug>`, GitHub's id for the heading (lower case, punctuation
 but `-` and `_` removed, spaces as `-`, a repeated heading `-1`, `-2`). An organisation that keeps the
 guide in an XWiki space, typically for internal or production deployments, points `docsUrl` at that
@@ -871,6 +872,40 @@ CloudFormation termination protection on, and every deploy keeps it on. Workflow
 (`consoleMode=app`) and the build stacks a console deploys (`ax-*-stack`) stay unprotected, so the
 console's Destroy works. `-c terminationProtection=true|false` overrides the default. Terraform has no
 equivalent. See [Tear down](#tear-down) to destroy a protected console.
+
+### Tags on the builds a console deploys
+
+`-c tags` (Terraform `tags`) tags the console only. Each build it deploys gets `agentexpress:app`,
+`agentexpress:build`, `agentexpress:version`, `agentexpress:owner` and `agentexpress:console` from
+the framework. To add your own tags to every build, set them on the console:
+
+```bash
+npx cdk deploy ... -c consoleMode=builder -c buildTags='{"cost-center":"1234","team":"data"}'
+```
+
+Terraform: `build_tags = { "cost-center" = "1234", team = "data" }`.
+
+The console's deploy project carries them as `BUILD_EXTRA_TAGS`, and the deploy runner adds them to
+every build, deployed with CDK or Terraform, in the console's own account or a connected one. The
+framework's `agentexpress:*` tags always win.
+
+The rules:
+
+- keys and values use only ASCII letters, digits, spaces and `_ . : / = + - @`. AWS allows Unicode
+  letters in general, but Amazon Bedrock's tag pattern is ASCII only, and a tag one resource refuses
+  fails the whole build deploy;
+- a key is 1 to 128 characters, a value up to 256;
+- no key starts with `aws:` or `agentexpress:`, in any case;
+- no two keys differ only in case (IAM treats `Team` and `team` as one tag);
+- at most 40 tags.
+
+An invalid value fails the synth or plan with a message naming the rule. If the deploy project's
+`BUILD_EXTRA_TAGS` is edited by hand, the runner skips and prints any invalid entry (its key, never
+its value) and deploys the build anyway.
+
+New or changed tags reach a build at its next deploy: existing builds keep their old tags until
+they are redeployed. On a Terraform build, the AgentCore runtimes and memories made with the awscc
+provider get no provider default tags, as with every Terraform tag.
 
 ### The AgentExpress Assistant: links and Review changes
 
@@ -1537,6 +1572,8 @@ Every resource this project creates carries the tag `agentexpress:app = <agent_n
 build's name is its own), so once you activate it as a cost allocation tag in Billing it scopes
 Lambda, DynamoDB, CloudFront, AgentCore and the rest to one deployment. Activating a tag is an
 account-level billing action that this project does not take for you.
+To give every build a console deploys your own cost allocation tags, see
+[Tags on the builds a console deploys](#tags-on-the-builds-a-console-deploys).
 
 **It does not scope model spend.** Amazon Bedrock tokens are not billed to a resource this project
 tags. AWS attributes them through an application inference profile, a Bedrock Project, or IAM
